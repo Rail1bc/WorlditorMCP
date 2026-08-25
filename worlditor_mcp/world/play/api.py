@@ -34,6 +34,14 @@ class WorlditorPlayAPI:
         """向已有物品类型追加字段（D9）。"""
         self._engine.add_item_fields(item_id, fields, play_id=self.play_id)
 
+    def get_item_def(self, item_id: str) -> ItemDef | None:
+        """物品定义（内核注册表只读；未注册返回 None）。"""
+        return self._engine.store.items.get(item_id)
+
+    def list_item_defs(self) -> list[dict]:
+        """全部物品定义（dict 列表，UI/工具展示用）。"""
+        return [d.to_dict() for d in self._engine.store.items.values()]
+
     def register_entity_kind(
         self,
         kind: str,
@@ -266,6 +274,23 @@ class WorlditorPlayAPI:
 
     def list_views(self) -> list[dict]:
         return self._engine.list_views()
+
+    # ---------- 跨包服务（M3：玩法包间同步调用） ----------
+
+    def register_service(self, name: str, handler) -> None:
+        """注册玩法包服务（供其他包同步调用）：handler(api, **params) -> Any。
+
+        服务 = 本包能力边界内的操作（如背包读写）；调用方经
+        ``call_service(play_id, name, **params)`` 使用。
+        """
+        self._engine.register_service(name, handler, play_id=self.play_id)
+
+    def list_services(self) -> list[dict]:
+        return self._engine.list_services()
+
+    async def call_service(self, play_id: str, name: str, **params: Any) -> Any:
+        """调用其他玩法包的服务（锁内、异常隔离）；服务不存在报错。"""
+        return await self._engine.call_service(self.play_id, play_id, name, **params)
 
     # ---------- 自定义事件（G8 / D1 说话通道） ----------
 

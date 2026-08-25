@@ -185,6 +185,15 @@ class _ViewBinding:
     provider: dict = field(default_factory=dict)
 
 
+@dataclass
+class _ServiceBinding:
+    """玩法包服务登记（M3：跨包同步调用通道；handler(api, **params) -> Any）。"""
+
+    play_id: str
+    name: str
+    handler: Callable
+
+
 # 可被玩法包覆盖/禁用的行为原语（D11；place/remove 不可覆盖，D14）
 OVERRIDABLE_PRIMITIVES = frozenset(
     {"move", "move_entity", "set_data", "get_data", "interact"}
@@ -312,6 +321,8 @@ class V4WorldEngine:
         self._mcp_fixed_identity: Any = None  # stdio 固定身份（HTTP 模式 None）
         # G3/D7 视图注册表（玩法包 register_view；GET /views 暴露）
         self._views: dict[str, _ViewBinding] = {}
+        # M3 跨包服务注册表：play_id -> name -> binding（玩法包间同步调用）
+        self._services: dict[str, dict[str, _ServiceBinding]] = {}
         # 玩法包 API 实例（PlayLoader attach；handler 调用时按 play_id 取）
         self._play_apis: dict[str, Any] = {}
         # 事件流订阅者（SSE 出口，B11：事件总线序列化推送；队列满丢最旧）
@@ -620,6 +631,74 @@ class V4WorldEngine:
             for key, v in sorted(self._views.items())
         ]
 
+    # ---------- 跨包服务（M3：玩法包间同步调用通道） ----------
+
+    def register_service(self, name: str, handler: Callable, play_id: str) -> None:
+        """登记玩法包服务（供其他玩法包同步调用）。
+
+        服务 = 玩法包能力边界内的操作（如 items 包的背包读写）；handler
+        签名 ``async (api, **params) -> Any``（api 为提供者自己的 API 实例）。
+        同包服务名冲突报错（同 D2 风格）；生命周期随包卸载清理。
+
+        Raises:
+            WorldError: 服务名非法、handler 不可调用、同名冲突。
+        """
+        name = _clean_required(name, "服务名")
+        if not callable(handler):
+            raise WorldError("服务 handler 必须是可调用对象")
+        services = self._services.setdefault(play_id, {})
+        if name in services:
+            raise WorldError(f"服务名冲突：{play_id}.{name}（已注册）")
+        services[name] = _ServiceBinding(play_id=play_id, name=name, handler=handler)
+
+    def list_services(self) -> list[dict]:
+        """服务列表（管理页可见：谁提供了什么服务）。"""
+        return [
+            {"play_id": pid, "name": name}
+            for pid in sorted(self._services)
+            for name in sorted(self._services[pid])
+        ]
+
+    async def call_service(
+        self, caller_play_id: str, target_play_id: str, name: str, **params: Any
+    ) -> Any:
+        """跨包同步调用服务（锁内执行 + 异常隔离）。
+
+        Args:
+            caller_play_id: 调用方 play_id（API 注入，用于日志）。
+            target_play_id: 服务提供方 play_id。
+            name: 服务名。
+            **params: 服务参数（由提供方定义）。
+
+        Returns:
+            服务返回值（Any，JSON 可序列化为宜）。
+
+        Raises:
+            WorldError: 服务不存在、提供方未加载、服务执行异常。
+        """
+        services = self._services.get(target_play_id)
+        binding = services.get(name) if services else None
+        if binding is None:
+            raise WorldError(f"服务不存在：{target_play_id}.{name}")
+        api = self._play_apis.get(target_play_id)
+        if api is None:
+            raise WorldError(f"服务提供方未加载：{target_play_id}")
+        async with self._lock:
+            try:
+                return await self._invoke(binding.handler, api, **params)
+            except asyncio.CancelledError:
+                raise
+            except WorldError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "[worlditor] 服务执行异常：%s.%s（调用方 %s）",
+                    target_play_id,
+                    name,
+                    caller_play_id,
+                )
+                raise WorldError("服务执行出错，请稍后再试") from None
+
     # ---------- 原语分派（D11 / A3 / G14） ----------
 
     def override_primitive(self, name: str, handler: Callable, play_id: str) -> None:
@@ -869,6 +948,7 @@ class V4WorldEngine:
             self._tools.pop(name, None)
             self._sync_tool_remove(name)
         self._views = {k: v for k, v in self._views.items() if v.play_id != play_id}
+        self._services.pop(play_id, None)
 
     # ---------- 界面扩展（B9：ui_hook before/after/replace 递归展开） ----------
 

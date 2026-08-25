@@ -120,6 +120,11 @@ async def _views(request: Request) -> Response:
     return JSONResponse({"views": _engine(request).list_views()})
 
 
+async def _services(request: Request) -> Response:
+    _require_admin(request)
+    return JSONResponse({"services": _engine(request).list_services()})
+
+
 # ---------- 世界与组织树（D15） ----------
 
 
@@ -442,6 +447,7 @@ def build_admin_app(
         Route("/admin/overrides", _overrides),
         Route("/admin/tools", _tools),
         Route("/admin/views", _views),
+        Route("/admin/services", _services),
         Route("/admin/worlds", _worlds_list),
         Route("/admin/worlds", _world_create, methods=["POST"]),
         Route("/admin/worlds/{world_id}", _world_update, methods=["PATCH"]),

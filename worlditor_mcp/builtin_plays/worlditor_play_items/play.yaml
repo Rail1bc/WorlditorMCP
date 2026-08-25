@@ -1,0 +1,9 @@
+name: worlditor_play_items
+display_name: 背包与物品
+version: 0.1.0
+author: worlditor
+desc: 背包模型（有限格子/堆叠/整理）+ 物品使用（world_use）+ 跨包服务（bag_add/take/count/get）+ 背包视图
+icon: 🎒
+requires:
+  worlditor: ">=0.1.0"
+  plays: []
