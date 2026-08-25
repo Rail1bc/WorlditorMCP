@@ -202,15 +202,25 @@ def test_stdio_end_to_end(tmp_path):
                 # mcp 1.28 client：ListToolsResult.tools（元素可能是 tuple(name, Tool)）
                 tool_list = tools.tools if hasattr(tools, "tools") else tools
                 names = {t.name if hasattr(t, "name") else t[0] for t in tool_list}
-                # M3：内置 movement/items 包工具 + 演示玩法包 world_whoami
+                # M3：5 个内置领域包工具 + 演示玩法包 world_whoami
                 assert names == {
-                    "world_whoami",
+                    # movement
                     "world_look",
                     "world_move",
                     "world_turn",
                     "world_who",
+                    # items
                     "world_bag",
                     "world_use",
+                    # player
+                    "world_profile",
+                    # interaction
+                    "world_interact",
+                    # social
+                    "world_say",
+                    "world_log",
+                    # demo 夹具
+                    "world_whoami",
                 }
                 result = await session.call_tool("world_whoami", {})
                 text = result.content[0].text

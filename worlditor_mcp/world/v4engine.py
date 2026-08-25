@@ -2176,3 +2176,7 @@ class V4WorldEngine:
     async def kv_set(self, namespace: str, key: str, value: Any) -> None:
         async with self._lock:
             await self.store.set_play_kv(namespace, key, value)
+
+    async def list_world_log(self, limit: int = 100) -> list[dict]:
+        """读取世界日志（最新在前；social 日志视图数据源）。"""
+        return await self.store.list_world_log(limit)

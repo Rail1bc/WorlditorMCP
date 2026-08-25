@@ -298,6 +298,10 @@ class WorlditorPlayAPI:
         """发自定义事件（任意事件名；SSE 推送；log=True 写 world_log）。"""
         await self._engine.emit(event, data, log=log)
 
+    async def list_world_log(self, limit: int = 100) -> list[dict]:
+        """世界日志（最新在前；社交/日志视图数据源）。"""
+        return await self._engine.list_world_log(limit)
+
     # ---------- 实体生命周期（D14：玩法包可 spawn/despawn） ----------
 
     async def place_entity(

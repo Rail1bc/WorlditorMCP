@@ -96,7 +96,9 @@ def test_bag_add_take_count(tmp_path):
     async def fn(engine, loader):
         plays = await loader.load_all()
         items = next(p for p in plays if p.play_id == ITEMS_ID)
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
+        player = await engine.place_entity(
+            "player", "default", 0, 0, name="小明", attrs={"starter_granted": True}
+        )
         api = items.api
         assert (
             await api.call_service(
@@ -147,7 +149,9 @@ def test_bag_cross_play(tmp_path):
     async def fn(engine, loader):
         plays = await loader.load_all()
         items = next(p for p in plays if p.play_id == ITEMS_ID)
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
+        player = await engine.place_entity(
+            "player", "default", 0, 0, name="小明", attrs={"starter_granted": True}
+        )
         api_b = WorlditorPlayAPI(engine, "pkg_b")
         engine.attach_play_api("pkg_b", api_b)
         # pkg_b 发礼包（出生礼包场景）
@@ -170,7 +174,9 @@ def test_bag_stack_and_capacity(tmp_path):
     async def fn(engine, loader):
         plays = await loader.load_all()
         items = next(p for p in plays if p.play_id == ITEMS_ID)
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
+        player = await engine.place_entity(
+            "player", "default", 0, 0, name="小明", attrs={"starter_granted": True}
+        )
         api = items.api
         # 150 个苹果 → 2 格（99 + 51）
         await api.call_service(
@@ -205,7 +211,9 @@ def test_world_bag_tool(tmp_path):
     async def fn(engine, loader):
         plays = await loader.load_all()
         items = next(p for p in plays if p.play_id == ITEMS_ID)
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
+        player = await engine.place_entity(
+            "player", "default", 0, 0, name="小明", attrs={"starter_granted": True}
+        )
         await items.api.call_service(
             ITEMS_ID, "bag_add", entity_id=player.id, item_id="apple", count=2
         )
@@ -229,7 +237,9 @@ def test_world_use_tool(tmp_path):
 
         plays = await loader.load_all()
         items = next(p for p in plays if p.play_id == ITEMS_ID)
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
+        player = await engine.place_entity(
+            "player", "default", 0, 0, name="小明", attrs={"starter_granted": True}
+        )
         used = []
 
         async def _eat(api, req):
@@ -267,7 +277,9 @@ def test_world_use_unknown_item(tmp_path):
     async def fn(engine, loader):
         plays = await loader.load_all()
         items = next(p for p in plays if p.play_id == ITEMS_ID)
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
+        player = await engine.place_entity(
+            "player", "default", 0, 0, name="小明", attrs={"starter_granted": True}
+        )
         await items.api.call_service(
             ITEMS_ID, "bag_add", entity_id=player.id, item_id="apple", count=1
         )

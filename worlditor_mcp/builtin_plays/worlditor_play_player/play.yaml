@@ -1,0 +1,10 @@
+name: worlditor_play_player
+display_name: 玩家
+version: 0.1.0
+author: worlditor
+desc: 玩家实体行为（出生礼包）+ 角色视图 + world_profile 工具
+icon: 🧍
+requires:
+  worlditor: ">=0.1.0"
+  plays:
+    - worlditor_play_items

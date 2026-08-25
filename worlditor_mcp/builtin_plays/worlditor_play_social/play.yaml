@@ -1,0 +1,10 @@
+name: worlditor_play_social
+display_name: 说话与广播
+version: 0.1.0
+author: worlditor
+desc: 地块说话（cell）+ 全图广播（喇叭消耗 + 冷却自管，D1）+ 世界日志视图
+icon: 📢
+requires:
+  worlditor: ">=0.1.0"
+  plays:
+    - worlditor_play_items

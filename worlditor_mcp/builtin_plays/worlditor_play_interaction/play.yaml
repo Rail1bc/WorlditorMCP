@@ -1,0 +1,10 @@
+name: worlditor_play_interaction
+display_name: 交互
+version: 0.1.0
+author: worlditor
+desc: 交互弹窗编排 + world_interact 工具 + 种子演示实体（商贩/告示牌/木门）的 kind 与交互
+icon: 💬
+requires:
+  worlditor: ">=0.1.0"
+  plays:
+    - worlditor_play_items
