@@ -51,6 +51,8 @@ from .v4model import (
     InteractionResult,
     ItemDef,
     MenuButton,
+    World,
+    WorldFolder,
     check_count,
 )
 from .v4store import MEGAPHONE_ITEM_ID, V4WorldStore
@@ -648,6 +650,140 @@ class V4WorldEngine:
 
     def list_locations(self) -> list:
         return list(self.store.loc_by_pos.values())
+
+    # ---------- 世界与组织（D15，只读免锁） ----------
+
+    def get_world(self, world_id: str) -> World | None:
+        return self.store.worlds.get(world_id)
+
+    def list_worlds(self) -> list[World]:
+        return list(self.store.worlds.values())
+
+    def map_world(self, map_id: str) -> str | None:
+        """地图所属世界 id（未归属返回 None）。"""
+        return self.store.map_world.get(map_id)
+
+    def entity_world(self, entity_id: str) -> str | None:
+        """实体所在世界 id（经地图归属推导；实体不存在返回 None）。"""
+        entity = self.store.entities.get(entity_id)
+        if entity is None:
+            return None
+        return self.store.map_world.get(entity.map_id)
+
+    def list_folders(self, world_id: str) -> list[WorldFolder]:
+        return self.store.list_folders(world_id)
+
+    def list_maps_by_folder(
+        self, world_id: str, folder_id: str | None = None
+    ) -> list[str]:
+        """世界内某组织节点下的地图 id（folder_id=None = 世界根）。"""
+        return self.store.list_maps_by_folder(world_id, folder_id)
+
+    # ---------- 世界与组织（写，锁内） ----------
+
+    async def create_world(
+        self,
+        world_id: str,
+        name: str,
+        *,
+        desc: str = "",
+        play_ids: list[str] | None = None,
+    ) -> World:
+        """新建世界（D15：id = 玩法包激活集合配置边界）。"""
+        async with self._lock:
+            try:
+                return await self.store.create_world(
+                    world_id, name, desc=desc, play_ids=play_ids
+                )
+            except ValueError as e:
+                raise WorldError(str(e)) from None
+
+    async def update_world(
+        self,
+        world_id: str,
+        *,
+        name: str | None = None,
+        desc: str | None = None,
+        play_ids: list[str] | None = None,
+    ) -> World:
+        """更新世界（名称/描述/激活玩法包集合；None = 不变）。"""
+        async with self._lock:
+            try:
+                return await self.store.update_world(
+                    world_id, name=name, desc=desc, play_ids=play_ids
+                )
+            except KeyError as e:
+                raise WorldError(str(e)) from None
+
+    async def delete_world(self, world_id: str) -> None:
+        """删除世界；世界仍有地图归属 → 拒绝（先移走）。"""
+        async with self._lock:
+            if world_id not in self.store.worlds:
+                raise WorldError(f"世界不存在：{world_id}")
+            if any(wid == world_id for wid in self.store.map_world.values()):
+                raise WorldError("世界仍有地图归属，请先移走或删除地图")
+            await self.store.delete_world(world_id)
+
+    async def assign_map(
+        self, map_id: str, world_id: str, *, folder_id: str | None = None
+    ) -> None:
+        """把地图归属到世界（及可选组织节点）；覆盖旧归属。"""
+        async with self._lock:
+            try:
+                await self.store.assign_map(map_id, world_id, folder_id=folder_id)
+            except KeyError as e:
+                raise WorldError(str(e)) from None
+
+    async def unassign_map(self, map_id: str) -> None:
+        """解除地图世界归属（地图本身保留）。"""
+        async with self._lock:
+            await self.store.unassign_map(map_id)
+
+    async def move_map_folder(self, map_id: str, folder_id: str | None) -> None:
+        """移动地图到世界内组织节点（None = 世界根）。"""
+        async with self._lock:
+            try:
+                await self.store.move_map_folder(map_id, folder_id)
+            except KeyError as e:
+                raise WorldError(str(e)) from None
+
+    async def create_folder(
+        self, world_id: str, name: str, *, parent_id: str | None = None, sort: int = 0
+    ) -> WorldFolder:
+        """新建组织文件夹（parent 必须同世界；None = 世界根）。"""
+        async with self._lock:
+            try:
+                return await self.store.create_folder(
+                    world_id, name, parent_id=parent_id, sort=sort
+                )
+            except (KeyError, ValueError) as e:
+                raise WorldError(str(e)) from None
+
+    async def rename_folder(self, folder_id: str, name: str) -> None:
+        async with self._lock:
+            try:
+                await self.store.rename_folder(folder_id, name)
+            except KeyError as e:
+                raise WorldError(str(e)) from None
+
+    async def move_folder(self, folder_id: str, parent_id: str | None) -> None:
+        """移动文件夹到新父节点（同世界；None = 世界根；防环）。"""
+        async with self._lock:
+            try:
+                await self.store.move_folder(folder_id, parent_id)
+            except (KeyError, ValueError) as e:
+                raise WorldError(str(e)) from None
+
+    async def delete_folder(self, folder_id: str) -> None:
+        """删除组织文件夹；非空（子文件夹/地图）→ 拒绝。"""
+        async with self._lock:
+            if folder_id not in self.store.folders:
+                raise WorldError(f"文件夹不存在：{folder_id}")
+            if any(f.parent_id == folder_id for f in self.store.folders.values()):
+                raise WorldError("文件夹仍有子文件夹，请先移走")
+            if any(fid == folder_id for fid in self.store.map_folder.values()):
+                raise WorldError("文件夹仍有地图，请先移走")
+            await self.store.delete_folder(folder_id)
 
     # ---------- 物品原语 ----------
 

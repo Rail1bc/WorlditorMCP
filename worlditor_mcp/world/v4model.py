@@ -19,6 +19,62 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+# ---------- 世界与组织（D15） ----------
+
+
+@dataclass
+class World:
+    """世界：玩法包激活集合 + 数据边界（身份/账户全局，跨世界）。
+
+    Attributes:
+        id: 世界标识（如 "default"）。
+        name: 显示名。
+        desc: 描述。
+        play_ids: 激活玩法包列表；空列表 = 全部激活。
+    """
+
+    id: str
+    name: str
+    desc: str = ""
+    play_ids: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "desc": self.desc,
+            "play_ids": list(self.play_ids),
+        }
+
+
+@dataclass
+class WorldFolder:
+    """组织树节点：世界内的多层纯管理组织（不参与玩法逻辑）。
+
+    Attributes:
+        id: 文件夹标识（uuid4 hex）。
+        world_id: 所属世界。
+        name: 显示名。
+        parent_id: 父文件夹 id；None = 世界根。
+        sort: 同层排序（小在前）。
+    """
+
+    id: str
+    world_id: str
+    name: str
+    parent_id: str | None = None
+    sort: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "world_id": self.world_id,
+            "name": self.name,
+            "parent_id": self.parent_id,
+            "sort": self.sort,
+        }
+
+
 # ---------- 实体（世界唯一居民概念，B12） ----------
 
 

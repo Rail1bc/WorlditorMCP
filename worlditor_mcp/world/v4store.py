@@ -43,6 +43,8 @@ from .v4model import (
     Entity,
     InventoryEntry,
     ItemDef,
+    World,
+    WorldFolder,
     entity_db_row,
     entity_from_row,
     item_db_row,
@@ -203,7 +205,28 @@ CREATE TABLE IF NOT EXISTS invite_codes (
     used INTEGER NOT NULL DEFAULT 0,
     created_ts REAL NOT NULL
 );
+-- v5 世界与组织（D15）：世界 = 玩法包激活集合；组织树纯管理；地图归属
+CREATE TABLE IF NOT EXISTS worlds (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    desc TEXT NOT NULL DEFAULT '',
+    play_ids_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS world_folders (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    parent_id TEXT,
+    name TEXT NOT NULL,
+    sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS world_maps (
+    map_id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    folder_id TEXT
+);
 """
+
+DEFAULT_WORLD_ID = "default"
 
 _V3_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS maps (
@@ -252,6 +275,11 @@ class V4WorldStore:
         self.accounts: dict[str, Account] = {}
         self.tokens: dict[str, TokenInfo] = {}
         self.invite_codes: dict[str, dict] = {}
+        # v5 世界与组织（D15）
+        self.worlds: dict[str, World] = {}
+        self.folders: dict[str, WorldFolder] = {}
+        self.map_world: dict[str, str] = {}  # map_id -> world_id
+        self.map_folder: dict[str, str | None] = {}  # map_id -> folder_id | None
 
     # ---------- 生命周期 ----------
 
@@ -272,7 +300,7 @@ class V4WorldStore:
             self._conn = None
 
     async def _seed_if_empty(self) -> None:
-        """maps/entities/items 各自空则播种（幂等，互不依赖）。"""
+        """maps/entities/items/worlds 各自空则播种（幂等，互不依赖）。"""
         assert self._conn is not None
         cur = await self._conn.execute("SELECT COUNT(*) AS n FROM maps")
         if (await cur.fetchone())["n"] == 0:
@@ -285,6 +313,18 @@ class V4WorldStore:
         if (await cur.fetchone())["n"] == 0:
             for item in _seed_items():
                 await self._insert_item(item)
+        cur = await self._conn.execute("SELECT COUNT(*) AS n FROM worlds")
+        if (await cur.fetchone())["n"] == 0:
+            await self._conn.execute(
+                "INSERT INTO worlds(id, name, desc, play_ids_json) VALUES(?, ?, ?, ?)",
+                (DEFAULT_WORLD_ID, "默认世界", "", "[]"),
+            )
+        cur = await self._conn.execute("SELECT COUNT(*) AS n FROM world_maps")
+        if (await cur.fetchone())["n"] == 0:
+            await self._conn.execute(
+                "INSERT INTO world_maps(map_id, world_id, folder_id) VALUES(?, ?, NULL)",
+                (DEFAULT_MAP_ID, DEFAULT_WORLD_ID),
+            )
         await self._conn.execute(
             "INSERT OR REPLACE INTO world_meta(key, value) VALUES('schema_version', ?)",
             (SCHEMA_VERSION,),
@@ -388,6 +428,34 @@ class V4WorldStore:
                 role=row["role"],
                 created_ts=row["created_ts"],
             )
+        # v5 世界与组织（D15）
+        cur = await self._conn.execute("SELECT * FROM worlds")
+        for row in await cur.fetchall():
+            try:
+                play_ids = json.loads(row["play_ids_json"] or "[]")
+            except (ValueError, TypeError):
+                play_ids = []
+            self.worlds[row["id"]] = World(
+                id=row["id"],
+                name=row["name"],
+                desc=row["desc"] or "",
+                play_ids=[str(p) for p in play_ids]
+                if isinstance(play_ids, list)
+                else [],
+            )
+        cur = await self._conn.execute("SELECT * FROM world_folders")
+        for row in await cur.fetchall():
+            self.folders[row["id"]] = WorldFolder(
+                id=row["id"],
+                world_id=row["world_id"],
+                parent_id=row["parent_id"],
+                name=row["name"],
+                sort=row["sort"],
+            )
+        cur = await self._conn.execute("SELECT * FROM world_maps")
+        for row in await cur.fetchall():
+            self.map_world[row["map_id"]] = row["world_id"]
+            self.map_folder[row["map_id"]] = row["folder_id"]
         cur = await self._conn.execute("SELECT * FROM tokens WHERE revoked = 0")
         for row in await cur.fetchall():
             self.tokens[row["token"]] = TokenInfo(
@@ -725,3 +793,213 @@ class V4WorldStore:
         await self._conn.commit()
         self.invite_codes[code]["used"] = used
         return True
+
+    # ---------- 世界与组织（D15；调用方在引擎锁内执行） ----------
+
+    async def create_world(
+        self,
+        world_id: str,
+        name: str,
+        *,
+        desc: str = "",
+        play_ids: list[str] | None = None,
+    ) -> World:
+        """新建世界（id 冲突则报错）。"""
+        assert self._conn is not None
+        if world_id in self.worlds:
+            raise ValueError(f"世界已存在：{world_id}")
+        world = World(id=world_id, name=name, desc=desc, play_ids=list(play_ids or []))
+        await self._conn.execute(
+            "INSERT INTO worlds(id, name, desc, play_ids_json) VALUES(?, ?, ?, ?)",
+            (world.id, world.name, world.desc, json.dumps(world.play_ids)),
+        )
+        await self._conn.commit()
+        self.worlds[world.id] = world
+        return world
+
+    async def update_world(
+        self,
+        world_id: str,
+        *,
+        name: str | None = None,
+        desc: str | None = None,
+        play_ids: list[str] | None = None,
+    ) -> World:
+        """更新世界（名称/描述/激活玩法包集合；None = 不变）。"""
+        assert self._conn is not None
+        world = self.worlds.get(world_id)
+        if world is None:
+            raise KeyError(f"世界不存在：{world_id}")
+        if name is not None:
+            world.name = name
+        if desc is not None:
+            world.desc = desc
+        if play_ids is not None:
+            world.play_ids = list(play_ids)
+        await self._conn.execute(
+            "UPDATE worlds SET name = ?, desc = ?, play_ids_json = ? WHERE id = ?",
+            (world.name, world.desc, json.dumps(world.play_ids), world.id),
+        )
+        await self._conn.commit()
+        return world
+
+    async def delete_world(self, world_id: str) -> None:
+        """删除世界（含其组织树与地图归属；调用方负责"仍有地图"校验）。"""
+        assert self._conn is not None
+        if world_id not in self.worlds:
+            raise KeyError(f"世界不存在：{world_id}")
+        await self._conn.execute("DELETE FROM worlds WHERE id = ?", (world_id,))
+        await self._conn.execute(
+            "DELETE FROM world_folders WHERE world_id = ?", (world_id,)
+        )
+        await self._conn.execute(
+            "DELETE FROM world_maps WHERE world_id = ?", (world_id,)
+        )
+        await self._conn.commit()
+        self.worlds.pop(world_id, None)
+        self.folders = {k: v for k, v in self.folders.items() if v.world_id != world_id}
+        for map_id, wid in list(self.map_world.items()):
+            if wid == world_id:
+                self.map_world.pop(map_id, None)
+                self.map_folder.pop(map_id, None)
+
+    async def assign_map(
+        self, map_id: str, world_id: str, *, folder_id: str | None = None
+    ) -> None:
+        """把地图归属到世界（及可选组织节点）；覆盖旧归属。"""
+        assert self._conn is not None
+        if map_id not in self.maps:
+            raise KeyError(f"地图不存在：{map_id}")
+        if world_id not in self.worlds:
+            raise KeyError(f"世界不存在：{world_id}")
+        await self._conn.execute(
+            "INSERT OR REPLACE INTO world_maps(map_id, world_id, folder_id) VALUES(?, ?, ?)",
+            (map_id, world_id, folder_id),
+        )
+        await self._conn.commit()
+        self.map_world[map_id] = world_id
+        self.map_folder[map_id] = folder_id
+
+    async def unassign_map(self, map_id: str) -> None:
+        """解除地图的世界归属（地图本身保留，变为未归属）。"""
+        assert self._conn is not None
+        await self._conn.execute("DELETE FROM world_maps WHERE map_id = ?", (map_id,))
+        await self._conn.commit()
+        self.map_world.pop(map_id, None)
+        self.map_folder.pop(map_id, None)
+
+    async def move_map_folder(self, map_id: str, folder_id: str | None) -> None:
+        """移动地图到世界内组织节点（folder_id=None = 世界根）。"""
+        assert self._conn is not None
+        if map_id not in self.map_world:
+            raise KeyError(f"地图未归属世界：{map_id}")
+        await self._conn.execute(
+            "UPDATE world_maps SET folder_id = ? WHERE map_id = ?",
+            (folder_id, map_id),
+        )
+        await self._conn.commit()
+        self.map_folder[map_id] = folder_id
+
+    async def create_folder(
+        self,
+        world_id: str,
+        name: str,
+        *,
+        parent_id: str | None = None,
+        sort: int = 0,
+    ) -> WorldFolder:
+        """新建组织文件夹（parent 必须同世界；None = 世界根）。"""
+        assert self._conn is not None
+        if world_id not in self.worlds:
+            raise KeyError(f"世界不存在：{world_id}")
+        if parent_id is not None:
+            parent = self.folders.get(parent_id)
+            if parent is None or parent.world_id != world_id:
+                raise ValueError("父文件夹不存在或不属于该世界")
+        folder = WorldFolder(
+            id=uuid.uuid4().hex,
+            world_id=world_id,
+            name=name,
+            parent_id=parent_id,
+            sort=sort,
+        )
+        await self._conn.execute(
+            "INSERT INTO world_folders(id, world_id, parent_id, name, sort) "
+            "VALUES(?, ?, ?, ?, ?)",
+            (folder.id, folder.world_id, folder.parent_id, folder.name, folder.sort),
+        )
+        await self._conn.commit()
+        self.folders[folder.id] = folder
+        return folder
+
+    async def rename_folder(self, folder_id: str, name: str) -> None:
+        assert self._conn is not None
+        folder = self.folders.get(folder_id)
+        if folder is None:
+            raise KeyError(f"文件夹不存在：{folder_id}")
+        folder.name = name
+        await self._conn.execute(
+            "UPDATE world_folders SET name = ? WHERE id = ?", (name, folder_id)
+        )
+        await self._conn.commit()
+
+    async def move_folder(self, folder_id: str, parent_id: str | None) -> None:
+        """移动文件夹到新父节点（同世界；None = 世界根；防环）。"""
+        assert self._conn is not None
+        folder = self.folders.get(folder_id)
+        if folder is None:
+            raise KeyError(f"文件夹不存在：{folder_id}")
+        if parent_id is not None:
+            parent = self.folders.get(parent_id)
+            if parent is None or parent.world_id != folder.world_id:
+                raise ValueError("父文件夹不存在或不属于该世界")
+            # 防环：不能移到自己或自己后代之下
+            node: WorldFolder | None = parent
+            while node is not None:
+                if node.id == folder_id:
+                    raise ValueError("不能移动到自身或其后代之下")
+                node = self.folders.get(node.parent_id) if node.parent_id else None
+        folder.parent_id = parent_id
+        await self._conn.execute(
+            "UPDATE world_folders SET parent_id = ? WHERE id = ?",
+            (parent_id, folder_id),
+        )
+        await self._conn.commit()
+
+    async def delete_folder(self, folder_id: str) -> None:
+        """删除组织文件夹（调用方负责非空校验；子文件夹与地图引用同时清除）。"""
+        assert self._conn is not None
+        if folder_id not in self.folders:
+            raise KeyError(f"文件夹不存在：{folder_id}")
+        await self._conn.execute("DELETE FROM world_folders WHERE id = ?", (folder_id,))
+        await self._conn.execute(
+            "UPDATE world_folders SET parent_id = NULL WHERE parent_id = ?",
+            (folder_id,),
+        )
+        await self._conn.execute(
+            "UPDATE world_maps SET folder_id = NULL WHERE folder_id = ?",
+            (folder_id,),
+        )
+        await self._conn.commit()
+        self.folders.pop(folder_id, None)
+        for f in self.folders.values():
+            if f.parent_id == folder_id:
+                f.parent_id = None
+        for map_id, fid in self.map_folder.items():
+            if fid == folder_id:
+                self.map_folder[map_id] = None
+
+    def list_maps_by_folder(self, world_id: str, folder_id: str | None) -> list[str]:
+        """世界内某组织节点下的地图 id 列表（folder_id=None = 世界根）。"""
+        return [
+            map_id
+            for map_id, wid in self.map_world.items()
+            if wid == world_id and self.map_folder.get(map_id) == folder_id
+        ]
+
+    def list_folders(self, world_id: str) -> list[WorldFolder]:
+        """世界内全部组织文件夹（按 sort 排序）。"""
+        return sorted(
+            (f for f in self.folders.values() if f.world_id == world_id),
+            key=lambda f: (f.sort, f.name),
+        )

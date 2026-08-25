@@ -89,13 +89,39 @@ class WorlditorPlayAPI:
         """目标实体可用动作按钮（C3，UI 菜单生成用）。"""
         return self._engine.list_actions(target_id)
 
-    # ---------- 玩法数据 KV（play_data 表，namespace 自动 = 玩法包 id） ----------
+    # ---------- 世界与组织只读（D15；写 = admin 管理端点） ----------
 
-    def kv_get(self, key: str, default=None) -> Any:
-        return self._engine.kv_get(self.play_id, key, default)
+    def list_worlds(self) -> list:
+        return self._engine.list_worlds()
 
-    async def kv_set(self, key: str, value: Any) -> None:
-        await self._engine.kv_set(self.play_id, key, value)
+    def get_world(self, world_id: str):
+        return self._engine.get_world(world_id)
+
+    def entity_world(self, entity_id: str) -> str | None:
+        """实体所在世界 id（经地图归属推导）。"""
+        return self._engine.entity_world(entity_id)
+
+    def map_world(self, map_id: str) -> str | None:
+        return self._engine.map_world(map_id)
+
+    def list_folders(self, world_id: str) -> list:
+        return self._engine.list_folders(world_id)
+
+    def list_maps_by_folder(self, world_id: str, folder_id: str | None = None) -> list:
+        return self._engine.list_maps_by_folder(world_id, folder_id)
+
+    # ---------- 玩法数据 KV（play_data 表，namespace = 玩法包 id） ----------
+    # world_id 传入时双层隔离：(world_id, play_id)——同玩法包在不同世界各自状态（D15）
+
+    def kv_get(self, key: str, default=None, *, world_id: str | None = None) -> Any:
+        namespace = f"{world_id}:{self.play_id}" if world_id else self.play_id
+        return self._engine.kv_get(namespace, key, default)
+
+    async def kv_set(
+        self, key: str, value: Any, *, world_id: str | None = None
+    ) -> None:
+        namespace = f"{world_id}:{self.play_id}" if world_id else self.play_id
+        await self._engine.kv_set(namespace, key, value)
 
     # ---------- 引擎动作（走原语，锁内执行；均按 entity_id） ----------
 
