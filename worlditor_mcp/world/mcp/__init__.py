@@ -117,11 +117,14 @@ def build_dynamic_tool(
         )
     ]
     for pname, ptype in binding.params.items():
+        # 参数默认 None → schema 可选（M3：工具声明参数即可选，必填校验由
+        # 玩法包 handler 自管——缺参时 handler 报错更可控，KISS）
         params.append(
             inspect.Parameter(
                 pname,
                 inspect.Parameter.KEYWORD_ONLY,
                 annotation=_TYPE_MAP.get(ptype, str),
+                default=None,
             )
         )
     _dynamic.__name__ = name
