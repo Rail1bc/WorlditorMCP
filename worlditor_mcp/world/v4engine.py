@@ -140,6 +140,71 @@ class _UiHookBinding:
     provider: UiHookProvider
 
 
+@dataclass
+class _PrimitiveOverride:
+    """原语分派登记（D11/A3）：handler=None 表示禁用该能力。"""
+
+    play_id: str
+    handler: Callable | None = None
+
+
+@dataclass
+class _FieldAppend:
+    """一次字段追加登记（D9/D10：记录归属供卸载清理）。"""
+
+    play_id: str
+    field: dict
+
+
+# 可被玩法包覆盖/禁用的行为原语（D11；place/remove 不可覆盖，D14）
+OVERRIDABLE_PRIMITIVES = frozenset(
+    {"move", "move_entity", "set_data", "get_data", "interact"}
+)
+
+# 原语名 → 默认实现方法名（分派表兜底）
+_PRIMITIVE_DEFAULT_NAMES = {
+    "move": "_move_default",
+    "move_entity": "_move_entity_default",
+    "set_data": "_set_data_default",
+    "get_data": "_get_data_default",
+    "interact": "_interact_default",
+}
+
+_FIELD_TYPES = ("str", "int", "float", "bool", "json")
+
+
+def _check_primitive_name(name: object) -> str:
+    if not isinstance(name, str) or name not in OVERRIDABLE_PRIMITIVES:
+        raise WorldError(f"原语必须是 {'/'.join(sorted(OVERRIDABLE_PRIMITIVES))} 之一")
+    return name
+
+
+def _validate_fields(fields: list) -> list[dict]:
+    """字段 schema 校验：{name,label,type,default?}；type ∈ str/int/float/bool/json。"""
+    if not isinstance(fields, list):
+        raise WorldError("fields 必须是列表")
+    out: list[dict] = []
+    for f in fields:
+        if (
+            not isinstance(f, dict)
+            or not isinstance(f.get("name"), str)
+            or not f["name"]
+        ):
+            raise WorldError("字段 schema 需要 name")
+        ftype = f.get("type", "str")
+        if ftype not in _FIELD_TYPES:
+            raise WorldError(f"字段类型必须是 {'/'.join(_FIELD_TYPES)} 之一")
+        out.append(
+            {
+                "name": f["name"],
+                "label": str(f.get("label") or f["name"]),
+                "type": ftype,
+                **({"default": f["default"]} if "default" in f else {}),
+            }
+        )
+    return out
+
+
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -184,6 +249,12 @@ class V4WorldEngine:
         }
         self._ui_components: dict[str, str] = {}
         self._ui_hooks: dict[tuple[str, str], list[_UiHookBinding]] = {}
+        # D9/D10 字段设施：kind/分类/物品的追加字段声明（kind 声明字段在 spec.fields）
+        self._kind_fields: dict[str, list[_FieldAppend]] = {}
+        self._category_fields: dict[str, list[_FieldAppend]] = {}
+        self._item_fields: dict[str, list[_FieldAppend]] = {}
+        # D11/A3 原语分派表：name -> 覆盖登记（无登记 = 内核默认实现）
+        self._primitive_overrides: dict[str, _PrimitiveOverride] = {}
         # 玩法包 API 实例（PlayLoader attach；handler 调用时按 play_id 取）
         self._play_apis: dict[str, Any] = {}
         # 广播冷却（B2，内存；重启重置可接受——限流本来就是临时性的）
@@ -283,8 +354,15 @@ class V4WorldEngine:
         tick: bool = False,
         label: str = "",
         play_id: str = "",
+        fields: list[dict] | None = None,
+        categories: tuple[str, ...] = (),
     ) -> None:
-        """注册实体 kind 元数据（B1 / B8 / C3）。kind 未注册也可放置实体。"""
+        """注册实体 kind 元数据（B1 / B8 / C3 / D9 / D10）。
+
+        fields 为 kind 声明字段 schema（{name,label,type,default?}，UI 通用渲染）；
+        categories 为分类标签（宽松，无需预注册）。
+        kind 未注册也可放置实体。
+        """
         kind = _clean_required(kind, "kind")
         if not isinstance(block_move, bool) or not isinstance(tick, bool):
             raise WorldError("block_move/tick 必须是布尔值")
@@ -299,7 +377,144 @@ class V4WorldEngine:
             tick=tick,
             label=str(label or ""),
             play_id=play_id,
+            fields=_validate_fields(fields or []),
+            categories=tuple(
+                str(c) for c in categories if isinstance(c, str) and c.strip()
+            ),
         )
+
+    # ---------- 字段设施（D9 / D10） ----------
+
+    def add_kind_fields(
+        self, kind: str, fields: list[dict], *, play_id: str = ""
+    ) -> None:
+        """向已有 kind 追加字段（玩法包 B 给其他包的 kind 加字段）。"""
+        kind = _clean_required(kind, "kind")
+        if kind not in self._kind_specs:
+            raise WorldError(f"kind 未注册：{kind}")
+        self._kind_fields.setdefault(kind, []).extend(
+            _FieldAppend(play_id=play_id, field=f) for f in _validate_fields(fields)
+        )
+
+    def add_category_fields(
+        self, category: str, fields: list[dict], *, play_id: str = ""
+    ) -> None:
+        """向分类追加字段（该分类全部 kind 生效；宽松，无需预注册分类）。"""
+        category = _clean_required(category, "分类名")
+        self._category_fields.setdefault(category, []).extend(
+            _FieldAppend(play_id=play_id, field=f) for f in _validate_fields(fields)
+        )
+
+    def add_item_fields(
+        self, item_id: str, fields: list[dict], *, play_id: str = ""
+    ) -> None:
+        """向已有物品类型追加字段。"""
+        item_id = _clean_required(item_id, "物品 id")
+        if item_id not in self.store.items:
+            raise WorldError(f"物品未注册：{item_id}")
+        self._item_fields.setdefault(item_id, []).extend(
+            _FieldAppend(play_id=play_id, field=f) for f in _validate_fields(fields)
+        )
+
+    def effective_fields(self, kind: str) -> list[dict]:
+        """kind 有效字段 = kind 声明 ∪ 追加声明 ∪ 所属分类声明（D10 运行时合并）。"""
+        spec = self._kind_specs.get(kind)
+        merged: dict[str, dict] = {}
+        for f in (spec.fields if spec else []) + [
+            a.field for a in self._kind_fields.get(kind, [])
+        ]:
+            merged[f["name"]] = f
+        for category in spec.categories if spec else ():
+            for a in self._category_fields.get(category, []):
+                merged[a.field["name"]] = a.field
+        return list(merged.values())
+
+    def list_kinds(self, category: str | None = None) -> list[dict]:
+        """kind 列表（含字段 schema 与分类）；category 过滤（D10 精准选取）。"""
+        out = []
+        for kind, spec in self._kind_specs.items():
+            if category is not None and category not in spec.categories:
+                continue
+            out.append(
+                {
+                    "kind": kind,
+                    "label": spec.label or kind,
+                    "block_move": spec.block_move,
+                    "interactions": list(spec.interactions),
+                    "fields": self.effective_fields(kind),
+                    "categories": list(spec.categories),
+                }
+            )
+        return sorted(out, key=lambda k: k["kind"])
+
+    # ---------- 原语分派（D11 / A3） ----------
+
+    def override_primitive(self, name: str, handler: Callable, play_id: str) -> None:
+        """登记原语覆盖（锁内回调 handler(api, *args, **kwargs)）。
+
+        每原语至多一个登记项；已登记（override 或 disable）再登记报错（同 D2）。
+        """
+        name = _check_primitive_name(name)
+        if not callable(handler):
+            raise WorldError("覆盖 handler 必须是可调用对象")
+        if name in self._primitive_overrides:
+            prev = self._primitive_overrides[name]
+            raise WorldError(
+                f"原语「{name}」已被 {prev.play_id} 登记（override/disable），无法重复登记"
+            )
+        self._primitive_overrides[name] = _PrimitiveOverride(
+            play_id=play_id, handler=handler
+        )
+
+    def disable_primitive(self, name: str, play_id: str) -> None:
+        """登记原语禁用（调用抛"该能力已被禁用"；与 override 互斥）。"""
+        name = _check_primitive_name(name)
+        if name in self._primitive_overrides:
+            prev = self._primitive_overrides[name]
+            raise WorldError(
+                f"原语「{name}」已被 {prev.play_id} 登记（override/disable），无法重复登记"
+            )
+        self._primitive_overrides[name] = _PrimitiveOverride(play_id=play_id)
+
+    def list_primitive_overrides(self) -> list[dict]:
+        """覆盖/禁用状态（管理页可见：谁覆盖了什么、谁禁用了什么）。"""
+        return [
+            {
+                "name": name,
+                "play_id": ov.play_id,
+                "mode": "override" if ov.handler is not None else "disable",
+            }
+            for name, ov in sorted(self._primitive_overrides.items())
+        ]
+
+    async def call_default_primitive(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        """super 通道：显式调用内核默认实现（绕过分派表；覆盖者前置/后置用）。"""
+        name = _check_primitive_name(name)
+        return await getattr(self, _PRIMITIVE_DEFAULT_NAMES[name])(*args, **kwargs)
+
+    async def _dispatch_primitive(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        """原语统一分派入口：无登记 → 默认实现；override → 锁内回调；disable → 报错。"""
+        ov = self._primitive_overrides.get(name)
+        if ov is None:
+            return await getattr(self, _PRIMITIVE_DEFAULT_NAMES[name])(*args, **kwargs)
+        if ov.handler is None:
+            raise WorldError(f"该能力已被禁用（{ov.play_id}）")
+        api = self._play_apis.get(ov.play_id)
+        if api is None:
+            raise WorldError(f"覆盖者 {ov.play_id} 未加载")
+        try:
+            return await self._invoke(ov.handler, api, *args, **kwargs)
+        except asyncio.CancelledError:
+            raise
+        except WorldError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[worlditor] 原语覆盖 handler 异常：%s (%s)", name, ov.play_id
+            )
+            raise WorldError("原语执行出错，请稍后再试") from None
+
+    # ---------- 交互 ----------
 
     def register_interaction(
         self,
@@ -370,8 +585,11 @@ class V4WorldEngine:
         self._play_apis.pop(play_id, None)
 
     def clear_play_registrations(self, play_id: str) -> None:
-        """清理某玩法包的全部注册（kind / interaction / event / ui），
-        供加载失败回滚与卸载使用（C2：重载 = 引擎重建，此为兜底清理）。"""
+        """清理某玩法包的全部注册（kind / interaction / event / ui / 字段 /
+        原语分派），供加载失败回滚与卸载使用（C2：重载 = 引擎重建，此为兜底清理）。
+
+        原语分派登记随生命周期清除 → 自动恢复内核默认实现（§2.4 恢复语义）。
+        """
         self._kind_specs = {
             k: v for k, v in self._kind_specs.items() if v.play_id != play_id
         }
@@ -391,6 +609,24 @@ class V4WorldEngine:
             k: [b for b in v if b.play_id != play_id]
             for k, v in self._ui_hooks.items()
             if any(b.play_id != play_id for b in v)
+        }
+        self._kind_fields = {
+            k: [a for a in v if a.play_id != play_id]
+            for k, v in self._kind_fields.items()
+            if any(a.play_id != play_id for a in v)
+        }
+        self._category_fields = {
+            k: [a for a in v if a.play_id != play_id]
+            for k, v in self._category_fields.items()
+            if any(a.play_id != play_id for a in v)
+        }
+        self._item_fields = {
+            k: [a for a in v if a.play_id != play_id]
+            for k, v in self._item_fields.items()
+            if any(a.play_id != play_id for a in v)
+        }
+        self._primitive_overrides = {
+            k: v for k, v in self._primitive_overrides.items() if v.play_id != play_id
         }
 
     # ---------- 界面扩展（B9：ui_hook before/after/replace 递归展开） ----------
@@ -463,9 +699,9 @@ class V4WorldEngine:
 
     # ---------- 事件总线（单一事件源） ----------
 
-    async def _invoke(self, fn: Callable, *args: Any) -> Any:
+    async def _invoke(self, fn: Callable, *args: Any, **kwargs: Any) -> Any:
         """调用玩法包 handler：兼容 async / 同步函数（同步返回值直接透传）。"""
-        result = fn(*args)
+        result = fn(*args, **kwargs)
         if inspect.isawaitable(result):
             result = await result
         return result
@@ -931,13 +1167,17 @@ class V4WorldEngine:
     async def move(
         self, entity_id: str, direction: str, *, path: int | None = None
     ) -> SceneView:
-        """身份化实体按路径移动（v3 语义：死引用剔除 + 加权抽目标）。
-
-        目标地块存在阻挡实体（block_move）时拒绝移动。
+        """路径移动（分派入口，D11；默认实现见 _move_default）。
 
         Raises:
-            WorldError: 实体不存在/非身份化、方向非法、无路径、被阻挡。
+            WorldError: 实体不存在/非身份化、方向非法、无路径、被阻挡、能力被禁用。
         """
+        return await self._dispatch_primitive("move", entity_id, direction, path=path)
+
+    async def _move_default(
+        self, entity_id: str, direction: str, *, path: int | None = None
+    ) -> SceneView:
+        """默认路径移动（v3 语义：死引用剔除 + 加权抽目标；可被覆盖，D11）。"""
         async with self._lock:
             entity = self._require_entity(entity_id)
             if entity.kind not in IDENTITY_KINDS:
@@ -984,7 +1224,15 @@ class V4WorldEngine:
     async def move_entity(
         self, entity_id: str, map_id: str, row: int, col: int
     ) -> None:
-        """实体直接移动到坐标（玩法包行为驱动，B8；传送语义，不做阻挡检查）。"""
+        """实体直接位移（分派入口，D11；默认实现见 _move_entity_default）。"""
+        return await self._dispatch_primitive(
+            "move_entity", entity_id, map_id, row, col
+        )
+
+    async def _move_entity_default(
+        self, entity_id: str, map_id: str, row: int, col: int
+    ) -> None:
+        """默认直接位移（玩法包行为驱动，B8；传送语义，不做阻挡检查）。"""
         async with self._lock:
             entity = self._require_entity(entity_id)
             map_id = self._map_arg(map_id)
@@ -1029,6 +1277,33 @@ class V4WorldEngine:
 
     def get_state(self, entity_id: str) -> dict:
         return dict(self._require_entity(entity_id).state)
+
+    # ---------- 字段原语（D9：set_data/get_data，可被覆盖/禁用） ----------
+
+    async def set_data(self, entity_id: str, name: str, value: Any) -> None:
+        """字段写（分派入口；默认实现见 _set_data_default）。"""
+        return await self._dispatch_primitive("set_data", entity_id, name, value)
+
+    async def _set_data_default(self, entity_id: str, name: str, value: Any) -> None:
+        """默认字段写：合并写实体字段（v5 字段容器 = attrs，M2 与 state 合并）。"""
+        name = _clean_required(name, "字段名")
+        async with self._lock:
+            entity = self._require_entity(entity_id)
+            entity.attrs = {**entity.attrs, name: value}
+            await self.store.save_entity(entity)
+            await self._emit("on_entity_changed", entity, {"attrs": {name: value}})
+
+    async def get_data(self, entity_id: str, name: str | None = None) -> Any:
+        """字段读（分派入口；默认实现见 _get_data_default）。"""
+        return await self._dispatch_primitive("get_data", entity_id, name)
+
+    async def _get_data_default(self, entity_id: str, name: str | None = None) -> Any:
+        """默认字段读：单字段或全量（v5 字段容器 = attrs，M2 与 state 合并）。"""
+        entity = self._require_entity(entity_id)
+        if name is not None:
+            name = _clean_required(name, "字段名")
+            return entity.attrs.get(name)
+        return dict(entity.attrs)
 
     # ---------- 移动辅助（v3 语义） ----------
 
@@ -1150,7 +1425,20 @@ class V4WorldEngine:
         args: dict | None = None,
         item_id: str | None = None,
     ) -> InteractionResult:
-        """发起一次交互：校验可用动作（C3）→ 玩法包 handler → 内核结算 effects。
+        """交互通道（分派入口，D11/D12；默认实现见 _interact_default）。"""
+        return await self._dispatch_primitive(
+            "interact", entity_id, target_id, action, args, item_id
+        )
+
+    async def _interact_default(
+        self,
+        entity_id: str,
+        target_id: str,
+        action: str,
+        args: dict | None = None,
+        item_id: str | None = None,
+    ) -> InteractionResult:
+        """默认交互：校验可用动作（C3）→ 玩法包 handler → 结算 effects。
 
         交互 handler 异常会被隔离并转为可展示的 WorldError（不拖垮内核）。
 

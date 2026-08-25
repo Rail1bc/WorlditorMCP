@@ -22,9 +22,17 @@ class WorlditorPlayAPI:
 
     # ---------- 注册 ----------
 
-    def register_item_def(self, item: ItemDef) -> None:
-        """注册物品定义（持久化；同 id 覆盖更新）。"""
+    def register_item_def(
+        self, item: ItemDef, *, fields: list[dict] | None = None
+    ) -> None:
+        """注册物品定义（持久化；同 id 覆盖更新）；fields 为字段 schema（D9）。"""
+        if fields:
+            item.fields = list(item.fields or []) + list(fields)
         self._engine.register_item_def(item)
+
+    def add_item_fields(self, item_id: str, fields: list[dict]) -> None:
+        """向已有物品类型追加字段（D9）。"""
+        self._engine.add_item_fields(item_id, fields, play_id=self.play_id)
 
     def register_entity_kind(
         self,
@@ -34,8 +42,14 @@ class WorlditorPlayAPI:
         interactions: tuple[str, ...] = (),
         tick: bool = False,
         label: str | None = None,
+        fields: list[dict] | None = None,
+        categories: tuple[str, ...] = (),
     ) -> None:
-        """注册实体 kind 元数据（label 为 kind 标签文案，B1）。"""
+        """注册实体 kind 元数据（label 为 kind 标签文案，B1）。
+
+        fields 为 kind 声明字段 schema（{name,label,type,default?}，D9）；
+        categories 为分类标签（D10，宽松无需预注册）。
+        """
         self._engine.register_entity_kind(
             kind,
             block_move=block_move,
@@ -43,7 +57,21 @@ class WorlditorPlayAPI:
             tick=tick,
             label=label or "",
             play_id=self.play_id,
+            fields=fields,
+            categories=categories,
         )
+
+    def add_kind_fields(self, kind: str, fields: list[dict]) -> None:
+        """向已有 kind 追加字段（D9：玩法包 B 给其他包的 kind 加字段）。"""
+        self._engine.add_kind_fields(kind, fields, play_id=self.play_id)
+
+    def add_category_fields(self, category: str, fields: list[dict]) -> None:
+        """向分类追加字段（该分类全部 kind 生效，D10）。"""
+        self._engine.add_category_fields(category, fields, play_id=self.play_id)
+
+    def list_kinds(self, category: str | None = None) -> list[dict]:
+        """kind 列表（含字段 schema 与分类）；category 过滤（D10 精准选取）。"""
+        return self._engine.list_kinds(category)
 
     def register_interaction(
         self, action: str, handler, *, label: str | None = None
@@ -150,6 +178,35 @@ class WorlditorPlayAPI:
 
     def get_attrs(self, entity_id: str) -> dict:
         return self._engine.get_attrs(entity_id)
+
+    # ---------- 字段原语（D9：set_data/get_data，可被覆盖/禁用 D11） ----------
+
+    async def set_data(self, entity_id: str, name: str, value: Any) -> None:
+        """字段写（合并写；走原语分派，可被其他包 override/disable）。"""
+        await self._engine.set_data(entity_id, name, value)
+
+    async def get_data(self, entity_id: str, name: str | None = None) -> Any:
+        """字段读（单字段或全量；走原语分派）。"""
+        return await self._engine.get_data(entity_id, name)
+
+    # ---------- 原语覆盖（D11 / A3） ----------
+
+    def override_primitive(self, name: str, handler) -> None:
+        """覆盖行为原语：handler(api, *args, **kwargs)，锁内回调；可调
+        api.call_default_primitive 走 super 通道（前置/后置条件）。"""
+        self._engine.override_primitive(name, handler, play_id=self.play_id)
+
+    def disable_primitive(self, name: str) -> None:
+        """禁用行为原语（调用抛"该能力已被禁用"）。"""
+        self._engine.disable_primitive(name, play_id=self.play_id)
+
+    async def call_default_primitive(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        """super 通道：显式调用内核默认实现（绕过分派表）。"""
+        return await self._engine.call_default_primitive(name, *args, **kwargs)
+
+    def list_primitive_overrides(self) -> list[dict]:
+        """原语覆盖/禁用状态（管理页可见）。"""
+        return self._engine.list_primitive_overrides()
 
     async def set_state(self, entity_id: str, patch: dict) -> None:
         await self._engine.set_state(entity_id, patch)

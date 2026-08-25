@@ -171,6 +171,7 @@ class ItemDef:
         None  # 玩法包注册的 use 交互动作（如 "eat"/"craft"/"equip"）
     )
     attrs: dict = field(default_factory=dict)  # 玩法数据（价格/属性/配方钩子）
+    fields: list[dict] = field(default_factory=list)  # D9 字段 schema
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -181,6 +182,7 @@ class ItemDef:
             "stackable": self.stackable,
             "use_action": self.use_action,
             "attrs": self.attrs,
+            "fields": self.fields,
         }
 
     @staticmethod
@@ -227,6 +229,8 @@ class EntityKindSpec:
     block_move 为内核级物理规则（移动阻挡）；interactions 为该 kind 默认可用的
     动作名列表（C3：可用动作 = kind 声明 ∪ 全局注册表）；tick 为行为状态机开关
     （玩法包同时订阅 on_tick 驱动状态）。label 为 kind 标签文案（B1）。
+    fields 为 kind 声明字段 schema（D9：{name,label,type,default?}，UI 通用渲染）；
+    categories 为分类标签（D10：宽松，无需预注册）。
     """
 
     kind: str
@@ -235,6 +239,8 @@ class EntityKindSpec:
     tick: bool = False
     label: str = ""
     play_id: str = ""
+    fields: list[dict] = field(default_factory=list)
+    categories: tuple[str, ...] = ()
 
 
 # ---------- 交互协议（玩法与 UI 之间的契约） ----------
