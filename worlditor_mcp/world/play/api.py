@@ -208,6 +208,21 @@ class WorlditorPlayAPI:
         """原语覆盖/禁用状态（管理页可见）。"""
         return self._engine.list_primitive_overrides()
 
+    def register_primitive_filter(self, name: str, filter, *, label: str = "") -> None:
+        """登记原语过滤器（G14）：filter(api, **params) -> dict | ShortCircuit。
+
+        三态：raise WorldError = 否决；返回参数字典 = 改写继续链；
+        返回 ShortCircuit(value) = 短路（跳过后续过滤器与默认实现）。
+        每包每原语至多一个；与 override/disable 互斥；链序 = 注册序。
+        """
+        self._engine.register_primitive_filter(
+            name, filter, label=label, play_id=self.play_id
+        )
+
+    def list_primitive_filters(self) -> list[dict]:
+        """原语过滤器链状态（管理页可见）。"""
+        return self._engine.list_primitive_filters()
+
     # ---------- MCP 工具（G2 / D2） ----------
 
     def register_tool(

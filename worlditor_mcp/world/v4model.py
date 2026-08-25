@@ -326,6 +326,19 @@ class InteractionResult:
         )
 
 
+class ShortCircuit:
+    """原语过滤器短路值（G14）：包装直接作为原语结果返回。
+
+    过滤器返回 ``ShortCircuit(value)`` 时，跳过后续过滤器与内核默认实现，
+    ``value`` 即本次原语调用的结果（完全替换/遮蔽语义）。
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+
 # ---------- 事件表（内核唯一事件总线，单一事件源） ----------
 
 # 事件名 → 订阅 handler 签名（均为 async，api 为 WorlditorPlayAPI 或 None）：
@@ -447,6 +460,7 @@ __all__ = [
     "EntityKindSpec",
     "InteractionRequest",
     "InteractionResult",
+    "ShortCircuit",
     "InventoryEntry",
     "ItemDef",
     "MenuButton",

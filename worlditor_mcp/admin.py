@@ -101,7 +101,13 @@ async def _play_uninstall(request: Request) -> Response:
 
 async def _overrides(request: Request) -> Response:
     _require_admin(request)
-    return JSONResponse({"overrides": _engine(request).list_primitive_overrides()})
+    engine = _engine(request)
+    return JSONResponse(
+        {
+            "overrides": engine.list_primitive_overrides(),
+            "filters": engine.list_primitive_filters(),
+        }
+    )
 
 
 async def _tools(request: Request) -> Response:

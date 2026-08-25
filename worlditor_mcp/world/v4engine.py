@@ -51,6 +51,7 @@ from .v4model import (
     InteractionResult,
     ItemDef,
     MenuButton,
+    ShortCircuit,
     World,
     WorldFolder,
     check_count,
@@ -148,6 +149,15 @@ class _PrimitiveOverride:
 
 
 @dataclass
+class _PrimitiveFilter:
+    """原语过滤器登记（G14）：filter(api, **params) -> dict | ShortCircuit。"""
+
+    play_id: str
+    filter: Callable
+    label: str = ""
+
+
+@dataclass
 class _FieldAppend:
     """一次字段追加登记（D9/D10：记录归属供卸载清理）。"""
 
@@ -190,6 +200,26 @@ _PRIMITIVE_DEFAULT_NAMES = {
     "get_data": "_get_data_default",
     "interact": "_interact_default",
 }
+
+# 原语命名参数（过滤器收到 **params；位置参数按此规范化）
+_PRIMITIVE_PARAM_NAMES = {
+    "move": ["entity_id", "direction", "path"],
+    "move_entity": ["entity_id", "map_id", "row", "col"],
+    "set_data": ["entity_id", "name", "value"],
+    "get_data": ["entity_id", "name"],
+    "interact": ["entity_id", "target_id", "action", "args", "item_id"],
+}
+
+
+def _primitive_params(name: str, args: tuple, kwargs: dict) -> dict:
+    """原语位置/关键字参数 → 命名参数 dict（过滤器与默认实现共用）。"""
+    names = _PRIMITIVE_PARAM_NAMES[name]
+    params = dict(kwargs)
+    for i, value in enumerate(args):
+        if i < len(names) and names[i] not in params:
+            params[names[i]] = value
+    return params
+
 
 _FIELD_TYPES = ("str", "int", "float", "bool", "json")
 
@@ -276,6 +306,8 @@ class V4WorldEngine:
         self._item_fields: dict[str, list[_FieldAppend]] = {}
         # D11/A3 原语分派表：name -> 覆盖登记（无登记 = 内核默认实现）
         self._primitive_overrides: dict[str, _PrimitiveOverride] = {}
+        # G14 原语过滤器链：name -> 按注册序的过滤器列表（链尾 = 默认实现）
+        self._primitive_filters: dict[str, list[_PrimitiveFilter]] = {}
         # D2/G2 MCP 工具注册表（玩法包 register_tool；MCP server 动态同步）
         self._tools: dict[str, _ToolBinding] = {}
         self._mcp: Any | None = None  # 绑定后工具注册/清理即时 add/remove
@@ -596,34 +628,64 @@ class V4WorldEngine:
             for key, v in sorted(self._views.items())
         ]
 
-    # ---------- 原语分派（D11 / A3） ----------
+    # ---------- 原语分派（D11 / A3 / G14） ----------
 
     def override_primitive(self, name: str, handler: Callable, play_id: str) -> None:
         """登记原语覆盖（锁内回调 handler(api, *args, **kwargs)）。
 
-        每原语至多一个登记项；已登记（override 或 disable）再登记报错（同 D2）。
+        每原语至多一个登记项；已登记（override 或 disable）再登记报错（同 D2）；
+        与过滤器链互斥（已挂过滤器时登记报错）。
         """
         name = _check_primitive_name(name)
         if not callable(handler):
             raise WorldError("覆盖 handler 必须是可调用对象")
-        if name in self._primitive_overrides:
-            prev = self._primitive_overrides[name]
-            raise WorldError(
-                f"原语「{name}」已被 {prev.play_id} 登记（override/disable），无法重复登记"
-            )
+        self._check_primitive_free(name, "登记 override")
         self._primitive_overrides[name] = _PrimitiveOverride(
             play_id=play_id, handler=handler
         )
 
     def disable_primitive(self, name: str, play_id: str) -> None:
-        """登记原语禁用（调用抛"该能力已被禁用"；与 override 互斥）。"""
+        """登记原语禁用（调用抛"该能力已被禁用"；与 override/过滤器互斥）。"""
         name = _check_primitive_name(name)
+        self._check_primitive_free(name, "登记 disable")
+        self._primitive_overrides[name] = _PrimitiveOverride(play_id=play_id)
+
+    def register_primitive_filter(
+        self,
+        name: str,
+        filter: Callable,
+        *,
+        label: str = "",
+        play_id: str = "",
+    ) -> None:
+        """登记原语过滤器（G14：filter(api, **params) -> dict | ShortCircuit）。
+
+        三态语义：raise WorldError = 否决；返回参数字典 = 参数改写继续链；
+        返回 ShortCircuit(value) = 短路（跳过后续过滤器与默认实现）。
+        同一包可注册多个过滤器（各带 label）；与 override/disable 互斥；
+        链序 = 注册序（加载序）；生命周期随玩法包卸载清理。
+        """
+        name = _check_primitive_name(name)
+        if not callable(filter):
+            raise WorldError("过滤器必须是可调用对象")
+        self._check_primitive_free(name, "登记过滤器")
+        self._primitive_filters.setdefault(name, []).append(
+            _PrimitiveFilter(play_id=play_id, filter=filter, label=str(label or ""))
+        )
+
+    def _check_primitive_free(self, name: str, what: str) -> None:
+        """override/disable 与过滤器互斥检查（过滤器之间不互斥，G14）。"""
         if name in self._primitive_overrides:
             prev = self._primitive_overrides[name]
             raise WorldError(
-                f"原语「{name}」已被 {prev.play_id} 登记（override/disable），无法重复登记"
+                f"原语「{name}」已被 {prev.play_id} 登记（override/disable），无法{what}"
             )
-        self._primitive_overrides[name] = _PrimitiveOverride(play_id=play_id)
+        if what == "登记 override" or what == "登记 disable":
+            if self._primitive_filters.get(name):
+                prev = self._primitive_filters[name][0]
+                raise WorldError(
+                    f"原语「{name}」已挂过滤器（{prev.play_id} 等），无法{what}"
+                )
 
     def list_primitive_overrides(self) -> list[dict]:
         """覆盖/禁用状态（管理页可见：谁覆盖了什么、谁禁用了什么）。"""
@@ -636,32 +698,58 @@ class V4WorldEngine:
             for name, ov in sorted(self._primitive_overrides.items())
         ]
 
+    def list_primitive_filters(self) -> list[dict]:
+        """过滤器链状态（管理页可见：谁挂了什么、顺序）。"""
+        return [
+            {"name": name, "play_id": f.play_id, "label": f.label}
+            for name in sorted(self._primitive_filters)
+            for f in self._primitive_filters[name]
+        ]
+
     async def call_default_primitive(self, name: str, *args: Any, **kwargs: Any) -> Any:
         """super 通道：显式调用内核默认实现（绕过分派表；覆盖者前置/后置用）。"""
         name = _check_primitive_name(name)
         return await getattr(self, _PRIMITIVE_DEFAULT_NAMES[name])(*args, **kwargs)
 
     async def _dispatch_primitive(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        """原语统一分派入口：无登记 → 默认实现；override → 锁内回调；disable → 报错。"""
+        """原语统一分派入口（D11/A3/G14）。
+
+        优先级：disable → 报错；override → 锁内回调（短路）；过滤器链（按注册序，
+        否决/改参/短路）→ 链尾默认实现；无登记 → 默认实现。
+        """
         ov = self._primitive_overrides.get(name)
-        if ov is None:
-            return await getattr(self, _PRIMITIVE_DEFAULT_NAMES[name])(*args, **kwargs)
-        if ov.handler is None:
-            raise WorldError(f"该能力已被禁用（{ov.play_id}）")
-        api = self._play_apis.get(ov.play_id)
-        if api is None:
-            raise WorldError(f"覆盖者 {ov.play_id} 未加载")
-        try:
-            return await self._invoke(ov.handler, api, *args, **kwargs)
-        except asyncio.CancelledError:
-            raise
-        except WorldError:
-            raise
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "[worlditor] 原语覆盖 handler 异常：%s (%s)", name, ov.play_id
-            )
-            raise WorldError("原语执行出错，请稍后再试") from None
+        if ov is not None:
+            if ov.handler is None:
+                raise WorldError(f"该能力已被禁用（{ov.play_id}）")
+            api = self._play_apis.get(ov.play_id)
+            if api is None:
+                raise WorldError(f"覆盖者 {ov.play_id} 未加载")
+            try:
+                return await self._invoke(ov.handler, api, *args, **kwargs)
+            except asyncio.CancelledError:
+                raise
+            except WorldError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "[worlditor] 原语覆盖 handler 异常：%s (%s)", name, ov.play_id
+                )
+                raise WorldError("原语执行出错，请稍后再试") from None
+        filters = self._primitive_filters.get(name)
+        if filters:
+            params = _primitive_params(name, args, kwargs)
+            for f in filters:
+                api = self._play_apis.get(f.play_id)
+                result = await self._invoke(f.filter, api, **params)
+                if isinstance(result, ShortCircuit):
+                    return result.value
+                if not isinstance(result, dict):
+                    raise WorldError(
+                        f"原语过滤器必须返回参数对象或 ShortCircuit（{f.play_id}）"
+                    )
+                params = result
+            return await getattr(self, _PRIMITIVE_DEFAULT_NAMES[name])(**params)
+        return await getattr(self, _PRIMITIVE_DEFAULT_NAMES[name])(*args, **kwargs)
 
     # ---------- 交互 ----------
 
@@ -779,6 +867,11 @@ class V4WorldEngine:
         }
         self._primitive_overrides = {
             k: v for k, v in self._primitive_overrides.items() if v.play_id != play_id
+        }
+        self._primitive_filters = {
+            k: [f for f in v if f.play_id != play_id]
+            for k, v in self._primitive_filters.items()
+            if any(f.play_id != play_id for f in v)
         }
         for name in [n for n, b in self._tools.items() if b.play_id == play_id]:
             self._tools.pop(name, None)
