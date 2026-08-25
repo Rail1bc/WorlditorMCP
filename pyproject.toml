@@ -16,9 +16,11 @@ authors = [{ name = "Rail1bc" }]
 keywords = ["mcp", "world", "agent", "game"]
 dependencies = [
     "aiosqlite",
-    "mcp>=1.28",
+    "mcp>=1.28,<2",  # 2.x 重构删除了 mcp.server.fastmcp，锁定 1.x 线
+    "pyyaml",
     "starlette",
     "uvicorn",
+    "tzdata; sys_platform == 'win32'",  # Windows zoneinfo 需要 tzdata
 ]
 
 [project.scripts]
