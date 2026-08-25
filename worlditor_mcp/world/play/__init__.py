@@ -231,6 +231,14 @@ class PlayLoader:
                 "[worlditor] 玩法包已加载：%s (%s)", spec.display_name, spec.version
             )
             return info
+        except WorldError as e:
+            # 玩法包自身的 WorldError（如原语互斥）：原因透出到管理页可见
+            logger.exception("[worlditor] 玩法包加载失败：%s", path.name)
+            self._load_errors[spec.play_id] = str(e)
+            # 回滚半注册（kind/interaction/event/ui/字段/原语分派按 play_id 清理）
+            self.engine.clear_play_registrations(spec.play_id)
+            self.engine.detach_play_api(spec.play_id)
+            return None
         except Exception:  # noqa: BLE001
             logger.exception("[worlditor] 玩法包加载失败：%s", path.name)
             self._load_errors[spec.play_id] = "加载异常（见日志）"
