@@ -164,6 +164,14 @@ class WorlditorPlayAPI:
         """实体直接移动到坐标（行为驱动；实体放置/移除是地图编辑 admin 操作，B8）。"""
         await self._engine.move_entity(entity_id, map_id, row, col)
 
+    async def move(self, entity_id: str, direction: str, *, path: int | None = None):
+        """路径移动（D11：分派入口，可被过滤器改写方向/覆盖；返回 SceneView）。
+
+        direction 为绝对方向（up/right/down/left）或玩法包约定的相对方向
+        （如 movement 包的 forward/back/left/right，由过滤器换算）。
+        """
+        return await self._engine.move(entity_id, direction, path=path)
+
     async def set_attrs(self, entity_id: str, patch: dict) -> None:
         await self._engine.set_attrs(entity_id, patch)
 

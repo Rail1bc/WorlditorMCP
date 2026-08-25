@@ -1,0 +1,9 @@
+name: worlditor_play_movement
+display_name: 移动与视野
+version: 0.1.0
+author: worlditor
+desc: 朝向移动（相对方向按 facing 换算）+ 3×3 视野视图 + 移动/转身/查看工具
+icon: 🗺️
+requires:
+  worlditor: ">=0.1.0"
+  plays: []
