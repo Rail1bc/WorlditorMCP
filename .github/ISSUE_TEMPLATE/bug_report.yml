@@ -28,16 +28,16 @@ body:
 
   - type: input
     attributes:
-      label: 插件版本
-      description: 请填写你当前使用的插件版本。
+      label: 服务版本
+      description: 请填写你当前使用的服务版本。
       placeholder: '如: v1.2.0'
     validations:
       required: true
 
   - type: input
     attributes:
-      label: AstrBot 版本
-      description: 请填写你当前使用的 AstrBot 版本。
+      label: 服务版本
+      description: 请填写你当前使用的 worlditor 服务版本。
       placeholder: '如: v4.22.1'
     validations:
       required: true
@@ -50,9 +50,7 @@ body:
         - 'uv 一键部署'
         - 'Docker / Docker Compose 部署'
         - 'RainYun 一键云部署'
-        - 'AstrBot App 桌面应用部署'
-        - 'AstrBot Launcher 部署'
-        - 'Replit 部署'
+                        - 'Replit 部署'
         - 'AUR 部署'
         - 'BT-Panel 部署'
         - '1Panel 部署'
@@ -113,7 +111,7 @@ body:
   - type: textarea
     attributes:
       label: 补充说明（可选）
-      description: 如果涉及多个平台、多个 AstrBot 版本或特殊部署环境，请在这里补充。
+      description: 如果涉及多个平台、多个服务版本或特殊部署环境，请在这里补充。
       placeholder: >
         如: 同样的问题在 Telegram 与 QQ 官机都可复现；使用反向代理；部署在 NAS / 云服务器等。
 

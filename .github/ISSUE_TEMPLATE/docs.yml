@@ -89,9 +89,7 @@ body:
         - 'uv 一键部署'
         - 'Docker / Docker Compose 部署'
         - 'RainYun 一键云部署'
-        - 'AstrBot App 桌面应用部署'
-        - 'AstrBot Launcher 部署'
-        - 'Replit 部署'
+                        - 'Replit 部署'
         - 'AUR 部署'
         - 'BT-Panel 部署'
         - '1Panel 部署'
@@ -103,9 +101,9 @@ body:
   - type: textarea
     attributes:
       label: 使用背景（可选）
-      description: 如果该问题与你的部署方式、适配器、AstrBot 版本或插件版本有关，可以在这里补充。
+      description: 如果该问题与你的部署方式、部署方式或服务版本有关，可以在这里补充。
       placeholder: >
-        如: AstrBot Launcher 部署, AstrBot v4.22.1, QQ 官方机器人 (Webhook 方式), 插件 v1.2.0。
+        如: Docker 部署 worlditor v0.1.0, nginx 反代 6288, 服务 v0.1.0。
 
   - type: textarea
     attributes:

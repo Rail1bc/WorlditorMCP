@@ -53,7 +53,7 @@
 | 数据 | 说明 |
 |---|---|
 | 世界 / 组织树 | worlds（玩法包激活集合）+ world_folders（多层纯管理，D15，见 §3.0） |
-| 地块 / 连接 / 模板 | 多地图；4 方向槽位 + 平行路径 + 加权目标 + 分时段文本（v3 模型原样保留）；地图归属世界与组织节点 |
+| 地块 / 连接 / 模板 | 多地图；4 方向槽位 + 平行路径 + 加权目标 + 分时段文本（v3 模型原样保留）；地图归属世界与组织节点；**可见性 visible（public/private，G1）** |
 | 实体 | 字段化统一模型（见 §3.1），位置持久化 |
 | 物品定义 | 字段化 ItemDef（见 §3.2），**仅定义不持有** |
 | 玩法数据 KV | play_data（namespace = 世界 + 玩法包 双层隔离） |
@@ -109,7 +109,8 @@ place/remove 可调用但不可覆盖（治理域，D14）。
   默认实现（完全替换/遮蔽）
 - 过滤器签名 `filter(api, **params)`——params 为原语命名参数（位置参数
   已规范化）；**约定纯函数**（不落盘、不发事件），世界变更只发生在默认实现
-- 每包每原语至多一个过滤器（同 D2 冲突报错）；链序 = 注册序（加载序）
+- 同一包可注册多个过滤器（各带 label）；与 override/disable 互斥；链序 =
+  注册序（加载序）
 
 **覆盖通道（保留 A3）**：
 - override handler 签名 `handler(api, *args, **kwargs)`——第一参数注入 api
@@ -230,15 +231,18 @@ class ItemDef:
 | `register_interaction` | 交互动作 handler |
 | `register_world_event` | 任意事件名订阅（on_tick 带间隔） |
 | `register_ui_component` / `register_ui_hook` | 自定义界面组件 / 界面注入（before/after/replace） |
-| `register_tool` | MCP 工具；handler 签名 `handler(api, ctx, **args)`——api 注入统一（与 §2.4 一致），ctx = MCP Context（读请求 _meta/进度），身份经 `api.caller()` 读取、内核裁定权限 |
+| `register_tool` | MCP 工具；handler 签名 `handler(api, ctx, **args)`——api 注入统一（与 §2.4 一致），ctx = MCP Context（读请求 _meta/进度），身份经 `api.caller()` 读取、内核裁定权限；参数类型 string/integer/number/boolean/**array**（G11） |
 | `register_view` | WebUI 页面（协议见 §4.4 视图宿主） |
 | `override_primitive` / `disable_primitive` / `call_default_primitive` | 原语覆盖 / 禁用 / 调默认实现（D11，§2.4） |
 
 ### 4.2 运行时（读写 + 身份）
 
-- 只读：实体/场景/地图/动作列表/背包（玩法包自己的数据）/字段/KV/`list_kinds(category)`
+- 只读：实体/场景/地图/动作列表/背包（玩法包自己的数据）/字段/KV/`list_kinds(category)`；
+  **感知过滤（G12）**：`list_entities(..., viewer_id=)` 统一按 `invisible` 字段隐藏
+  （viewer 自身 `see_invisible` 真视；`/state`、`/scene` 同步遵守）
 - 写：`set_data` / `get_data` / `move_entity` / `interact` / `emit`（自定义事件）/
-  `place_entity` / `remove_entity` / 地图编辑原语（地块/连接/地图/模板，D14）
+  `place_entity` / `remove_entity` / `delete_map`（G2）/
+  地图编辑原语（地块/连接/地图/模板，D14）
 - `caller()`：当前调用者身份（MCP 工具 handler 用，权限内核裁定）
 - 自有资源：`data/`（数据文件）、`web/`（组件入口）、kv namespace（隔离）
 
@@ -397,6 +401,9 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 | D14 | 实体生命周期与地图编辑 | **开放给玩法包**：API 提供 place/remove 与地图编辑原语（地块/连接/地图/模板，取代 v4 B8 的限制部分）；身份化实体（player/agent）不可被 remove（防 token 悬空）、delete_location 保留"身份化实体在场"保护；内核保证锁内执行、级联清理、异常隔离（程序安全）；内容治理与数据备份责任归用户/玩法包 |
 | D15 | 世界概念 | **世界 = 玩法包激活集合 + 数据边界**：worlds 表（play_ids 激活集合）+ 组织树（多层纯管理）+ maps 归属（world_id/folder_id）；玩法包全局加载一次、按实体所在世界过滤分发；身份全局、身份化实体数据跟人走（可跨世界跳转）；跳转 = `world_list`/`world_travel` 传送；play_data 按 (世界, 玩法包) 双层隔离 |
 | D16 | 管理/游玩分端口 | **双端口物理隔离**：玩家端口（默认 6288，公开）= MCP + 游玩 WebUI + 快照/SSE + 注册登录；管理端口（默认 6289，127.0.0.1）= 管理 REST + 管理 WebUI；共享同一引擎实例；管理端仍要求 tier=admin（不信任端口隔离） |
+
+> **G 系列缺口实现**（详见 GAPS.md）：G1 地图可见性（private 在场可见）、G2 delete_map、
+> G11 工具数组参数、G12 感知隐身过滤、G14 通用原语过滤器链——已全部落地。
 
 ## 10. 与插件时代关系
 

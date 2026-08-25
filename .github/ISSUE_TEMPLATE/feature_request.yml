@@ -68,9 +68,7 @@ body:
         - 'uv 一键部署'
         - 'Docker / Docker Compose 部署'
         - 'RainYun 一键云部署'
-        - 'AstrBot App 桌面应用部署'
-        - 'AstrBot Launcher 部署'
-        - 'Replit 部署'
+                        - 'Replit 部署'
         - 'AUR 部署'
         - 'BT-Panel 部署'
         - '1Panel 部署'
@@ -83,7 +81,7 @@ body:
     attributes:
       label: 补充说明（可选）
       description: >
-        如该建议与 AstrBot 版本、插件版本、多个平台兼容性或特殊部署环境有关，请在这里补充。
+        如该建议与 服务版本、多个平台兼容性或特殊部署环境有关，请在这里补充。
       placeholder: >
         如: 希望 Telegram、飞书和 QQ 官机表现一致；当前部署在 Docker；建议优先支持 XX 功能等。
 

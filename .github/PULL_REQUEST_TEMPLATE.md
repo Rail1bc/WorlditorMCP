@@ -19,14 +19,14 @@
 
 ## ✅ 检查清单 / Checklist
 
-<!--如果分支被合并，您的代码将成为本插件的一部分！在提交前，请核查以下几点内容。-->
+<!--如果分支被合并，您的代码将成为本服务的一部分！在提交前，请核查以下几点内容。-->
 <!--If merged, your code will be part of this plugin! Please double-check the following items before submitting.-->
 
 - [ ] 😊 如果 PR 中有新加入的功能，已经通过 Issue / 邮件等方式和作者讨论过。/ If there are new features added in the PR, I have discussed it with the authors through issues/emails, etc.
-- [ ] 👀 我的更改经过了良好的测试，**并已在上方提供了“运行截图”或“测试日志”**。/ My changes have been well-tested, **and "Screenshots" or "Test Logs" have been provided above**.
-- [ ] 🤓 我确保没有引入新的第三方依赖（插件仅依赖 AstrBot 公共 API 与 aiosqlite）。/ I have ensured that no new third-party dependencies are introduced (the plugin relies only on AstrBot's public API and aiosqlite).
+- [ ] 👀 我的更改经过了良好的测试（`pytest` 全绿 + `ruff check`），**并已在上方提供了"运行截图"或"测试日志"**。/ My changes have been well-tested (`pytest` + `ruff check`), **and "Screenshots" or "Test Logs" have been provided above**.
+- [ ] 🤓 如果引入了新的第三方依赖，已同步更新 `pyproject.toml`（`mcp` 锁 `<2` 勿动）。/ If new third-party dependencies are introduced, `pyproject.toml` has been updated accordingly (do not touch the `mcp<2` pin).
 - [ ] 😮 我的更改没有引入恶意代码。/ My changes do not introduce malicious code.
 
 ## ❤️ CONTRIBUTING
 
-- [ ] 🥳 我已阅读并同意遵守该项目的 [贡献指南](https://github.com/Rail1bc/astrbot_plugin_worlditor/blob/main/CONTRIBUTING.md) / I have read and agree to abide by the [CONTRIBUTING](https://github.com/Rail1bc/astrbot_plugin_worlditor/blob/main/CONTRIBUTING.md) of this project.
+- [ ] 🥳 我已阅读并同意遵守该项目的贡献指南（见仓库 README「开发」小节）/ I have read and agree to follow this project's contributing guidelines (see the "开发" section in README).
