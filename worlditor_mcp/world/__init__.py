@@ -1,47 +1,33 @@
-"""世界编辑器引擎包。
+"""worlditor 世界内核包。
 
-协议无关的核心动作（LLM 工具 / 插件页 API / 未来世界 HTTP API 共用）。
+协议无关的核心动作（MCP 工具 / WebUI / 管理端点共用）。v3 引擎已于 M2
+删除（DESIGN.md §7.2 复用清单），v3model/store 保留（v4 事实层复用）。
 """
 
-from .engine import (
-    AGENT_PLAYER_ID,
-    CLEANUP_INTERVAL_SECONDS,
-    HUMAN_IDLE_TIMEOUT_SECONDS,
-    WorldEngine,
-    WorldError,
-    scene_to_text,
-)
-from .store import DEFAULT_MAP_ID, WorldStore
+from .store import DEFAULT_MAP_ID
 from .v3model import (
     DIR_OFFSETS,
     DIRECTIONS,
     OPPOSITE_DIR,
     Location,
-    Player,
     SceneView,
     Target,
     TextSchedule,
     WorldMap,
     WorldTemplate,
 )
+from .v4engine import WorldError
 
 __all__ = [
-    "AGENT_PLAYER_ID",
-    "CLEANUP_INTERVAL_SECONDS",
     "DEFAULT_MAP_ID",
     "DIR_OFFSETS",
     "DIRECTIONS",
-    "HUMAN_IDLE_TIMEOUT_SECONDS",
     "Location",
     "OPPOSITE_DIR",
-    "Player",
     "SceneView",
     "Target",
     "TextSchedule",
-    "WorldEngine",
     "WorldError",
     "WorldMap",
-    "WorldStore",
     "WorldTemplate",
-    "scene_to_text",
 ]

@@ -9,7 +9,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from worlditor_mcp.world.v4model import (  # noqa: E402
-    Effect,
     Entity,
     InteractionResult,
     ItemDef,
@@ -132,17 +131,13 @@ def test_item_def_roundtrip():
     )
 
 
-def test_effect_and_result_parse():
-    assert Effect.from_dict({"op": "give_item", "args": {"item_id": "a"}}) is not None
-    assert Effect.from_dict({"op": "give_item"}) is not None  # args 缺省
-    assert Effect.from_dict({}) is None
-    assert Effect.from_dict({"op": ""}) is None
-    result = InteractionResult.from_dict(
-        {"text": "hi", "effects": [{"op": "give_item"}, {"op": 123}, "junk", None]}
-    )
+def test_result_parse():
+    """InteractionResult（D12：仅 text + ui，无 effects）。"""
+    result = InteractionResult.from_dict({"text": "hi", "ui": None})
     assert result is not None and result.text == "hi"
-    assert len(result.effects) == 1 and result.effects[0].op == "give_item"
+    assert result.to_dict() == {"text": "hi", "ui": None}
     assert InteractionResult.from_dict(None) is None
+    assert InteractionResult.from_dict({"text": 123}).text == ""
 
 
 def test_check_count():

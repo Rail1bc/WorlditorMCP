@@ -57,75 +57,24 @@ async def _scenario(tmp_path: Path, fn):
         await engine.terminate()
 
 
-# ---------- 工具（进程内 call_tool，fixed_identity 等价 stdio 绑定） ----------
+# ---------- 工具（M2 后无内置工具：玩法包 register_tool 动态注册） ----------
 
 
-def test_tools_look_move_interact(tmp_path):
-    """工具全链路：look → move → who → interact（demo 商贩）→ bag → use。"""
+def test_dynamic_tool_via_mcp(tmp_path):
+    """MCP 动态工具：attach_mcp 后玩法包注册的工具可 call_tool。"""
 
     async def fn(engine, identity, info):
         mcp = build_mcp_server(engine, fixed_identity=info)
-        # world_look
-        result = await mcp.call_tool("world_look", {})
+        engine.attach_mcp(mcp, fixed_identity=info)
+        result = await mcp.call_tool("world_whoami", {})
         payload = _loads(_content_text(result))
-        assert "你当前位于：小镇广场" in payload["text"]
-        assert payload["scene"]["map_id"] == "default"
-        # world_who：广场有商贩·阿福
-        result = await mcp.call_tool("world_who", {})
-        payload = _loads(_content_text(result))
-        assert "阿福" in payload["text"]
-        # world_move up → 步行街南街口
-        result = await mcp.call_tool("world_move", {"direction": "up"})
-        payload = _loads(_content_text(result))
-        assert "步行街·南街口" in payload["text"]
-        assert (payload["scene"]["row"], payload["scene"]["col"]) == (-1, 0)
-        # world_move 非法方向 → 错误文本
-        result = await mcp.call_tool("world_move", {"direction": "north"})
-        assert "移动失败" in _loads(_content_text(result))["text"]
-        # 回广场 interact 商贩 talk
-        await engine.move(info.entity_id, "down")
-        merchant = [e for e in engine.list_entities() if e.kind == "merchant"][0]
-        result = await mcp.call_tool(
-            "world_interact", {"target_id": merchant.id, "action": "talk"}
-        )
-        payload = _loads(_content_text(result))
-        assert "阿福" in payload["text"] and payload["ui"] is not None
-        # 出生礼包（demo on_world_edited）→ 有金币，可以买苹果
-        result = await mcp.call_tool(
-            "world_interact", {"target_id": merchant.id, "action": "buy_apple"}
-        )
-        assert "苹果" in _loads(_content_text(result))["text"]
-        # world_bag
-        result = await mcp.call_tool("world_bag", {})
-        payload = _loads(_content_text(result))
-        assert payload["items"][0]["item_id"] == "apple"
-        # world_use 吃苹果
-        result = await mcp.call_tool("world_use", {"item_id": "apple"})
-        payload = _loads(_content_text(result))
-        assert "咔嚓" in payload["text"]
-        assert engine.get_attrs(info.entity_id).get("energy") == 1
-        # world_say cell
-        result = await mcp.call_tool("world_say", {"text": "大家好"})
-        assert "大家好" in _loads(_content_text(result))["text"]
+        assert "我是" in payload["text"]
+        # 未 attach 的引擎工具集为空（M2 无内置工具）
+        mcp2 = build_mcp_server(engine)
+        tools = await mcp2.list_tools()
+        assert tools == []
 
     _run(_scenario(tmp_path, fn))
-
-
-def test_tools_errors(tmp_path):
-    """工具错误路径：无身份 / 未知物品 / 未认证。"""
-
-    async def fn(engine, identity, info):
-        # 无 fixed_identity（HTTP 模式但无 _meta）→ 报错文本
-        mcp = build_mcp_server(engine)
-        result = await mcp.call_tool("world_look", {})
-        assert "未认证" in _loads(_content_text(result))["text"]
-        # 固定身份：未知物品
-        mcp2 = build_mcp_server(engine, fixed_identity=info)
-        result = await mcp2.call_tool("world_use", {"item_id": "nonexistent"})
-        assert "没有这种物品" in _loads(_content_text(result))["text"]
-        # 喇叭不足的 world 广播
-        result = await mcp2.call_tool("world_say", {"text": "hi", "scope": "world"})
-        assert "喇叭" in _loads(_content_text(result))["text"]
 
     _run(_scenario(tmp_path, fn))
 
@@ -253,19 +202,12 @@ def test_stdio_end_to_end(tmp_path):
                 # mcp 1.28 client：ListToolsResult.tools（元素可能是 tuple(name, Tool)）
                 tool_list = tools.tools if hasattr(tools, "tools") else tools
                 names = {t.name if hasattr(t, "name") else t[0] for t in tool_list}
-                assert names == {
-                    "world_look",
-                    "world_move",
-                    "world_say",
-                    "world_bag",
-                    "world_use",
-                    "world_interact",
-                    "world_who",
-                }
-                result = await session.call_tool("world_look", {})
+                # M2：无内置工具；演示玩法包动态注册 world_whoami
+                assert names == {"world_whoami"}
+                result = await session.call_tool("world_whoami", {})
                 text = result.content[0].text
                 payload = json.loads(text)
-                assert "小镇广场" in payload["text"]
+                assert "我是" in payload["text"]
                 # 无效 token 的进程：拒绝启动（无凭据时 stdio 退出）
         engine2 = V4WorldEngine(V4WorldStore(tmp_path / "world.db"))
         await engine2.initialize()

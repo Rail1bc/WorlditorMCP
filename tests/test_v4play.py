@@ -169,7 +169,7 @@ async def _play_scenario(tmp_path, fn):
 
 
 def test_demo_door_blocks_and_enter_forest(tmp_path):
-    """演示玩法包门阻挡 + 进入迷雾提示（on_entity_enter 事件 + cell 说话）。"""
+    """演示玩法包门阻挡 + 进入迷雾提示（on_entity_enter 事件 → fog_enter 自定义事件）。"""
     install_demo_play(tmp_path / "plays")
 
     async def fn(engine: V4WorldEngine, loader: PlayLoader):
@@ -178,15 +178,15 @@ def test_demo_door_blocks_and_enter_forest(tmp_path):
         # 木门挡路（demo 注册 kind=door block_move）
         with pytest.raises(WorldError, match="挡住了"):
             await engine.move(player.id, "down")
-        # 开门后可通行；进入 (4,0) 迷雾 → on_entity_enter 触发 cell 提示
+        # 开门后可通行；进入 (4,0) 迷雾 → on_entity_enter 触发 fog_enter 事件
         door = [e for e in engine.list_entities() if e.kind == "door"][0]
         await engine.interact(player.id, door.id, "open")
         await engine.move(player.id, "down")  # (3,0)
         await engine.move(player.id, "down")  # (4,0) 迷雾森林
         assert player.pos_key() == ("default", 4, 0)
         logs = await engine.store.list_world_log(limit=20)
-        say_logs = [row for row in logs if row["kind"] == "on_say"]
-        assert any("雾" in str(row["data"]) for row in say_logs)
+        fog_logs = [row for row in logs if row["kind"] == "fog_enter"]
+        assert any("雾" in str(row["data"]) for row in fog_logs)
 
     _run(_play_scenario(tmp_path, fn))
 

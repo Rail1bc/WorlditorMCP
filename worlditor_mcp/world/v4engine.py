@@ -45,7 +45,6 @@ from .v3model import (
 )
 from .v4model import (
     WORLD_EVENTS,
-    Effect,
     Entity,
     EntityKindSpec,
     InteractionRequest,
@@ -56,11 +55,10 @@ from .v4model import (
     WorldFolder,
     check_count,
 )
-from .v4store import MEGAPHONE_ITEM_ID, V4WorldStore
+from .v4store import V4WorldStore
 
 logger = logging.getLogger("worlditor")
 
-BROADCAST_COOLDOWN_SECONDS = 30.0
 TICK_GRANULARITY_SECONDS = 1.0
 IDENTITY_KINDS = ("player", "agent")
 
@@ -281,14 +279,11 @@ class V4WorldEngine:
         # D2/G2 MCP 工具注册表（玩法包 register_tool；MCP server 动态同步）
         self._tools: dict[str, _ToolBinding] = {}
         self._mcp: Any | None = None  # 绑定后工具注册/清理即时 add/remove
+        self._mcp_fixed_identity: Any = None  # stdio 固定身份（HTTP 模式 None）
         # G3/D7 视图注册表（玩法包 register_view；GET /views 暴露）
         self._views: dict[str, _ViewBinding] = {}
         # 玩法包 API 实例（PlayLoader attach；handler 调用时按 play_id 取）
         self._play_apis: dict[str, Any] = {}
-        # 广播冷却（B2，内存；重启重置可接受——限流本来就是临时性的）
-        self._broadcast_cd: dict[str, float] = {}
-        # 管理员实体（喇叭豁免，B2；v4.1 管理端点维护）
-        self.admins: set[str] = set()
         # 事件流订阅者（SSE 出口，B11：事件总线序列化推送；队列满丢最旧）
         self._subscribers: set[asyncio.Queue] = set()
         self._tick_task: asyncio.Task | None = None
@@ -477,9 +472,15 @@ class V4WorldEngine:
 
     # ---------- MCP 工具注册（D2 / G2） ----------
 
-    def attach_mcp(self, mcp: Any) -> None:
-        """绑定 MCP server：此后 register_tool / 清理工具即时同步 add/remove。"""
+    def attach_mcp(self, mcp: Any, fixed_identity: Any = None) -> None:
+        """绑定 MCP server：此后 register_tool / 清理工具即时同步 add/remove。
+
+        Args:
+            mcp: FastMCP 实例。
+            fixed_identity: stdio 模式固定身份（HTTP 模式为 None，身份经 _meta）。
+        """
         self._mcp = mcp
+        self._mcp_fixed_identity = fixed_identity
         for name in list(self._tools):
             self._sync_tool_add(name)
 
@@ -492,7 +493,9 @@ class V4WorldEngine:
         from .mcp import build_dynamic_tool
 
         self._mcp.add_tool(
-            build_dynamic_tool(self, binding, name),
+            build_dynamic_tool(
+                self, binding, name, fixed_identity=self._mcp_fixed_identity
+            ),
             name=name,
             description=binding.description or f"玩法包工具：{name}",
         )
@@ -1584,33 +1587,6 @@ class V4WorldEngine:
             paths=paths,
         )
 
-    # ---------- 广播（B2） ----------
-
-    async def say(self, entity_id: str, text: str, *, scope: str = "cell") -> None:
-        """说话。scope=cell 不限制；scope=world 消耗 1 个喇叭 + 每人 30s 冷却
-        （管理员豁免）。
-
-        Raises:
-            WorldError: 文本为空 / scope 非法 / 无喇叭 / 冷却中。
-        """
-        async with self._lock:
-            entity = self._require_entity(entity_id)
-            text = _clean_required(text, "说话内容")
-            if scope not in ("cell", "world"):
-                raise WorldError("scope 必须是 cell 或 world")
-            if scope == "world":
-                if entity_id not in self.admins:
-                    if self.count_item(entity_id, MEGAPHONE_ITEM_ID) < 1:
-                        raise WorldError("全图广播需要「喇叭」，你身上没有")
-                    now = self._now_ts()
-                    last = self._broadcast_cd.get(entity_id, 0.0)
-                    if now - last < BROADCAST_COOLDOWN_SECONDS:
-                        remain = int(BROADCAST_COOLDOWN_SECONDS - (now - last)) + 1
-                        raise WorldError(f"广播冷却中，约 {remain} 秒后再试")
-                    await self.take_item(entity_id, MEGAPHONE_ITEM_ID)
-                    self._broadcast_cd[entity_id] = now
-            await self._emit("on_say", entity, text, scope)
-
     # ---------- 交互（WebUI / MCP 的公共入口，A1） ----------
 
     async def interact(
@@ -1677,7 +1653,6 @@ class V4WorldEngine:
                 raise WorldError("交互执行出错，请稍后再试") from None
             if not isinstance(result, InteractionResult):
                 raise WorldError("交互返回结果格式错误")
-            await self._apply_effects(entity_id, result.effects)
             await self._emit("on_interact", req, result)
             if item_id is not None:
                 count = self.count_item(entity_id, item_id)
@@ -1703,56 +1678,6 @@ class V4WorldEngine:
             MenuButton(label=self._interactions[a].label, action=a)
             for a in self.available_actions(target_id)
         ]
-
-    async def _apply_effects(self, entity_id: str, effects: list) -> None:
-        """内核结算交互 effects（按 op 执行原语，校验合法性；锁内重入）。"""
-        for raw in effects:
-            effect = raw if isinstance(raw, Effect) else Effect.from_dict(raw)
-            if effect is None:
-                raise WorldError("无效的交互效果")
-            op = effect.op
-            args = effect.args if isinstance(effect.args, dict) else {}
-            if op == "give_item":
-                item_id = args.get("item_id")
-                if not isinstance(item_id, str) or not item_id:
-                    raise WorldError("give_item 效果缺少 item_id")
-                await self.give_item(
-                    entity_id,
-                    item_id,
-                    count=args.get("count", 1),
-                    attrs=args.get("attrs"),
-                )
-            elif op == "take_item":
-                item_id = args.get("item_id")
-                if not isinstance(item_id, str) or not item_id:
-                    raise WorldError("take_item 效果缺少 item_id")
-                ok = await self.take_item(
-                    entity_id, item_id, count=args.get("count", 1)
-                )
-                if not ok:
-                    raise WorldError(f"物品不足：{item_id}")
-            elif op == "move":
-                direction = args.get("direction")
-                if not isinstance(direction, str) or not direction:
-                    raise WorldError("move 效果缺少 direction")
-                await self.move(entity_id, direction, path=args.get("path"))
-            elif op == "move_entity":
-                row, col = args.get("row"), args.get("col")
-                if not _is_int(row) or not _is_int(col):
-                    raise WorldError("move_entity 效果需要 row/col 整数")
-                await self.move_entity(entity_id, args.get("map_id", ""), row, col)
-            elif op == "set_attrs":
-                patch = args.get("patch")
-                if not isinstance(patch, dict):
-                    raise WorldError("set_attrs 效果需要 patch 对象")
-                await self.set_attrs(entity_id, patch)
-            elif op == "say":
-                text = args.get("text")
-                if not isinstance(text, str) or not text:
-                    raise WorldError("say 效果缺少 text")
-                await self.say(entity_id, text, scope=args.get("scope", "cell"))
-            else:
-                raise WorldError(f"未知交互效果：{op}")
 
     # ---------- 地图编辑（B8：地块/地图/实体编辑原语，admin 端点转发） ----------
 

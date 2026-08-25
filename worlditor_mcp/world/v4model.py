@@ -7,9 +7,9 @@ v4 引入的核心概念（v3 的 Location / WorldMap / WorldTemplate 沿用不�
   地图编辑放置的布景与内容实体。所有实体统一 ``Entity`` 模型与 ``entities`` 表。
 - **物品**：定义（ItemDef）与持有（inventories）分离；持有条目可带个体差异
   （attrs_json：强化等级、耐久等，C1）。
-- **交互协议**：InteractionRequest / UiBlock / Effect / InteractionResult——
-  玩法包只描述界面（UiBlock），内核按 schema 渲染；世界变更以声明式
-  ``effects`` 返回，由内核结算（A1）。
+- **交互协议**：InteractionRequest / UiBlock / InteractionResult——
+  玩法包只描述界面（UiBlock），内核按 schema 渲染；世界变更以命令式
+  原语调用表达（D12：无 effects 清单）。
 - **事件表**：内核唯一事件总线（单一事件源），SSE 是它的序列化出口。
 """
 
@@ -304,55 +304,25 @@ class UiBlock:
 
 
 @dataclass
-class Effect:
-    """世界变更原语（内核结算，不信任玩法包直接改）。
-
-    op 为引擎原语子集：give_item / take_item / move / move_entity / set_attrs /
-    say（传送 = move_entity 特例，无独立 teleport）。
-    """
-
-    op: str
-    args: dict = field(default_factory=dict)
-
-    @staticmethod
-    def from_dict(value: Any) -> Effect | None:
-        if not isinstance(value, dict):
-            return None
-        op = value.get("op")
-        if not isinstance(op, str) or not op:
-            return None
-        args = value.get("args")
-        return Effect(op=op, args=args if isinstance(args, dict) else {})
-
-
-@dataclass
 class InteractionResult:
-    """交互结果：text 供 agent 消费，ui 供 WebUI 渲染，effects 由内核结算。"""
+    """交互结果（D12：仅 text + ui，无 effects——handler 命令式调原语）。"""
 
     text: str = ""
     ui: UiBlock | None = None
-    effects: list[Effect] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "text": self.text,
             "ui": self.ui.to_dict() if self.ui else None,
-            "effects": [{"op": e.op, "args": e.args} for e in self.effects],
         }
 
     @staticmethod
     def from_dict(value: Any) -> InteractionResult | None:
         if not isinstance(value, dict):
             return None
-        effects: list[Effect] = []
-        for raw in value.get("effects") or []:
-            effect = Effect.from_dict(raw)
-            if effect is not None:
-                effects.append(effect)
         return InteractionResult(
             text=value.get("text") if isinstance(value.get("text"), str) else "",
             ui=None,  # UiBlock 解析 v4.1（UI 协议层）落地
-            effects=effects,
         )
 
 
@@ -372,7 +342,6 @@ WORLD_EVENTS: tuple[str, ...] = (
     "on_tick",
     "on_entity_move",
     "on_entity_enter",
-    "on_say",
     "on_interact",
     "on_item_used",
     "on_entity_removed",
@@ -474,7 +443,6 @@ def check_count(value: Any, what: str = "count") -> int:
 
 
 __all__ = [
-    "Effect",
     "Entity",
     "EntityKindSpec",
     "InteractionRequest",

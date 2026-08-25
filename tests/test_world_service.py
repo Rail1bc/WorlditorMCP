@@ -36,6 +36,7 @@ async def _scenario(tmp_path, fn, *, origins=None, install_demo=False):
     await loader.load_all(None)
     identity = IdentityService(engine, auth_mode="open", admin_key="sekret")
     mcp = build_mcp_server(engine)
+    engine.attach_mcp(mcp)
     app = build_http_app(
         mcp, identity, engine=engine, loader=loader, allowed_origins=origins
     )
@@ -413,26 +414,15 @@ def test_mcp_http_end_to_end(tmp_path):
                     else:
                         tool_list = tools_result
                     names = {t.name if hasattr(t, "name") else t[0] for t in tool_list}
-                    assert "world_look" in names and "world_interact" in names
+                    # M2：无内置工具；演示玩法包动态注册 world_whoami
+                    assert "world_whoami" in names
                     # 工具以连接实体身份执行（_meta 注入生效）
-                    result = await session.call_tool("world_look", {})
+                    result = await session.call_tool("world_whoami", {})
                     payload = json.loads(result.content[0].text)
-                    assert "小镇广场" in payload["text"]
-                    # 交互 demo 商贩（身份实体在广场）
-                    state = (
-                        await client.get("/state", headers=_auth(info.token))
-                    ).json()
-                    merchant = next(
-                        e for e in state["entities"] if e["kind"] == "merchant"
-                    )
-                    result = await session.call_tool(
-                        "world_interact",
-                        {"target_id": merchant["id"], "action": "talk"},
-                    )
-                    payload = json.loads(result.content[0].text)
-                    assert "阿福" in payload["text"]
+                    assert "我是" in payload["text"]
+                    assert payload["text"] != "我是 None"  # 身份已注入
         finally:
             server.should_exit = True
             await asyncio.wait_for(task, timeout=10)
 
-    _run(_scenario(tmp_path, fn))
+    _run(_scenario(tmp_path, fn, install_demo=True))

@@ -309,9 +309,6 @@ class WorlditorPlayAPI:
     def get_state(self, entity_id: str) -> dict:
         return self._engine.get_state(entity_id)
 
-    async def say(self, entity_id: str, text: str, *, scope: str = "cell") -> None:
-        await self._engine.say(entity_id, text, scope=scope)
-
     async def interact(
         self,
         entity_id: str,

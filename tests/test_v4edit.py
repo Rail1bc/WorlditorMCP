@@ -176,11 +176,11 @@ def test_subscribe_receives_events(tmp_path):
     async def fn(engine: V4WorldEngine):
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         queue = engine.subscribe()  # 先建实体再订阅（place 触发 on_world_edited）
-        await engine.say(player.id, "hello")
+        await engine.emit("my_say", "hello")
         payload = await asyncio.wait_for(queue.get(), timeout=2)
-        assert payload["event"] == "on_say"
-        assert payload["text"] == "hello" and payload["scope"] == "cell"
-        assert payload["entity"]["id"] == player.id
+        assert payload["event"] == "my_say"
+        assert payload["data"] == "hello"
+        assert payload["entity"] is None  # 自定义事件无实体参数
         assert payload["ts"] > 0
         # 移动事件
         await engine.move(player.id, "up")
@@ -193,7 +193,7 @@ def test_subscribe_receives_events(tmp_path):
             queue.get_nowait()
         # unsubscribe 后不再收到
         engine.unsubscribe(queue)
-        await engine.say(player.id, "nobody hears")
+        await engine.emit("my_say", "nobody hears")
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(queue.get(), timeout=0.3)
 
@@ -205,14 +205,13 @@ def test_subscribe_queue_full_drops_oldest(tmp_path):
 
     async def fn(engine: V4WorldEngine):
         queue = engine.subscribe()
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
         for i in range(250):  # 超过 maxsize=200
-            await engine.say(player.id, f"msg-{i}")
+            await engine.emit("msg_loop", f"msg-{i}")
         # 队列不阻塞（世界继续工作），最终持有最新事件
         latest = None
         while not queue.empty():
             latest = queue.get_nowait()
-        assert latest is not None and latest["text"] == "msg-249"
+        assert latest is not None and latest["data"] == "msg-249"
 
     _run(_scenario(tmp_path, fn))
 

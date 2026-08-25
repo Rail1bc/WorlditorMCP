@@ -64,7 +64,7 @@ async def _amain(argv: list[str]) -> None:
         )
         await loader.load_all(None)
         mcp = build_mcp_server(engine, fixed_identity=info)
-        engine.attach_mcp(mcp)  # 动态工具（register_tool）同步注册
+        engine.attach_mcp(mcp, fixed_identity=info)  # 动态工具同步注册 + 固定身份
         await mcp.run_stdio_async()
     finally:
         await engine.terminate()

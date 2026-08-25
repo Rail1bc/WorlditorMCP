@@ -16,18 +16,15 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from worlditor_mcp.world.v4engine import (  # noqa: E402
-    BROADCAST_COOLDOWN_SECONDS,
     V4WorldEngine,
     WorldError,
 )
 from worlditor_mcp.world.v4model import (  # noqa: E402
-    Effect,
     InteractionRequest,
     InteractionResult,
     ItemDef,
 )
 from worlditor_mcp.world.v4store import (  # noqa: E402
-    MEGAPHONE_ITEM_ID,
     V4WorldStore,
 )
 
@@ -82,7 +79,7 @@ def test_seed_world(tmp_path):
         assert len(engine.list_locations()) == SEED_LOCATION_COUNT
         assert len(engine.list_entities()) == SEED_ENTITY_COUNT
         assert len(engine.store.items) == 2
-        assert MEGAPHONE_ITEM_ID in engine.store.items
+        assert "megaphone" in engine.store.items
         assert "apple" in engine.store.items
         kinds = {e.kind for e in engine.list_entities()}
         assert kinds == {"merchant", "sign", "door"}
@@ -265,51 +262,6 @@ def test_attrs_state_patch(tmp_path):
     _run(_scenario(tmp_path, fn))
 
 
-# ---------- 广播（B2） ----------
-
-
-def test_say_scope_cell_unlimited(tmp_path):
-    """cell 级说话无限制；on_say 事件带 scope。"""
-
-    async def fn(engine: V4WorldEngine, clock=None):
-        said = []
-        engine.register_world_event(
-            "on_say", lambda api, e, text, scope: said.append((e.id, text, scope))
-        )
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
-        await engine.say(player.id, "大家好")
-        assert said[-1][1:] == ("大家好", "cell")
-        with pytest.raises(WorldError, match="不能为空"):
-            await engine.say(player.id, "  ")
-        with pytest.raises(WorldError, match="scope"):
-            await engine.say(player.id, "hi", scope="galaxy")
-
-    _run(_scenario(tmp_path, fn))
-
-
-def test_say_world_requires_megaphone_and_cooldown(tmp_path):
-    """world 级广播：无喇叭报错；有喇叭消耗 1 个 + 30s 冷却；管理员豁免。"""
-
-    async def fn(engine: V4WorldEngine, clock: FakeClock):
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
-        with pytest.raises(WorldError, match="喇叭"):
-            await engine.say(player.id, "全图广播", scope="world")
-        await engine.give_item(player.id, MEGAPHONE_ITEM_ID, 2)
-        await engine.say(player.id, "第一次广播", scope="world")
-        assert engine.count_item(player.id, MEGAPHONE_ITEM_ID) == 1
-        with pytest.raises(WorldError, match="冷却"):
-            await engine.say(player.id, "第二次广播", scope="world")
-        clock.advance(BROADCAST_COOLDOWN_SECONDS + 1)
-        await engine.say(player.id, "冷却结束", scope="world")
-        assert engine.count_item(player.id, MEGAPHONE_ITEM_ID) == 0
-        # 管理员豁免（无喇叭也可广播，无冷却）
-        engine.admins.add(player.id)
-        await engine.say(player.id, "管理员广播", scope="world")
-
-    clock = FakeClock()
-    _run(_scenario(tmp_path, fn, clock=clock))
-
-
 # ---------- 交互（A1：effects 内核结算） ----------
 
 
@@ -318,42 +270,47 @@ def _demo_registry(engine: V4WorldEngine) -> None:
         "merchant", interactions=("talk", "trade"), label="商贩"
     )
     engine.register_entity_kind("sign", interactions=("read",), label="告示牌")
-    engine.register_interaction("talk", _talk_handler, label="打招呼")
-    engine.register_interaction("trade", _trade_handler, label="看看货")
-    engine.register_interaction("read", _read_handler, label="阅读")
-    engine.register_interaction("buy", _buy_handler, label="买")
+    engine.register_interaction(
+        "talk", _talk_handler, label="打招呼", play_id="test_play"
+    )
+    engine.register_interaction(
+        "trade", _trade_handler, label="看看货", play_id="test_play"
+    )
+    engine.register_interaction(
+        "read", _read_handler, label="阅读", play_id="test_play"
+    )
+    engine.register_interaction("buy", _buy_handler, label="买", play_id="test_play")
 
 
 async def _talk_handler(api, req: InteractionRequest) -> InteractionResult:
     return InteractionResult(
         text=f"你好，我是{req.target.name}！",
         ui=None,
-        effects=[],
     )
 
 
 async def _trade_handler(api, req: InteractionRequest) -> InteractionResult:
-    return InteractionResult(
-        text="货单：苹果 5 金。",
-        effects=[
-            Effect("give_item", {"item_id": "apple", "count": 1}),
-            Effect("set_attrs", {"patch": {"gold": -5}}),
-        ],
-    )
+    # D12：命令式——handler 直接调原语（api.set_attrs / api.give_item）
+    await api.set_attrs(req.entity_id, {"gold": -5})
+    await api.give_item(req.entity_id, "apple", 1)
+    return InteractionResult(text="货单：苹果 5 金。")
 
 
 async def _read_handler(api, req: InteractionRequest) -> InteractionResult:
-    return InteractionResult(text="告示牌上写着：明日集市。", effects=[])
+    return InteractionResult(text="告示牌上写着：明日集市。")
 
 
 async def _buy_handler(api, req: InteractionRequest) -> InteractionResult:
-    return InteractionResult(text="买完了。", effects=[])
+    return InteractionResult(text="买完了。")
 
 
-def test_interact_flow_and_effects(tmp_path):
-    """交互全流程：可用动作（C3）→ handler → effects 结算（give/set_attrs）。"""
+def test_interact_flow_command_mode(tmp_path):
+    """交互全流程（D12 命令式）：可用动作（C3）→ handler 直接调原语生效。"""
 
     async def fn(engine: V4WorldEngine, clock=None):
+        from worlditor_mcp.world.play.api import WorlditorPlayAPI
+
+        engine.attach_play_api("test_play", WorlditorPlayAPI(engine, "test_play"))
         _demo_registry(engine)
         merchant = [e for e in engine.list_entities() if e.kind == "merchant"][0]
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
@@ -365,7 +322,7 @@ def test_interact_flow_and_effects(tmp_path):
 
         result = await engine.interact(player.id, merchant.id, "talk")
         assert result.text == "你好，我是商贩·阿福！"
-        # effects 结算
+        # 命令式原语调用即时生效（无 effects 结算）
         result2 = await engine.interact(player.id, merchant.id, "trade")
         assert engine.count_item(player.id, "apple") == 1
         assert engine.get_attrs(player.id) == {"gold": -5}
@@ -435,71 +392,34 @@ def test_interact_handler_error_isolated(tmp_path):
     _run(_scenario(tmp_path, fn))
 
 
-def test_interact_effects_reentrant(tmp_path):
-    """effects 内的 move/move_entity/say 结算（可重入锁不死锁）。"""
+def test_interact_command_reentrant(tmp_path):
+    """D12 命令式：handler 内直接调 move_entity 等原语（可重入锁不死锁）。"""
 
     async def fn(engine: V4WorldEngine, clock=None):
+        from worlditor_mcp.world.play.api import WorlditorPlayAPI
+
+        engine.attach_play_api("test_play", WorlditorPlayAPI(engine, "test_play"))
         engine.register_entity_kind("teleporter", interactions=("activate",))
         engine.register_interaction(
             "activate",
             lambda api, req: _activate_handler(api, req),
             label="激活",
+            play_id="test_play",
         )
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         pod = await engine.place_entity("teleporter", "default", 1, 0, name="传送台")
         result = await engine.interact(player.id, pod.id, "activate")
-        assert player.pos_key() == ("default", 5, 1)  # move_entity 生效
-        assert "嗡嗡" in result.text  # say effect 已结算（文本来自 handler）
+        assert player.pos_key() == ("default", 5, 1)  # 命令式 move_entity 生效
+        assert "嗡嗡" in result.text
 
     _run(_scenario(tmp_path, fn))
 
 
 async def _activate_handler(api, req: InteractionRequest) -> InteractionResult:
-    return InteractionResult(
-        text="传送台嗡嗡作响，你被传送到了迷雾深处。",
-        effects=[
-            Effect("move_entity", {"map_id": "default", "row": 5, "col": 1}),
-            Effect("say", {"text": "一道光芒闪过！", "scope": "cell"}),
-        ],
-    )
-
-
-def test_interact_invalid_effects(tmp_path):
-    """非法 effects：未知 op / 缺参数 → WorldError。"""
-
-    async def fn(engine: V4WorldEngine, clock=None):
-        engine.register_interaction(
-            "bad_op",
-            lambda api, req: InteractionResult(effects=[Effect("teleport", {})]),
-        )
-        engine.register_interaction(
-            "bad_give",
-            lambda api, req: InteractionResult(effects=[Effect("give_item", {})]),
-        )
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
-        with pytest.raises(WorldError, match="未知交互效果"):
-            await engine.interact(player.id, player.id, "bad_op")
-        with pytest.raises(WorldError, match="缺少 item_id"):
-            await engine.interact(player.id, player.id, "bad_give")
-
-    _run(_scenario(tmp_path, fn))
-
-
-def test_interact_take_item_effect_fails(tmp_path):
-    """take_item effect 数量不足 → 结算失败报错。"""
-
-    async def fn(engine: V4WorldEngine, clock=None):
-        engine.register_interaction(
-            "rob",
-            lambda api, req: InteractionResult(
-                effects=[Effect("take_item", {"item_id": "apple"})]
-            ),
-        )
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
-        with pytest.raises(WorldError, match="物品不足"):
-            await engine.interact(player.id, player.id, "rob")
-
-    _run(_scenario(tmp_path, fn))
+    # D12 命令式：直接调原语 + 自定义事件
+    await api.move_entity(req.entity_id, "default", 5, 1)
+    await api.emit("teleport_flash", {"entity_id": req.entity_id}, log=True)
+    return InteractionResult(text="传送台嗡嗡作响，你被传送到了迷雾深处。")
 
 
 # ---------- 事件总线 / 世界日志 ----------
@@ -510,9 +430,9 @@ def test_events_and_world_log(tmp_path):
 
     async def fn(engine: V4WorldEngine, clock=None):
         seen = []
-        engine.register_world_event("on_say", _bad_event_handler)
+        engine.register_world_event("my_say", _bad_event_handler)
         engine.register_world_event(
-            "on_say", lambda api, e, text, scope: seen.append(("say", e.id, text))
+            "my_say", lambda api, text: seen.append(("say", text))
         )
         engine.register_world_event(
             "on_interact",
@@ -523,14 +443,14 @@ def test_events_and_world_log(tmp_path):
             lambda api, e, f, t: seen.append(("move", e.id, f[0], f[1], f[2])),
         )
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
-        await engine.say(player.id, "hello")
+        await engine.emit("my_say", "hello", log=True)
         await engine.move(player.id, "up")
-        assert ("say", player.id, "hello") in seen
+        assert ("say", "hello") in seen
         assert ("move", player.id, "default", 0, 0) in seen
-        # world_log：say/move 已写入
+        # world_log：自定义事件/移动已写入
         logs = await engine.store.list_world_log(limit=50)
         kinds = {log["kind"] for log in logs}
-        assert "on_say" in kinds and "on_entity_move" in kinds
+        assert "my_say" in kinds and "on_entity_move" in kinds
         assert all(log["data"].get("event") for log in logs)
 
     _run(_scenario(tmp_path, fn))
@@ -544,9 +464,8 @@ def test_world_log_capacity(tmp_path):
     """world_log 上限 5000 条（B3）：超限写入自动清理最旧。"""
 
     async def fn(engine: V4WorldEngine, clock=None):
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
         for i in range(5050):
-            await engine.say(player.id, f"msg-{i}")
+            await engine.emit("msg_loop", f"msg-{i}", log=True)
         logs = await engine.store.list_world_log(limit=99999)
         assert len(logs) <= 5000
         assert logs[0]["data"]["values"][0] == "msg-5049"  # 最新保留

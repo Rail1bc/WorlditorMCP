@@ -29,7 +29,6 @@ from pathlib import Path
 
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
 from worlditor_mcp.world.v4model import (
-    Effect,
     InteractionRequest,
     InteractionResult,
     MenuButton,
@@ -73,6 +72,16 @@ def setup(api: WorlditorPlayAPI, context) -> None:
     api.register_world_event("on_entity_enter", _on_entity_enter)
     api.register_world_event("on_item_used", _on_item_used)
     api.register_world_event("on_world_edited", _on_world_edited)
+    api.register_tool(
+        "world_whoami",
+        _whoami,
+        description="查看你的当前身份",
+    )
+
+
+async def _whoami(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
+    """MCP 动态工具演示：身份经 api.caller() 读取（G2）。"""
+    return {"text": f"我是 {api.caller()}"}
 
 
 async def _talk(api: WorlditorPlayAPI, req: InteractionRequest) -> InteractionResult:
@@ -114,7 +123,7 @@ async def _trade(api: WorlditorPlayAPI, req: InteractionRequest) -> InteractionR
 async def _buy_apple(
     api: WorlditorPlayAPI, req: InteractionRequest
 ) -> InteractionResult:
-    """买苹果：声明式 effects 写法（v0.3.0 内核结算，D12 后删除）。"""
+    """买苹果：命令式 API 写法（D12：无 effects，handler 直接调原语）。"""
     if req.target is None or req.target.kind != "merchant":
         return InteractionResult(text="这里没有卖苹果的。")
     gold = api.get_attrs(req.entity_id).get(_GOLD, 0)
@@ -123,12 +132,10 @@ async def _buy_apple(
         return InteractionResult(
             text=f"钱不够……一个苹果要 {price} 金（你只有 {gold} 金）。"
         )
+    await api.set_attrs(req.entity_id, {_GOLD: gold - price})
+    await api.give_item(req.entity_id, APPLE_ITEM, 1)
     return InteractionResult(
-        text=f"「给你，新鲜摘的苹果！」（花费 {price} 金）",
-        effects=[
-            Effect("set_attrs", {"patch": {_GOLD: gold - price}}),
-            Effect("give_item", {"item_id": APPLE_ITEM, "count": 1}),
-        ],
+        text=f"「给你，新鲜摘的苹果！」（花费 {price} 金）"
     )
 
 
@@ -195,9 +202,13 @@ async def _on_tick(api: WorlditorPlayAPI, dt: float) -> None:
 async def _on_entity_enter(
     api: WorlditorPlayAPI, entity, map_id: str, row: int, col: int
 ) -> None:
-    """演示事件驱动行为：进入迷雾区域给出提示（cell 级说话）。"""
+    """演示事件驱动行为：进入迷雾区域发自定义事件（说话下沉后，M2/D1）。"""
     if row >= FOREST_ROW and entity.kind in ("player", "agent"):
-        await api.say(entity.id, "雾越来越浓，你几乎看不清三米以外的东西……")
+        await api.emit(
+            "fog_enter",
+            {"entity_id": entity.id, "row": row, "text": "雾越来越浓，你几乎看不清三米以外的东西……"},
+            log=True,
+        )
 
 
 async def _on_item_used(
