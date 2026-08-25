@@ -76,6 +76,9 @@ export const getScene = (entityId) =>
   apiGet(entityId ? `/scene?entity_id=${encodeURIComponent(entityId)}` : "/scene");
 export const getBag = () => apiGet("/bag");
 
+// 视图列表（G3：玩法包 register_view）
+export const listViews = () => apiGet("/views");
+
 // SSE 事件流（play 档；EventSource 无法带 header，用 query token）
 export function eventsUrl() {
   return `${WORLD_API}/events?token=${encodeURIComponent(getToken())}`;

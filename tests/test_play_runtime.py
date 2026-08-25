@@ -203,6 +203,37 @@ def test_world_activation_filter(tmp_path):
 # ---------- 编辑原语开放（D14） ----------
 
 
+def test_register_view_via_api(tmp_path):
+    """register_view（G3）：注册 + 冲突拒绝 + 清理恢复 + /views 暴露。"""
+
+    async def fn():
+        engine, _ = await _make(tmp_path)
+        try:
+            api = WorlditorPlayAPI(engine, "pkg_a")
+            engine.attach_play_api("pkg_a", api)
+            api.register_view(
+                "bag",
+                title="背包",
+                icon="🎒",
+                provider={"type": "component", "url": "web/bag.js"},
+            )
+            views = engine.list_views()
+            assert views[0]["key"] == "bag"
+            assert views[0]["provider"]["url"] == "web/bag.js"
+            # 冲突拒绝（同 D2 风格）
+            api2 = WorlditorPlayAPI(engine, "pkg_b")
+            engine.attach_play_api("pkg_b", api2)
+            with pytest.raises(WorldError, match="冲突"):
+                api2.register_view("bag", title="背包2")
+            # 清理恢复
+            engine.clear_play_registrations("pkg_a")
+            assert engine.list_views() == []
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
 def test_edit_primitives_via_api(tmp_path):
     """玩法包 API 编辑：spawn/despawn + 建地图 + 模板。"""
 

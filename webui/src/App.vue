@@ -4,25 +4,35 @@
     <AuthPage v-if="!hasToken" />
 
     <template v-else>
+      <!-- 视图宿主（D7/G3）：渲染玩法包注册的视图；无视图时兜底提示 -->
+      <header class="app-header">
+        <span class="brand">worlditor</span>
+        <nav class="view-tabs">
+          <button
+            v-for="v in views"
+            :key="v.key"
+            class="tab"
+            :class="{ on: route === '/view/' + v.key }"
+            @click="goto(v.key)"
+          >
+            <span class="tab-icon">{{ v.icon || "📄" }}</span>
+            <span>{{ v.title }}</span>
+          </button>
+        </nav>
+        <button class="logout-btn" title="退出登录" @click="doLogout">⎋</button>
+      </header>
+
       <main class="app-main">
-        <component :is="currentPage" />
+        <component
+          v-if="currentView && currentView.comp"
+          :is="currentView.comp"
+          :view="currentView.meta"
+        />
+        <div v-else class="empty-hint">
+          <p>这个世界还没有任何视图。</p>
+          <p class="dim">管理员可在管理端口（默认 6289）安装玩法包。</p>
+        </div>
       </main>
-
-      <!-- 底部导航（移动端优先） -->
-      <nav class="tabbar">
-        <button
-          v-for="tab in tabs"
-          :key="tab.path"
-          class="tab"
-          :class="{ on: route === tab.path }"
-          @click="goto(tab.path)"
-        >
-          <span class="tab-icon">{{ tab.icon }}</span>
-          <span>{{ tab.label }}</span>
-        </button>
-      </nav>
-
-      <button class="logout-btn" title="退出登录" @click="doLogout">⎋</button>
 
       <!-- 全局错误提示 -->
       <Transition name="fade">
@@ -34,33 +44,52 @@
 
 <script setup>
 import { computed, onMounted, ref } from "vue";
-import { logout, setToken } from "./api";
+import * as Vue from "vue";
+import { getToken, listViews, logout, setToken } from "./api";
 import { store } from "./store";
 import AuthPage from "./pages/AuthPage.vue";
-import WorldPage from "./pages/WorldPage.vue";
-import BagPage from "./pages/BagPage.vue";
-import MePage from "./pages/MePage.vue";
-import LogPage from "./pages/LogPage.vue";
+import UiBlockRenderer from "./components/UiBlockRenderer.vue";
 
-const route = ref(location.hash.replace(/^#/, "") || "/world");
-const PAGES = {
-  "/world": WorldPage,
-  "/bag": BagPage,
-  "/me": MePage,
-  "/log": LogPage,
-};
-const tabs = [
-  { path: "/world", label: "世界", icon: "🗺" },
-  { path: "/bag", label: "背包", icon: "🎒" },
-  { path: "/me", label: "角色", icon: "🧍" },
-  { path: "/log", label: "日志", icon: "📜" },
-];
+const route = ref(location.hash.replace(/^#/, "") || "");
+const views = ref([]); // {key,title,icon,play_id,provider}
+const loaded = ref({}); // key -> 组件对象（缓存）
 
 const hasToken = computed(() => Boolean(store.token));
-const currentPage = computed(() => PAGES[route.value] || WorldPage);
+const currentView = computed(() => {
+  const key = route.value.startsWith("/view/") ? route.value.slice(6) : "";
+  const meta = views.value.find((v) => v.key === key);
+  if (!meta) return null;
+  return { meta, comp: loaded.value[key] || null };
+});
 
-function goto(path) {
-  location.hash = path;
+async function refreshViews() {
+  try {
+    views.value = (await listViews()).views || [];
+  } catch (e) {
+    store.error = e.message;
+  }
+  // 默认进入第一个视图
+  if (!route.value && views.value.length) {
+    goto(views.value[0].key);
+  }
+}
+
+async function goto(key) {
+  location.hash = "/view/" + key;
+  if (loaded.value[key]) return;
+  const meta = views.value.find((v) => v.key === key);
+  if (!meta) return;
+  try {
+    const res = await fetch(meta.provider.url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const code = await res.text();
+    // 视图组件协议（G3）：(function(Vue, UiBlock) { return { ...组件选项... } })
+    // eslint-disable-next-line no-new-func
+    const factory = new Function("Vue", "UiBlock", code);
+    loaded.value[key] = factory(Vue, UiBlockRenderer);
+  } catch (e) {
+    store.error = "视图加载失败：" + e.message;
+  }
 }
 
 function doLogout() {
@@ -75,9 +104,10 @@ function doLogout() {
 }
 
 onMounted(() => {
-  store.token = localStorage.getItem("worlditor_token") || "";
+  store.token = getToken();
   window.addEventListener("hashchange", () => {
-    route.value = location.hash.replace(/^#/, "") || "/world";
+    route.value = location.hash.replace(/^#/, "") || "";
   });
+  refreshViews();
 });
 </script>
