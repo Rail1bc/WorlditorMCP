@@ -280,6 +280,7 @@ class V4WorldStore:
         self.folders: dict[str, WorldFolder] = {}
         self.map_world: dict[str, str] = {}  # map_id -> world_id
         self.map_folder: dict[str, str | None] = {}  # map_id -> folder_id | None
+        self.world_meta: dict[str, str] = {}  # world_meta 表内存态
 
     # ---------- 生命周期 ----------
 
@@ -456,6 +457,9 @@ class V4WorldStore:
         for row in await cur.fetchall():
             self.map_world[row["map_id"]] = row["world_id"]
             self.map_folder[row["map_id"]] = row["folder_id"]
+        cur = await self._conn.execute("SELECT * FROM world_meta")
+        for row in await cur.fetchall():
+            self.world_meta[row["key"]] = row["value"]
         cur = await self._conn.execute("SELECT * FROM tokens WHERE revoked = 0")
         for row in await cur.fetchall():
             self.tokens[row["token"]] = TokenInfo(
@@ -793,6 +797,22 @@ class V4WorldStore:
         await self._conn.commit()
         self.invite_codes[code]["used"] = used
         return True
+
+    # ---------- 世界元数据（world_meta 表） ----------
+
+    def get_meta(self, key: str, default: str = "") -> str:
+        """读 world_meta（内存态；_load_all 已载入）。"""
+        return self.world_meta.get(key, default)
+
+    async def set_meta(self, key: str, value: str) -> None:
+        """写 world_meta（覆盖）。"""
+        assert self._conn is not None
+        await self._conn.execute(
+            "INSERT OR REPLACE INTO world_meta(key, value) VALUES(?, ?)",
+            (key, value),
+        )
+        await self._conn.commit()
+        self.world_meta[key] = value
 
     # ---------- 世界与组织（D15；调用方在引擎锁内执行） ----------
 
