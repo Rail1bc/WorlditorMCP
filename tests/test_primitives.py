@@ -232,11 +232,13 @@ def test_item_fields(tmp_path):
                 ItemDef(id="sword", name="剑"),
                 fields=[{"name": "atk", "label": "攻击", "type": "int"}],
             )
-            api.add_item_fields("apple", [{"name": "price", "type": "int"}])
+            api.add_item_fields("megaphone", [{"name": "price", "type": "int"}])
             assert engine.store.items["sword"].fields[0]["name"] == "atk"
             # add_item_fields 落内存注册表（flush 后持久化）
             await engine.flush_item_defs()
-            assert "price" in {f.field["name"] for f in engine._item_fields["apple"]}  # noqa: SLF001
+            assert "price" in {
+                f.field["name"] for f in engine._item_fields["megaphone"]
+            }  # noqa: SLF001
             with pytest.raises(WorldError, match="未注册"):
                 api.add_item_fields("nope", [{"name": "x", "type": "int"}])
         finally:

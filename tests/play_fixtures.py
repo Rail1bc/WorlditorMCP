@@ -40,6 +40,20 @@ MEGAPHONE_ITEM = "megaphone"
 FOREST_ROW = 4  # 迷雾森林起始行（row >= 4 视为迷雾区域）
 
 _GOLD = "gold"  # 玩家 attrs 中的金币键（演示 attrs 自管玩法数据）
+_BAG_KEY = "bag"  # play_data 中的背包（D8：持有下沉，演示 kv 自管持有）
+
+
+def _bag(api: WorlditorPlayAPI) -> dict:
+    """读背包：{item_id: count}（演示玩法数据自管持有，D8）。"""
+    raw = api.kv_get(_BAG_KEY, {})
+    return raw if isinstance(raw, dict) else {}
+
+
+async def _bag_add(api: WorlditorPlayAPI, item_id: str, count: int) -> dict:
+    bag = _bag(api)
+    bag[item_id] = bag.get(item_id, 0) + count
+    await api.kv_set(_BAG_KEY, bag)
+    return bag
 
 
 def _load_shop() -> dict:
@@ -133,7 +147,7 @@ async def _buy_apple(
             text=f"钱不够……一个苹果要 {price} 金（你只有 {gold} 金）。"
         )
     await api.set_attrs(req.entity_id, {_GOLD: gold - price})
-    await api.give_item(req.entity_id, APPLE_ITEM, 1)
+    await _bag_add(api, APPLE_ITEM, 1)
     return InteractionResult(
         text=f"「给你，新鲜摘的苹果！」（花费 {price} 金）"
     )
@@ -152,7 +166,7 @@ async def _buy_megaphone(
             text=f"钱不够……一个喇叭要 {price} 金（你只有 {gold} 金）。"
         )
     await api.set_attrs(req.entity_id, {_GOLD: gold - price})
-    await api.give_item(req.entity_id, MEGAPHONE_ITEM, 1)
+    await _bag_add(api, MEGAPHONE_ITEM, 1)
     return InteractionResult(
         text=f"「喇叭拿好，喊一嗓子全镇都能听见！」（花费 {price} 金）"
     )
@@ -186,9 +200,11 @@ async def _open(api: WorlditorPlayAPI, req: InteractionRequest) -> InteractionRe
 async def _eat(api: WorlditorPlayAPI, req: InteractionRequest) -> InteractionResult:
     """吃苹果：物品 use 交互（req.item_id 由 use 流程注入）。"""
     item_id = req.item_id or APPLE_ITEM
-    if api.count_item(req.entity_id, item_id) < 1:
+    bag = _bag(api)
+    if bag.get(item_id, 0) < 1:
         return InteractionResult(text="你身上没有苹果。")
-    await api.take_item(req.entity_id, item_id, 1)
+    bag[item_id] -= 1
+    await api.kv_set(_BAG_KEY, bag)
     return InteractionResult(text="咔嚓——又脆又甜！感觉精力恢复了一些。")
 
 
@@ -212,9 +228,9 @@ async def _on_entity_enter(
 
 
 async def _on_item_used(
-    api: WorlditorPlayAPI, entity, item_id: str, count: int, args: dict, result
+    api: WorlditorPlayAPI, entity, item_id: str, args: dict, result
 ) -> None:
-    """演示事件响应：吃苹果恢复精力（attrs 玩法数据自管）。"""
+    """演示事件响应：吃苹果恢复精力（attrs 玩法数据自管；D8：无 count）。"""
     if item_id == APPLE_ITEM and entity is not None:
         energy = api.get_attrs(entity.id).get("energy", 0) + 1
         await api.set_attrs(entity.id, {"energy": energy})

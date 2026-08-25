@@ -5,8 +5,8 @@ v4 引入的核心概念（v3 的 Location / WorldMap / WorldTemplate 沿用不�
 - **实体**（B12）：世界唯一居民概念。玩家（kind="player"）、agent（kind="agent"）
   是内置身份化实体；其余 kind 由玩法包注册（merchant / sign / door ...），是
   地图编辑放置的布景与内容实体。所有实体统一 ``Entity`` 模型与 ``entities`` 表。
-- **物品**：定义（ItemDef）与持有（inventories）分离；持有条目可带个体差异
-  （attrs_json：强化等级、耐久等，C1）。
+- **物品**：定义（ItemDef）为内核注册表；持有（背包）全下沉玩法包（D8）——
+  内核无 inventories 表，持有关系由玩法包自管（play_data / 自建模型）。
 - **交互协议**：InteractionRequest / UiBlock / InteractionResult——
   玩法包只描述界面（UiBlock），内核按 schema 渲染；世界变更以命令式
   原语调用表达（D12：无 effects 清单）。
@@ -207,18 +207,6 @@ class ItemDef:
         )
 
 
-@dataclass
-class InventoryEntry:
-    """实体背包中的一行：物品 + 数量 + 个体差异（C1）。"""
-
-    item_id: str
-    count: int
-    attrs: dict = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"item_id": self.item_id, "count": self.count, "attrs": self.attrs}
-
-
 # ---------- 实体 kind 注册（玩法包扩展点） ----------
 
 
@@ -345,9 +333,8 @@ class ShortCircuit:
 #   on_tick:           (api, dt)                          dt = 距上次执行秒数
 #   on_entity_move:    (api, entity, from_pos, to_pos)
 #   on_entity_enter:   (api, entity, map_id, row, col)
-#   on_say:            (api, entity, text, scope)
 #   on_interact:       (api, request, result)
-#   on_item_used:      (api, entity, item_id, count, args, result)
+#   on_item_used:      (api, entity, item_id, args, result)   # D8：无 count
 #   on_entity_removed: (api, entity)
 #   on_entity_changed: (api, entity, changed)
 #   on_world_edited:   (api, what)
@@ -441,32 +428,16 @@ def item_from_row(row: Any) -> ItemDef | None:
     )
 
 
-def _normalize_count(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value
-
-
-def check_count(value: Any, what: str = "count") -> int:
-    """校验正整数计数；非法抛 ValueError（供引擎转 WorldError）。"""
-    count = _normalize_count(value)
-    if count is None or count <= 0:
-        raise ValueError(f"{what}必须是正整数")
-    return count
-
-
 __all__ = [
     "Entity",
     "EntityKindSpec",
     "InteractionRequest",
     "InteractionResult",
     "ShortCircuit",
-    "InventoryEntry",
     "ItemDef",
     "MenuButton",
     "UiBlock",
     "WORLD_EVENTS",
-    "check_count",
     "entity_db_row",
     "entity_from_row",
     "item_db_row",

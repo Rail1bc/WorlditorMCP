@@ -80,12 +80,12 @@ def test_demo_play_loaded(tmp_path):
         # on_tick 带间隔订阅
         tick_bindings = engine._event_bindings["on_tick"]
         assert len(tick_bindings) == 1 and tick_bindings[0].interval == 5
-        # 物品落库（flush 后持久化）
+        # 物品落库（flush 后持久化；喇叭 = 内核定义 D13，苹果归 items 包）
         await engine.terminate()
         engine2 = V4WorldEngine(V4WorldStore(db_path))
         await engine2.initialize()
         try:
-            assert "apple" in engine2.store.items
+            assert "megaphone" in engine2.store.items
         finally:
             await engine2.terminate()
 
@@ -120,25 +120,31 @@ def test_demo_full_interaction_chain(tmp_path):
         # trade → list
         result = await engine.interact(player.id, merchant.id, "trade")
         assert result.ui is not None and result.ui.kind == "list"
-        # buy_apple：effects 结算（set_attrs 扣金 + give_item 苹果）
+        # buy_apple：命令式结算（set_attrs 扣金 + kv 背包给苹果，D8 持有下沉）
         result = await engine.interact(player.id, merchant.id, "buy_apple")
-        assert engine.count_item(player.id, "apple") == 1
+        assert engine.kv_get("worlditor_play_demo", "bag") == {"apple": 1}
         assert engine.get_attrs(player.id)["gold"] == 15
         # 钱不够
         await engine.set_attrs(player.id, {"gold": 1})
         result = await engine.interact(player.id, merchant.id, "buy_apple")
         assert "钱不够" in result.text
-        assert engine.count_item(player.id, "apple") == 1
+        assert engine.kv_get("worlditor_play_demo", "bag") == {"apple": 1}
         # buy_megaphone：命令式 API
         await engine.set_attrs(player.id, {"gold": 20})
         result = await engine.interact(player.id, merchant.id, "buy_megaphone")
-        assert engine.count_item(player.id, "megaphone") == 1
+        assert engine.kv_get("worlditor_play_demo", "bag") == {
+            "apple": 1,
+            "megaphone": 1,
+        }
         assert engine.get_attrs(player.id)["gold"] == 10
         # eat：use 交互 + on_item_used 回血（energy +1）
-        await engine.give_item(player.id, "apple", 1)
+        await engine.kv_set("worlditor_play_demo", "bag", {"apple": 2, "megaphone": 1})
         result = await engine.interact(player.id, player.id, "eat", item_id="apple")
         assert "咔嚓" in result.text
-        assert engine.count_item(player.id, "apple") == 1
+        assert engine.kv_get("worlditor_play_demo", "bag") == {
+            "apple": 1,
+            "megaphone": 1,
+        }
         assert engine.get_attrs(player.id).get("energy") == 1
         # read：kv 读写（namespace 隔离）
         sign = [e for e in engine.list_entities() if e.kind == "sign"][0]

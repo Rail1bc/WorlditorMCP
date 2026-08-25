@@ -3,7 +3,7 @@
 WebUI 与远程 MCP 客户端的**单一连接源**：
 
 - ``/world/mcp``：MCP streamable HTTP（唯一动作通道，B10）
-- ``/state`` / ``/scene``（含实体可用动作）/ ``/bag``：只读快照
+- ``/state`` / ``/scene``（含实体可用动作）：只读快照
 - ``/events``：SSE 事件流（事件总线序列化出口，B11）
 - ``/auth/*``：身份注册 / 登录 / agent 注册 / read-token / 注销 / 改密（B13）
 - ``/plays/<id>/web/*``：玩法包 web 静态资源（B9）
@@ -243,22 +243,6 @@ async def _scene(request: Request) -> Response:
     )
 
 
-async def _bag(request: Request) -> Response:
-    info = _identity_of(request.scope)
-    _require_tier(info, ("play", "admin"))
-    engine = request.app.state.world_engine
-    entity_id = request.query_params.get("entity_id") or info.entity_id
-    if not entity_id:
-        raise HTTPException(400, "缺少 entity_id")
-    if entity_id != info.entity_id and info.tier != "admin":
-        raise HTTPException(403, "只能查看自己的背包")
-    if engine.get_entity(entity_id) is None:
-        raise HTTPException(404, f"实体不存在：{entity_id}")
-    return JSONResponse(
-        {"entity_id": entity_id, "items": engine.list_inventory(entity_id)}
-    )
-
-
 async def _events(request: Request) -> Response:
     _require_tier(_identity_of(request.scope), ("play", "admin"))
     engine = request.app.state.world_engine
@@ -418,7 +402,6 @@ def build_http_app(
     routes: list = list(mcp_starlette.routes) + [
         Route("/state", _state),
         Route("/scene", _scene),
-        Route("/bag", _bag),
         Route("/events", _events),
         Route("/views", _views),
         Route("/auth/register", _register, methods=["POST"]),

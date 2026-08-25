@@ -30,7 +30,7 @@ async def _engine(tmp_path: Path) -> V4WorldEngine:
 
 
 def test_delete_map_cascade(tmp_path):
-    """delete_map：级联删地块/实体/背包/归属；图上玩家在场拒绝。"""
+    """delete_map：级联删地块/实体/归属；图上玩家在场拒绝。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -39,7 +39,6 @@ def test_delete_map_cascade(tmp_path):
             await engine.create_location("raid1", 0, 0, "起点")
             await engine.create_location("raid1", 1, 0, "终点")
             npc = await engine.place_entity("wolf", "raid1", 0, 0, name="狼")
-            await engine.give_item(npc.id, "apple", 3)
             await engine.assign_map("raid1", "default")
             # 图上玩家在场 → 拒绝
             player = await engine.place_entity("player", "raid1", 0, 0, name="小明")

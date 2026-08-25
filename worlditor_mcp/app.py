@@ -54,7 +54,7 @@ class WorlditorService:
         self.play_loader = PlayLoader(
             self.engine,
             plays_dir=settings.plays_dir,
-            demo_dir=_builtin_plays_dir(),
+            builtin_dir=_builtin_plays_dir(),
             worlditor_version=__version__,
         )
         self.mcp_server: Any | None = None  # start() 内玩法包加载后构建（动态工具）

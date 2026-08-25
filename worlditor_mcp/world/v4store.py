@@ -1,7 +1,7 @@
 """v4 持久化层（aiosqlite，真异步；与 v3 WorldStore 同库共存）。
 
 v4 无迁移（设计决策）：v3 表（maps/locations/templates/world_meta）结构沿用、
-数据共享；v4 新增五表（entities/items/inventories/play_data/world_log）在
+数据共享；v4 新增四表（entities/items/play_data/world_log）在
 **同一个 world.db 文件**中建表，与 v3 引擎互不干扰（v3 引擎无视 v4 表）。
 
 启动时全量载入内存（读路径快、免锁），写操作由调用方（V4WorldEngine）在
@@ -11,13 +11,13 @@ v4 无迁移（设计决策）：v3 表（maps/locations/templates/world_meta）
 - entities(id PK, map_id, row, col, kind, name, desc, user_id,
   attrs_json, state_json, last_active_ts) + idx_entities_pos
 - items(id PK, name, desc, icon, stackable, use_action, attrs_json)
-- inventories(entity_id, item_id, count, attrs_json, PK(entity_id,item_id))
 - play_data(namespace, key, value_json, PK(namespace,key))
 - world_log(id AUTOINCREMENT, ts, entity_id, kind, data_json) + idx_world_log_entity
   （容量上限 5000 条，写入时清理最旧，B3）
 
 播种（幂等）：maps 空 → v3 种子世界（41 地块）；entities 空 → v4 种子实体
-（商贩·阿福 / 告示牌 / 木门）；items 空 → v4 种子物品（苹果 / 喇叭）。
+（商贩·阿福 / 告示牌 / 木门）；items 空 → v4 种子物品（喇叭，D1/D13：内核仅
+注册喇叭定义，苹果等其余物品由玩法包注册，D8 持有下沉无 inventories 表）。
 """
 
 from __future__ import annotations
@@ -41,7 +41,6 @@ from .v3model import (
 )
 from .v4model import (
     Entity,
-    InventoryEntry,
     ItemDef,
     World,
     WorldFolder,
@@ -116,15 +115,8 @@ def _seed_entities() -> list[Entity]:
 
 
 def _seed_items() -> list[ItemDef]:
-    """v4 种子物品：苹果（use_action 由 demo_play 注册）与喇叭（内置广播道具）。"""
+    """v4 种子物品：仅内核喇叭定义（D1：广播道具，持有归 social 包）。"""
     return [
-        ItemDef(
-            id="apple",
-            name="苹果",
-            desc="红彤彤的苹果，咬一口又脆又甜。",
-            stackable=True,
-            use_action="eat",
-        ),
         ItemDef(
             id=MEGAPHONE_ITEM_ID,
             name="喇叭",
@@ -160,13 +152,6 @@ CREATE TABLE IF NOT EXISTS items (
     stackable INTEGER NOT NULL DEFAULT 1,
     use_action TEXT,
     attrs_json TEXT NOT NULL DEFAULT '{}'
-);
-CREATE TABLE IF NOT EXISTS inventories (
-    entity_id TEXT NOT NULL,
-    item_id TEXT NOT NULL,
-    count INTEGER NOT NULL DEFAULT 1,
-    attrs_json TEXT NOT NULL DEFAULT '{}',
-    PRIMARY KEY (entity_id, item_id)
 );
 CREATE TABLE IF NOT EXISTS play_data (
     namespace TEXT NOT NULL,
@@ -271,7 +256,6 @@ class V4WorldStore:
         self.templates: dict[str, WorldTemplate] = {}
         self.entities: dict[str, Entity] = {}
         self.items: dict[str, ItemDef] = {}
-        self.inventories: dict[tuple[str, str], InventoryEntry] = {}
         self.play_data: dict[tuple[str, str], Any] = {}
         self.accounts: dict[str, Account] = {}
         self.tokens: dict[str, TokenInfo] = {}
@@ -408,13 +392,6 @@ class V4WorldStore:
             item = item_from_row(row)
             if item is not None:
                 self.items[item.id] = item
-        cur = await self._conn.execute("SELECT * FROM inventories")
-        for row in await cur.fetchall():
-            self.inventories[(row["entity_id"], row["item_id"])] = InventoryEntry(
-                item_id=row["item_id"],
-                count=row["count"],
-                attrs=json.loads(row["attrs_json"] or "{}"),
-            )
         cur = await self._conn.execute("SELECT * FROM play_data")
         for row in await cur.fetchall():
             try:
@@ -599,17 +576,11 @@ class V4WorldStore:
         await self._conn.commit()
 
     async def delete_entity(self, entity_id: str) -> None:
-        """删除实体并级联清理其背包。"""
+        """删除实体。"""
         assert self._conn is not None
         await self._conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
-        await self._conn.execute(
-            "DELETE FROM inventories WHERE entity_id = ?", (entity_id,)
-        )
         await self._conn.commit()
         self.entities.pop(entity_id, None)
-        self.inventories = {
-            k: v for k, v in self.inventories.items() if k[0] != entity_id
-        }
 
     # ---------- 物品 ----------
 
@@ -630,47 +601,11 @@ class V4WorldStore:
         await self._conn.commit()
 
     async def delete_item(self, item_id: str) -> None:
-        """删除物品定义及其所有持有记录。"""
+        """删除物品定义。"""
         assert self._conn is not None
         await self._conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
-        await self._conn.execute(
-            "DELETE FROM inventories WHERE item_id = ?", (item_id,)
-        )
         await self._conn.commit()
         self.items.pop(item_id, None)
-        self.inventories = {
-            k: v for k, v in self.inventories.items() if k[1] != item_id
-        }
-
-    # ---------- 背包 ----------
-
-    async def set_inventory(
-        self, entity_id: str, item_id: str, count: int, attrs: dict | None = None
-    ) -> None:
-        """整体替换一条持有记录；count<=0 删除该行。"""
-        assert self._conn is not None
-        key = (entity_id, item_id)
-        if count <= 0:
-            await self._conn.execute(
-                "DELETE FROM inventories WHERE entity_id = ? AND item_id = ?",
-                (entity_id, item_id),
-            )
-            self.inventories.pop(key, None)
-        else:
-            await self._conn.execute(
-                "INSERT OR REPLACE INTO inventories(entity_id, item_id, count, attrs_json) "
-                "VALUES(?, ?, ?, ?)",
-                (
-                    entity_id,
-                    item_id,
-                    count,
-                    json.dumps(attrs or {}, ensure_ascii=False),
-                ),
-            )
-            self.inventories[key] = InventoryEntry(
-                item_id=item_id, count=count, attrs=attrs or {}
-            )
-        await self._conn.commit()
 
     # ---------- 玩法数据 KV（namespace 隔离） ----------
 

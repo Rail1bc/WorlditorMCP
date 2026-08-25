@@ -58,12 +58,12 @@ class PlayLoader:
         engine: V4WorldEngine,
         *,
         plays_dir: Path,
-        demo_dir: Path | None = None,
+        builtin_dir: Path | None = None,
         worlditor_version: str = "0.3.0",
     ) -> None:
         self.engine = engine
         self.plays_dir = Path(plays_dir)
-        self.demo_dir = Path(demo_dir) if demo_dir else None
+        self.builtin_dir = Path(builtin_dir) if builtin_dir else None
         self.worlditor_version = worlditor_version
         self.plays: dict[str, PlayInfo] = {}
         self._disabled: set[str] = set()  # 持久化的禁用集合
@@ -74,8 +74,8 @@ class PlayLoader:
     def discover(self) -> list[tuple[Path, bool]]:
         """候选玩法包目录：(path, builtin)。builtin = 服务内置（只读）。"""
         dirs: list[tuple[Path, bool]] = []
-        if self.demo_dir is not None and self.demo_dir.is_dir():
-            for p in sorted(self.demo_dir.iterdir()):
+        if self.builtin_dir is not None and self.builtin_dir.is_dir():
+            for p in sorted(self.builtin_dir.iterdir()):
                 if p.is_dir() and p.name.startswith("worlditor_play_"):
                     dirs.append((p, True))
         if self.plays_dir.is_dir():

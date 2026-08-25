@@ -139,34 +139,15 @@ def test_snapshot_and_auth(tmp_path):
         )
         peers = resp.json()["peers"]
         assert all("actions" in p for p in peers)
-        # bag：read 档 403
-        assert (await client.get("/bag", headers=h)).status_code == 403
 
     _run(_scenario(tmp_path, fn))
 
 
-def test_bag_and_events_auth(tmp_path):
-    """bag（play 自己 / admin 任意）+ events（play 档 SSE）。"""
+def test_events_auth(tmp_path):
+    """events（play 档 SSE）：play 可订阅；read 档 403。"""
 
     async def fn(client, identity, engine, loader, app):
         info = await identity.register_human("小明", "pass123")
-        await engine.give_item(info.entity_id, "apple", 2)
-        h = _auth(info.token)
-        resp = await client.get("/bag", headers=h)
-        items = resp.json()["items"]
-        assert items[0]["item_id"] == "apple" and items[0]["count"] == 2
-        # 看别人 → 403
-        other = await identity.register_human("小红", "pass123")
-        resp = await client.get(
-            "/bag", params={"entity_id": other.entity_id}, headers=h
-        )
-        assert resp.status_code == 403
-        # admin 看任意
-        admin = await identity.register_human("管理员", "pass123", admin_key="sekret")
-        resp = await client.get(
-            "/bag", params={"entity_id": other.entity_id}, headers=_auth(admin.token)
-        )
-        assert resp.json()["entity_id"] == other.entity_id
         # events：play 档 → StreamingResponse（直接调 handler 验证类型，
         # 避免 ASGITransport 下流式挂起）；read 档 403（httpx 普通请求）
         from starlette.requests import Request

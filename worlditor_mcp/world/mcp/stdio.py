@@ -60,7 +60,7 @@ async def _amain(argv: list[str]) -> None:
             plays_dir=Path(args.plays_dir)
             if args.plays_dir
             else Path(args.db).parent / "plays",
-            demo_dir=_PLUGIN_ROOT / "builtin_plays",
+            builtin_dir=_PLUGIN_ROOT / "builtin_plays",
         )
         await loader.load_all(None)
         mcp = build_mcp_server(engine, fixed_identity=info)

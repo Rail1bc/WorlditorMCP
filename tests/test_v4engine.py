@@ -73,14 +73,14 @@ async def _scenario(tmp_path: Path, fn, *, clock=None, rand=None):
 
 
 def test_seed_world(tmp_path):
-    """种子世界 v4：41 地块 + 3 个种子实体 + 2 个种子物品。"""
+    """种子世界 v4：41 地块 + 3 个种子实体 + 1 个种子物品（喇叭，D13）。"""
 
     async def fn(engine: V4WorldEngine, clock=None):
         assert len(engine.list_locations()) == SEED_LOCATION_COUNT
         assert len(engine.list_entities()) == SEED_ENTITY_COUNT
-        assert len(engine.store.items) == 2
+        assert len(engine.store.items) == 1
         assert "megaphone" in engine.store.items
-        assert "apple" in engine.store.items
+        assert "apple" not in engine.store.items  # 苹果归 items 包注册（D13）
         kinds = {e.kind for e in engine.list_entities()}
         assert kinds == {"merchant", "sign", "door"}
         plaza = engine.list_entities(row=0, col=0)
@@ -100,7 +100,7 @@ def test_seed_is_idempotent(tmp_path):
         await engine2.initialize()
         try:
             assert len(engine2.list_entities()) == SEED_ENTITY_COUNT
-            assert len(engine2.store.items) == 2
+            assert len(engine2.store.items) == 1
         finally:
             await engine2.terminate()
 
@@ -129,7 +129,7 @@ def test_place_entity(tmp_path):
 
 
 def test_remove_entity(tmp_path):
-    """移除实体：级联清理背包；on_entity_removed 事件。"""
+    """移除实体：实体消失 + on_entity_removed 事件。"""
 
     async def fn(engine: V4WorldEngine, clock=None):
         removed = []
@@ -137,46 +137,11 @@ def test_remove_entity(tmp_path):
             "on_entity_removed", lambda api, e: removed.append(e.id)
         )
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
-        await engine.give_item(player.id, "apple", 3)
-        assert engine.count_item(player.id, "apple") == 3
         await engine.remove_entity(player.id)
         assert engine.get_entity(player.id) is None
-        assert engine.count_item(player.id, "apple") == 0
         assert removed == [player.id]
         with pytest.raises(WorldError, match="实体不存在"):
             await engine.remove_entity(player.id)
-
-    _run(_scenario(tmp_path, fn))
-
-
-# ---------- 物品原语 ----------
-
-
-def test_inventory_primitives(tmp_path):
-    """give/take/count/list：数量累计、不足不扣、个体 attrs。"""
-
-    async def fn(engine: V4WorldEngine, clock=None):
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
-        assert await engine.give_item(player.id, "apple", 2) == 2
-        assert await engine.give_item(player.id, "apple", 3) == 5
-        assert engine.count_item(player.id, "apple") == 5
-        assert await engine.take_item(player.id, "apple", 2) is True
-        assert engine.count_item(player.id, "apple") == 3
-        assert await engine.take_item(player.id, "apple", 99) is False
-        assert engine.count_item(player.id, "apple") == 3
-        # 个体差异（C1）
-        await engine.give_item(player.id, "apple", 1, attrs={"shine": 9})
-        inv = engine.list_inventory(player.id)
-        apple = [i for i in inv if i["item_id"] == "apple"][0]
-        assert apple["count"] == 4
-        assert apple["def"]["name"] == "苹果"
-        # 非法
-        with pytest.raises(WorldError, match="物品不存在"):
-            await engine.give_item(player.id, "nope", 1)
-        with pytest.raises(WorldError, match="正整数"):
-            await engine.give_item(player.id, "apple", 0)
-        with pytest.raises(WorldError, match="实体不存在"):
-            await engine.give_item("missing", "apple", 1)
 
     _run(_scenario(tmp_path, fn))
 
@@ -290,9 +255,9 @@ async def _talk_handler(api, req: InteractionRequest) -> InteractionResult:
 
 
 async def _trade_handler(api, req: InteractionRequest) -> InteractionResult:
-    # D12：命令式——handler 直接调原语（api.set_attrs / api.give_item）
+    # D12：命令式——handler 直接调原语（api.set_attrs / api.kv_set）
     await api.set_attrs(req.entity_id, {"gold": -5})
-    await api.give_item(req.entity_id, "apple", 1)
+    await api.kv_set("bag", {"apple": 1})
     return InteractionResult(text="货单：苹果 5 金。")
 
 
@@ -324,7 +289,7 @@ def test_interact_flow_command_mode(tmp_path):
         assert result.text == "你好，我是商贩·阿福！"
         # 命令式原语调用即时生效（无 effects 结算）
         result2 = await engine.interact(player.id, merchant.id, "trade")
-        assert engine.count_item(player.id, "apple") == 1
+        assert engine.kv_get("test_play", "bag") == {"apple": 1}
         assert engine.get_attrs(player.id) == {"gold": -5}
         assert result2.text == "货单：苹果 5 金。"
         # 未声明且未注册的动作
@@ -350,26 +315,28 @@ def test_interact_use_item(tmp_path):
         used = []
         engine.register_world_event(
             "on_item_used",
-            lambda api, e, iid, count, args, result: used.append((e.id, iid, count)),
+            lambda api, e, iid, args, result: used.append((e.id, iid)),
         )
         engine.register_interaction(
             "eat", _eat_handler, label="吃", play_id="test_play"
         )
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
-        await engine.give_item(player.id, "apple", 2)
+        await engine.kv_set("test_play", "bag", {"apple": 2})
         result = await engine.interact(player.id, player.id, "eat", item_id="apple")
         assert "好吃" in result.text
-        assert engine.count_item(player.id, "apple") == 1
-        # count = on_item_used 触发时的持有数（handler 命令式扣减已生效）
-        assert used[-1] == (player.id, "apple", 1)
+        assert engine.kv_get("test_play", "bag") == {"apple": 1}
+        # on_item_used 事件（D8：无 count，持有数由玩法包自管）
+        assert used[-1] == (player.id, "apple")
 
     _run(_scenario(tmp_path, fn))
 
 
 async def _eat_handler(api, req: InteractionRequest) -> InteractionResult:
-    if api.count_item(req.entity_id, req.item_id) < 1:
+    bag = api.kv_get("bag", {})
+    if not isinstance(bag, dict) or bag.get(req.item_id, 0) < 1:
         return InteractionResult(text="没有可吃的。")
-    await api.take_item(req.entity_id, req.item_id, 1)
+    bag[req.item_id] -= 1
+    await api.kv_set("bag", bag)
     return InteractionResult(text="咔嚓，好吃！")
 
 

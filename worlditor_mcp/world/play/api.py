@@ -155,19 +155,8 @@ class WorlditorPlayAPI:
 
     # ---------- 引擎动作（走原语，锁内执行；均按 entity_id） ----------
 
-    async def give_item(
-        self, entity_id: str, item_id: str, count: int = 1, attrs: dict | None = None
-    ) -> int:
-        return await self._engine.give_item(entity_id, item_id, count, attrs)
-
-    async def take_item(self, entity_id: str, item_id: str, count: int = 1) -> bool:
-        return await self._engine.take_item(entity_id, item_id, count)
-
-    def count_item(self, entity_id: str, item_id: str) -> int:
-        return self._engine.count_item(entity_id, item_id)
-
-    def list_inventory(self, entity_id: str) -> list[dict]:
-        return self._engine.list_inventory(entity_id)
+    # D8：持有（背包）全下沉玩法包——API 无 give/take/count/list_inventory，
+    # 背包模型由玩法包自管（play_data / 自建模型），内核仅持有物品定义。
 
     async def move_entity(
         self, entity_id: str, map_id: str, row: int, col: int

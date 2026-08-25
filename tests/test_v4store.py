@@ -34,33 +34,15 @@ def test_seed_tables(tmp_path):
             assert len(store.loc_by_pos) == 41
             assert len(store.maps) == 1
             assert len(store.entities) == 3
-            assert len(store.items) == 2
+            assert len(store.items) == 1
             assert "megaphone" in store.items
-            assert "apple" in store.items
+            assert "apple" not in store.items
             # 索引生效（不报错即可）
             cur = await store._conn.execute(
                 "SELECT COUNT(*) AS n FROM entities WHERE map_id=? AND row=? AND col=?",
                 ("default", 0, 0),
             )
             assert (await cur.fetchone())["n"] == 1
-        finally:
-            await store.close()
-
-    _run(fn())
-
-
-def test_inventory_crud(tmp_path):
-    """背包行：增/改/删（count<=0 删除）。"""
-
-    async def fn():
-        store = await _make_store(tmp_path / "world.db")
-        try:
-            await store.set_inventory("e1", "apple", 3)
-            assert store.inventories[("e1", "apple")].count == 3
-            await store.set_inventory("e1", "apple", 5, attrs={"shine": 1})
-            assert store.inventories[("e1", "apple")].attrs == {"shine": 1}
-            await store.set_inventory("e1", "apple", 0)
-            assert ("e1", "apple") not in store.inventories
         finally:
             await store.close()
 
@@ -129,35 +111,16 @@ def test_coexist_with_v3_store(tmp_path):
     _run(fn())
 
 
-def test_delete_entity_cascades_inventory(tmp_path):
-    """删除实体级联清理背包行。"""
-
-    async def fn():
-        store = await _make_store(tmp_path / "world.db")
-        try:
-            await store.set_inventory("e1", "apple", 2)
-            await store.set_inventory("e2", "apple", 1)
-            await store.delete_entity("e1")
-            assert ("e1", "apple") not in store.inventories
-            assert ("e2", "apple") in store.inventories
-        finally:
-            await store.close()
-
-    _run(fn())
-
-
 def test_item_crud(tmp_path):
-    """物品定义：save/delete（删除级联清理持有）。"""
+    """物品定义：save/delete。"""
 
     async def fn():
         store = await _make_store(tmp_path / "world.db")
         try:
             await store.save_item(ItemDef(id="sword_01", name="木剑"))
             assert "sword_01" in store.items
-            await store.set_inventory("e1", "sword_01", 1)
             await store.delete_item("sword_01")
             assert "sword_01" not in store.items
-            assert ("e1", "sword_01") not in store.inventories
         finally:
             await store.close()
 

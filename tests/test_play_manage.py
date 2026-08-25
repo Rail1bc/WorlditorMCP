@@ -142,9 +142,9 @@ def test_uninstall_security(tmp_path):
 
     async def fn():
         demo = install_demo_play(tmp_path / "plays")
-        # 模拟内置包（demo_dir）
+        # 模拟内置包（builtin_dir）
         engine, loader = await _make(tmp_path)
-        loader.demo_dir = tmp_path / "builtin"
+        loader.builtin_dir = tmp_path / "builtin"
         (tmp_path / "builtin").mkdir(exist_ok=True)
         _write_play(
             tmp_path / "builtin",

@@ -3,12 +3,11 @@
 与 v3 WorldEngine 的差异：
 - **实体统一模型**（B12）：玩家/agent/布景实体都是 ``Entity``（entities 表），
   v3 的"玩家"概念被身份化实体（kind=player/agent）取代。
-- **物品原语**：give/take/count/list（定义与持有分离，持有关系内核保证）。
-- **交互**：declarative effects 由内核结算（A1），handler 由玩法包注册。
+- **物品**：定义（ItemDef）为内核注册表；持有下沉玩法包（D8，无 inventories）。
+- **交互**：handler 命令式调用内核原语（D12，无 effects 清单）。
 - **事件总线**：单一事件源（9 事件），玩法包订阅 + world_log 历史；
   SSE 是 v4.1 的序列化出口。
 - **注册表**：kind / interaction / event / ui 组件与钩子，玩法包扩展入口。
-- **广播**（B2）：say(scope=world) 消耗内置喇叭 + 每人 30s 冷却（管理员豁免）。
 - **on_tick 调度**（A3）：单循环按 1s 粒度检查，各 handler 各自间隔，
   串行执行 + 异常隔离。
 
@@ -54,7 +53,6 @@ from .v4model import (
     ShortCircuit,
     World,
     WorldFolder,
-    check_count,
 )
 from .v4store import V4WorldStore
 
@@ -370,12 +368,6 @@ class V4WorldEngine:
         if entity is None:
             raise WorldError(f"实体不存在：{entity_id}")
         return entity
-
-    def _check_count(self, value: object) -> int:
-        try:
-            return check_count(value)
-        except ValueError as e:
-            raise WorldError(str(e)) from None
 
     # ---------- 玩法包注册（WorlditorPlayAPI 转发至此） ----------
 
@@ -1092,10 +1084,10 @@ class V4WorldEngine:
             }
             payload["result"] = result.to_dict()
         elif event == "on_item_used":
+            # D8：内核无背包——count 由玩法包自管，事件不带持有数
             payload["item_id"] = args[1]
-            payload["count"] = args[2]
             payload["result"] = (
-                args[4].to_dict() if isinstance(args[4], InteractionResult) else None
+                args[3].to_dict() if isinstance(args[3], InteractionResult) else None
             )
         elif event == "on_entity_changed":
             payload["changed"] = args[1]
@@ -1351,79 +1343,8 @@ class V4WorldEngine:
 
     # ---------- 物品原语 ----------
 
-    async def give_item(
-        self, entity_id: str, item_id: str, count: int = 1, attrs: dict | None = None
-    ) -> int:
-        """给实体物品；返回持有总数。
-
-        Raises:
-            WorldError: 实体/物品不存在、count 非法。
-        """
-        async with self._lock:
-            entity = self._require_entity(entity_id)
-            if item_id not in self.store.items:
-                raise WorldError(f"物品不存在：{item_id}")
-            count = self._check_count(count)
-            key = (entity_id, item_id)
-            current = self.store.inventories.get(key)
-            new_count = (current.count if current else 0) + count
-            merged = current.attrs if current and attrs is None else dict(attrs or {})
-            await self.store.set_inventory(entity_id, item_id, new_count, merged)
-            await self._emit(
-                "on_entity_changed",
-                entity,
-                {"inventory": {"item_id": item_id, "delta": count, "count": new_count}},
-            )
-            return new_count
-
-    async def take_item(self, entity_id: str, item_id: str, count: int = 1) -> bool:
-        """扣减实体物品；数量不足返回 False（不部分扣减）。
-
-        Raises:
-            WorldError: 实体不存在、count 非法。
-        """
-        async with self._lock:
-            entity = self._require_entity(entity_id)
-            count = self._check_count(count)
-            key = (entity_id, item_id)
-            current = self.store.inventories.get(key)
-            if current is None or current.count < count:
-                return False
-            new_count = current.count - count
-            await self.store.set_inventory(entity_id, item_id, new_count, current.attrs)
-            await self._emit(
-                "on_entity_changed",
-                entity,
-                {
-                    "inventory": {
-                        "item_id": item_id,
-                        "delta": -count,
-                        "count": new_count,
-                    }
-                },
-            )
-            return True
-
-    def count_item(self, entity_id: str, item_id: str) -> int:
-        entry = self.store.inventories.get((entity_id, item_id))
-        return entry.count if entry else 0
-
-    def list_inventory(self, entity_id: str) -> list[dict]:
-        """实体背包：{item_id, def, count, attrs}；物品定义已删则 def 为 None。"""
-        out = []
-        for key, entry in self.store.inventories.items():
-            if key[0] != entity_id:
-                continue
-            item = self.store.items.get(entry.item_id)
-            out.append(
-                {
-                    "item_id": entry.item_id,
-                    "def": item.to_dict() if item else None,
-                    "count": entry.count,
-                    "attrs": entry.attrs,
-                }
-            )
-        return out
+    # D8：持有（背包）全下沉玩法包——内核无 give/take/count/inventories。
+    # 物品定义注册见 register_item_def（定义 = 内核注册表，玩法包可追加）。
 
     # ---------- 实体原语 ----------
 
@@ -1784,10 +1705,7 @@ class V4WorldEngine:
                 raise WorldError("交互返回结果格式错误")
             await self._emit("on_interact", req, result)
             if item_id is not None:
-                count = self.count_item(entity_id, item_id)
-                await self._emit(
-                    "on_item_used", entity, item_id, count, req.args, result
-                )
+                await self._emit("on_item_used", entity, item_id, req.args, result)
             return result
 
     def available_actions(self, target_id: str) -> list[str]:

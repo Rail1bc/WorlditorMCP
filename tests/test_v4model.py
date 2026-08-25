@@ -4,15 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from worlditor_mcp.world.v4model import (  # noqa: E402
     Entity,
     InteractionResult,
     ItemDef,
-    check_count,
     entity_db_row,
     entity_from_row,
     item_db_row,
@@ -138,16 +135,3 @@ def test_result_parse():
     assert result.to_dict() == {"text": "hi", "ui": None}
     assert InteractionResult.from_dict(None) is None
     assert InteractionResult.from_dict({"text": 123}).text == ""
-
-
-def test_check_count():
-    assert check_count(1) == 1
-    assert check_count(100) == 100
-    with pytest.raises(ValueError):
-        check_count(0)
-    with pytest.raises(ValueError):
-        check_count(-1)
-    with pytest.raises(ValueError):
-        check_count(True)
-    with pytest.raises(ValueError):
-        check_count(1.5)
