@@ -351,6 +351,13 @@ async def _change_password(request: Request) -> Response:
     return JSONResponse({"ok": True})
 
 
+async def _views(request: Request) -> Response:
+    """视图列表（G3：WebUI 路由初始化 / 管理页展示共用）。"""
+    _require_tier(_identity_of(request.scope), ("read", "play", "admin"))
+    engine = request.app.state.world_engine
+    return JSONResponse({"views": engine.list_views()})
+
+
 async def _play_web(request: Request) -> Response:
     _require_tier(_identity_of(request.scope), ("read", "play", "admin"))
     loader = request.app.state.world_loader
@@ -397,6 +404,7 @@ def build_http_app(
         Route("/scene", _scene),
         Route("/bag", _bag),
         Route("/events", _events),
+        Route("/views", _views),
         Route("/auth/register", _register, methods=["POST"]),
         Route("/auth/login", _login, methods=["POST"]),
         Route("/auth/agent-register", _agent_register, methods=["POST"]),

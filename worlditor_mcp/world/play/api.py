@@ -237,6 +237,22 @@ class WorlditorPlayAPI:
 
         return _caller_entity.get()
 
+    def register_view(
+        self,
+        key: str,
+        *,
+        title: str,
+        icon: str = "",
+        provider: dict | None = None,
+    ) -> None:
+        """注册 WebUI 视图（G3：provider = {type:"component", url:"web/xxx.js"}）。"""
+        self._engine.register_view(
+            key, title=title, icon=icon, provider=provider, play_id=self.play_id
+        )
+
+    def list_views(self) -> list[dict]:
+        return self._engine.list_views()
+
     # ---------- 自定义事件（G8 / D1 说话通道） ----------
 
     async def emit(self, event: str, data: Any = None, *, log: bool = False) -> None:

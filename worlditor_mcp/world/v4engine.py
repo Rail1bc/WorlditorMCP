@@ -169,6 +169,16 @@ class _ToolBinding:
     )  # 参数名 -> string/integer/number/boolean
 
 
+@dataclass
+class _ViewBinding:
+    """WebUI 视图登记（G3/D7：provider = 组件入口 URL）。"""
+
+    play_id: str
+    title: str
+    icon: str = ""
+    provider: dict = field(default_factory=dict)
+
+
 # 可被玩法包覆盖/禁用的行为原语（D11；place/remove 不可覆盖，D14）
 OVERRIDABLE_PRIMITIVES = frozenset(
     {"move", "move_entity", "set_data", "get_data", "interact"}
@@ -271,6 +281,8 @@ class V4WorldEngine:
         # D2/G2 MCP 工具注册表（玩法包 register_tool；MCP server 动态同步）
         self._tools: dict[str, _ToolBinding] = {}
         self._mcp: Any | None = None  # 绑定后工具注册/清理即时 add/remove
+        # G3/D7 视图注册表（玩法包 register_view；GET /views 暴露）
+        self._views: dict[str, _ViewBinding] = {}
         # 玩法包 API 实例（PlayLoader attach；handler 调用时按 play_id 取）
         self._play_apis: dict[str, Any] = {}
         # 广播冷却（B2，内存；重启重置可接受——限流本来就是临时性的）
@@ -537,6 +549,50 @@ class V4WorldEngine:
             for name, b in sorted(self._tools.items())
         ]
 
+    # ---------- 视图注册（G3 / D7） ----------
+
+    def register_view(
+        self,
+        key: str,
+        *,
+        title: str,
+        icon: str = "",
+        provider: dict | None = None,
+        play_id: str = "",
+    ) -> None:
+        """注册 WebUI 视图（G3：provider = {type, url} 组件入口；WebUI 动态加载）。
+
+        视图 key 冲突报错（同 D2 风格）。
+        """
+        key = _clean_required(key, "视图 key")
+        title = _clean_required(title, "视图标题")
+        if key in self._views:
+            prev = self._views[key]
+            raise WorldError(f"视图 key 冲突：{key}（已由 {prev.play_id} 注册）")
+        provider = dict(provider or {})
+        ptype = provider.get("type")
+        if ptype is not None and ptype != "component":
+            raise WorldError("视图 provider.type 仅支持 component")
+        self._views[key] = _ViewBinding(
+            play_id=play_id,
+            title=title,
+            icon=str(icon or ""),
+            provider={"type": "component", "url": str(provider.get("url") or "")},
+        )
+
+    def list_views(self) -> list[dict]:
+        """视图列表（GET /views：管理页展示与前端路由初始化共用，G3）。"""
+        return [
+            {
+                "key": key,
+                "title": v.title,
+                "icon": v.icon,
+                "play_id": v.play_id,
+                "provider": dict(v.provider),
+            }
+            for key, v in sorted(self._views.items())
+        ]
+
     # ---------- 原语分派（D11 / A3） ----------
 
     def override_primitive(self, name: str, handler: Callable, play_id: str) -> None:
@@ -724,6 +780,7 @@ class V4WorldEngine:
         for name in [n for n, b in self._tools.items() if b.play_id == play_id]:
             self._tools.pop(name, None)
             self._sync_tool_remove(name)
+        self._views = {k: v for k, v in self._views.items() if v.play_id != play_id}
 
     # ---------- 界面扩展（B9：ui_hook before/after/replace 递归展开） ----------
 
@@ -1047,6 +1104,12 @@ class V4WorldEngine:
     ) -> list[str]:
         """世界内某组织节点下的地图 id（folder_id=None = 世界根）。"""
         return self.store.list_maps_by_folder(world_id, folder_id)
+
+    def list_world_maps(self, world_id: str) -> list[str]:
+        """世界内全部地图 id（含各组织节点下）。"""
+        return [
+            map_id for map_id, wid in self.store.map_world.items() if wid == world_id
+        ]
 
     # ---------- 世界与组织（写，锁内） ----------
 

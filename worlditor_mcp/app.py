@@ -90,3 +90,14 @@ class WorlditorService:
             allowed_origins=self.settings.allowed_origins or None,
             static_dir=self.settings.static_dir or _default_static_dir(),
         )
+
+    def build_admin_app(self) -> Any:
+        """构建管理端口 ASGI app（D16：/admin/* 要求 tier=admin）。"""
+        from .admin import build_admin_app as _build_admin
+
+        return _build_admin(
+            self.identity,
+            engine=self.engine,
+            loader=self.play_loader,
+            static_dir=self.settings.static_dir or _default_static_dir(),
+        )

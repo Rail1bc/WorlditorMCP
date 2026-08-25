@@ -28,6 +28,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--port", type=int, help="监听端口（默认 WORLDITOR_PORT 或 6288）"
     )
     serve.add_argument(
+        "--admin-port",
+        type=int,
+        help="管理端口（默认 WORLDITOR_ADMIN_PORT 或 6289；0 = 关闭）",
+    )
+    serve.add_argument(
+        "--admin-host",
+        help="管理端口监听地址（默认 WORLDITOR_ADMIN_HOST 或 127.0.0.1）",
+    )
+    serve.add_argument(
         "--data-dir", help="数据目录（默认 WORLDITOR_DATA_DIR 或 ./data）"
     )
     serve.add_argument("--admin-key", help="管理员注册密钥（默认 WORLDITOR_ADMIN_KEY）")
@@ -69,6 +78,10 @@ def _settings_from_args(args: argparse.Namespace) -> Settings:
         settings.host = args.host
     if args.port:
         settings.port = args.port
+    if args.admin_port is not None:
+        settings.admin_port = args.admin_port
+    if args.admin_host:
+        settings.admin_host = args.admin_host
     if args.data_dir:
         settings.data_dir = Path(args.data_dir)
     if args.admin_key:
@@ -97,12 +110,23 @@ async def _serve(settings: Settings) -> None:
 
     service = WorlditorService(settings)
     await service.start()
-    server = WorldHttpServer(
-        service.build_app(), host=settings.host, port=settings.port
-    )
+    servers = [
+        WorldHttpServer(service.build_app(), host=settings.host, port=settings.port)
+    ]
+    if settings.admin_port:
+        servers.append(
+            WorldHttpServer(
+                service.build_admin_app(),
+                host=settings.admin_host,
+                port=settings.admin_port,
+            )
+        )
+    tasks = [asyncio.create_task(s.start()) for s in servers]
     try:
-        await server.start()
+        await asyncio.gather(*tasks)
     finally:
+        for s in servers:
+            s.stop()
         await service.stop()
 
 
