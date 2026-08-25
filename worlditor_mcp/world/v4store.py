@@ -543,6 +543,23 @@ class V4WorldStore:
         await self._conn.commit()
         self.loc_by_pos.pop((map_id, row, col), None)
 
+    async def save_template(self, template: WorldTemplate) -> None:
+        """写回 / 新建一个模板。"""
+        assert self._conn is not None
+        await self._conn.execute(
+            "INSERT OR REPLACE INTO templates(id, name, data_json) VALUES(?, ?, ?)",
+            (template.id, template.name, json.dumps(template.data, ensure_ascii=False)),
+        )
+        await self._conn.commit()
+        self.templates[template.id] = template
+
+    async def delete_template(self, template_id: str) -> None:
+        """删除模板。"""
+        assert self._conn is not None
+        await self._conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
+        await self._conn.commit()
+        self.templates.pop(template_id, None)
+
     # ---------- 实体 ----------
 
     async def save_entity(self, entity: Entity) -> None:

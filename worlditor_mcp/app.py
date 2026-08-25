@@ -57,18 +57,22 @@ class WorlditorService:
             demo_dir=_builtin_plays_dir(),
             worlditor_version=__version__,
         )
-        self.mcp_server = build_mcp_server(self.engine)
+        self.mcp_server: Any | None = None  # start() 内玩法包加载后构建（动态工具）
 
     async def start(self) -> None:
-        """启动：建数据目录、初始化引擎（空库播种）、加载玩法包。"""
+        """启动：建数据目录、初始化引擎（空库播种）、加载玩法包、构建 MCP server。"""
         self.settings.data_dir.mkdir(parents=True, exist_ok=True)
         await self.engine.initialize()
         loaded = await self.play_loader.load_all()
+        # MCP server 在玩法包加载后构建：动态工具（register_tool）随注册表同步
+        self.mcp_server = build_mcp_server(self.engine)
+        self.engine.attach_mcp(self.mcp_server)
         logger.info(
-            "worlditor %s 已就绪：实体 %d 个，玩法包 %d 个",
+            "worlditor %s 已就绪：实体 %d 个，玩法包 %d 个，工具 %d 个",
             __version__,
             len(self.engine.list_entities()),
             len(loaded),
+            len(self.engine.list_tools()),
         )
 
     async def stop(self) -> None:

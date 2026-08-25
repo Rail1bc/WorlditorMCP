@@ -1,4 +1,4 @@
-"""进程内 MCP server（v4.1，B7 / B10 / B11）。
+"""进程内 MCP server（v4.1，B7 / B10 / B11；v5 动态工具 G2/D2）。
 
 工具 = 引擎动作原语的薄封装（协议无关层零改动）；返回**结构化 JSON**
 ``{text, ui, effects}``——agent 消费 ``text``，WebUI 渲染 ``ui``，一次实现
@@ -10,13 +10,17 @@
   工具经 ``ctx.request_context.meta`` 读取（read 档无实体 → 工具不可用）。
 - stdio（本地）：启动时经 ``--token`` / 环境变量绑定固定实体。
 
-工具集（v4.1 初版）：world_look / world_move / world_say / world_bag /
-world_use / world_interact / world_who。
+工具集：内置 world_look / world_move / world_say / world_bag / world_use /
+world_interact / world_who（M2 删除，改由玩法包注册）+ 玩法包动态工具
+（register_tool：handler(api, ctx, **args)，身份经 api.caller() 读取）。
 """
 
 from __future__ import annotations
 
+import contextvars
+import inspect
 import json
+from collections.abc import Callable
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -26,6 +30,19 @@ from ..v4engine import WorldError
 # MCP 工具返回：结构化 JSON 字符串（ensure_ascii=False，LLM/UI 双端消费）
 _META_ENTITY_KEY = "worlditor_entity_id"
 _META_TIER_KEY = "worlditor_tier"
+
+# 当前调用者实体 id（MCP 动态工具 wrapper 注入；api.caller() 读取）
+_caller_entity: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "worlditor_caller_entity", default=None
+)
+
+# 玩法包工具参数类型 → Python 注解（FastMCP schema 生成）
+_TYPE_MAP = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+}
 
 
 class McpAuthError(Exception):
@@ -50,6 +67,67 @@ def _entity_id(ctx: Context, fixed_identity: Any = None) -> str:
     if not entity_id:
         raise McpAuthError("连接未认证或凭据只能围观，无法执行动作")
     return entity_id
+
+
+def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
+    """从玩法包工具登记构建 FastMCP 动态工具（G2）。
+
+    handler 签名：``async (api, ctx, **args) -> str | dict``（返回文本或
+    ``{text, ui}`` 结构化 JSON）；调用前注入调用者身份（api.caller() 可读）。
+
+    Args:
+        engine: V4WorldEngine（取玩法包 API 与 handler 调用）。
+        binding: engine._tools[name]（_ToolBinding：play_id/handler/params）。
+        name: 工具名。
+
+    Returns:
+        可传给 FastMCP.add_tool 的动态函数。
+    """
+
+    async def _dynamic(ctx: Context, **kwargs: Any) -> str:
+        api = engine._play_apis.get(binding.play_id)
+        if api is None:
+            return _result({"text": f"玩法包未加载：{binding.play_id}"})
+        try:
+            entity_id = _entity_id(ctx)
+        except McpAuthError as e:
+            return _result({"text": str(e)})
+        token = _caller_entity.set(entity_id)
+        try:
+            result = await engine._invoke(binding.handler, api, ctx, **kwargs)
+        except WorldError as e:
+            return _result({"text": str(e)})
+        except Exception:  # noqa: BLE001
+            return _result({"text": "工具执行出错，请稍后再试"})
+        finally:
+            _caller_entity.reset(token)
+        if isinstance(result, str):
+            return _result({"text": result})
+        if isinstance(result, dict):
+            return _result(result)
+        return _result({"text": str(result)})
+
+    params = [
+        inspect.Parameter(
+            "ctx", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=Context
+        )
+    ]
+    for pname, ptype in binding.params.items():
+        params.append(
+            inspect.Parameter(
+                pname,
+                inspect.Parameter.KEYWORD_ONLY,
+                annotation=_TYPE_MAP.get(ptype, str),
+            )
+        )
+    _dynamic.__name__ = name
+    _dynamic.__signature__ = inspect.Signature(params)
+    # 参数描述（FastMCP 从 docstring 解析 :param x: ...）
+    doc_lines = [binding.description or f"玩法包工具：{name}", ""]
+    for pname in binding.params:
+        doc_lines.append(f":param {pname}: 参数 {pname}")
+    _dynamic.__doc__ = "\n".join(doc_lines)
+    return _dynamic
 
 
 def build_mcp_server(engine: Any, fixed_identity: Any = None) -> FastMCP:

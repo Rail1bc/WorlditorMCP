@@ -208,6 +208,85 @@ class WorlditorPlayAPI:
         """原语覆盖/禁用状态（管理页可见）。"""
         return self._engine.list_primitive_overrides()
 
+    # ---------- MCP 工具（G2 / D2） ----------
+
+    def register_tool(
+        self,
+        name: str,
+        handler,
+        *,
+        description: str = "",
+        params: dict[str, str] | None = None,
+    ) -> None:
+        """注册 MCP 工具：handler(api, ctx, **args)，返回 str 或 {text, ui}。
+
+        同名工具冲突**报错拒绝**（D2）；参数类型限
+        string/integer/number/boolean（FastMCP schema 生成）。
+        """
+        self._engine.register_tool(
+            name,
+            handler,
+            description=description,
+            params=params,
+            play_id=self.play_id,
+        )
+
+    def caller(self) -> str | None:
+        """当前调用者实体 id（MCP 工具 handler 内有效；无身份返回 None）。"""
+        from ..mcp import _caller_entity
+
+        return _caller_entity.get()
+
+    # ---------- 自定义事件（G8 / D1 说话通道） ----------
+
+    async def emit(self, event: str, data: Any = None, *, log: bool = False) -> None:
+        """发自定义事件（任意事件名；SSE 推送；log=True 写 world_log）。"""
+        await self._engine.emit(event, data, log=log)
+
+    # ---------- 实体生命周期（D14：玩法包可 spawn/despawn） ----------
+
+    async def place_entity(
+        self,
+        kind: str,
+        map_id: str,
+        row: int,
+        col: int,
+        *,
+        name: str | None = None,
+        desc: str = "",
+        attrs: dict | None = None,
+        state: dict | None = None,
+    ):
+        """放置实体（spawn；身份化实体不可被 remove，D14）。"""
+        return await self._engine.place_entity(
+            kind, map_id, row, col, name=name, desc=desc, attrs=attrs, state=state
+        )
+
+    async def remove_entity(self, entity_id: str) -> None:
+        """移除实体（despawn；身份化实体被拒绝，D14）。"""
+        await self._engine.remove_entity(entity_id)
+
+    # ---------- 地图编辑（D14：地块/连接/地图/模板） ----------
+
+    async def update_location(self, map_id: str, row: int, col: int, **kwargs) -> None:
+        await self._engine.update_location(map_id, row, col, **kwargs)
+
+    async def update_connection(
+        self, map_id: str, row: int, col: int, direction: str, **kwargs
+    ) -> None:
+        await self._engine.update_connection(map_id, row, col, direction, **kwargs)
+
+    async def create_map(
+        self, map_id: str, name: str, *, description: str | None = None, **kwargs
+    ):
+        await self._engine.create_map(map_id, name, description=description, **kwargs)
+
+    async def save_template(self, template) -> None:
+        await self._engine.save_template(template)
+
+    async def delete_template(self, template_id: str) -> None:
+        await self._engine.delete_template(template_id)
+
     async def set_state(self, entity_id: str, patch: dict) -> None:
         await self._engine.set_state(entity_id, patch)
 

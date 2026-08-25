@@ -25,7 +25,7 @@ import logging
 import random
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -37,6 +37,7 @@ from .v3model import (
     SceneView,
     Target,
     WorldMap,
+    WorldTemplate,
     parse_location,
     parse_map,
     parse_path,
@@ -156,6 +157,18 @@ class _FieldAppend:
     field: dict
 
 
+@dataclass
+class _ToolBinding:
+    """MCP 工具登记（D2：同名冲突报错；handler(api, ctx, **args)）。"""
+
+    play_id: str
+    handler: Callable
+    description: str = ""
+    params: dict[str, str] = field(
+        default_factory=dict
+    )  # 参数名 -> string/integer/number/boolean
+
+
 # 可被玩法包覆盖/禁用的行为原语（D11；place/remove 不可覆盖，D14）
 OVERRIDABLE_PRIMITIVES = frozenset(
     {"move", "move_entity", "set_data", "get_data", "interact"}
@@ -255,6 +268,9 @@ class V4WorldEngine:
         self._item_fields: dict[str, list[_FieldAppend]] = {}
         # D11/A3 原语分派表：name -> 覆盖登记（无登记 = 内核默认实现）
         self._primitive_overrides: dict[str, _PrimitiveOverride] = {}
+        # D2/G2 MCP 工具注册表（玩法包 register_tool；MCP server 动态同步）
+        self._tools: dict[str, _ToolBinding] = {}
+        self._mcp: Any | None = None  # 绑定后工具注册/清理即时 add/remove
         # 玩法包 API 实例（PlayLoader attach；handler 调用时按 play_id 取）
         self._play_apis: dict[str, Any] = {}
         # 广播冷却（B2，内存；重启重置可接受——限流本来就是临时性的）
@@ -447,6 +463,80 @@ class V4WorldEngine:
             )
         return sorted(out, key=lambda k: k["kind"])
 
+    # ---------- MCP 工具注册（D2 / G2） ----------
+
+    def attach_mcp(self, mcp: Any) -> None:
+        """绑定 MCP server：此后 register_tool / 清理工具即时同步 add/remove。"""
+        self._mcp = mcp
+        for name in list(self._tools):
+            self._sync_tool_add(name)
+
+    def _sync_tool_add(self, name: str) -> None:
+        if self._mcp is None:
+            return
+        binding = self._tools.get(name)
+        if binding is None:
+            return
+        from .mcp import build_dynamic_tool
+
+        self._mcp.add_tool(
+            build_dynamic_tool(self, binding, name),
+            name=name,
+            description=binding.description or f"玩法包工具：{name}",
+        )
+
+    def _sync_tool_remove(self, name: str) -> None:
+        if self._mcp is not None:
+            try:
+                self._mcp.remove_tool(name)
+            except Exception:  # noqa: BLE001
+                logger.debug("[worlditor] MCP 工具移除失败（可能未注册）：%s", name)
+
+    def register_tool(
+        self,
+        name: str,
+        handler: Callable,
+        *,
+        description: str = "",
+        params: dict[str, str] | None = None,
+        play_id: str = "",
+    ) -> None:
+        """注册 MCP 工具（G2：handler(api, ctx, **args)，身份经 api.caller()）。
+
+        同名工具冲突**报错拒绝**（D2，避免静默替换）。
+        """
+        name = _clean_required(name, "工具名")
+        if name in self._tools:
+            prev = self._tools[name]
+            raise WorldError(f"工具名冲突：{name}（已由 {prev.play_id} 注册）")
+        if not callable(handler):
+            raise WorldError("工具 handler 必须是可调用对象")
+        params = dict(params or {})
+        for pname, ptype in params.items():
+            if ptype not in ("string", "integer", "number", "boolean"):
+                raise WorldError(
+                    f"工具参数类型必须是 string/integer/number/boolean：{pname}"
+                )
+        self._tools[name] = _ToolBinding(
+            play_id=play_id,
+            handler=handler,
+            description=str(description or ""),
+            params=params,
+        )
+        self._sync_tool_add(name)
+
+    def list_tools(self) -> list[dict]:
+        """已注册工具（管理页可见：谁注册了什么）。"""
+        return [
+            {
+                "name": name,
+                "play_id": b.play_id,
+                "description": b.description,
+                "params": dict(b.params),
+            }
+            for name, b in sorted(self._tools.items())
+        ]
+
     # ---------- 原语分派（D11 / A3） ----------
 
     def override_primitive(self, name: str, handler: Callable, play_id: str) -> None:
@@ -540,15 +630,18 @@ class V4WorldEngine:
         interval: float = 0.0,
         play_id: str = "",
     ) -> None:
-        """订阅世界事件；on_tick 需给出 interval（各自间隔，A3）。"""
-        if event not in self._event_bindings:
-            raise WorldError(f"未知事件：{event}")
+        """订阅世界事件；on_tick 需给出 interval（各自间隔，A3）。
+
+        事件名开放（D1/G8：任意事件名，语义由玩法包定义）；预置事件见
+        v4model.WORLD_EVENTS。
+        """
+        event = _clean_required(event, "事件名")
         if not callable(handler):
             raise WorldError("事件 handler 必须是可调用对象")
         if event == "on_tick":
             if interval <= 0:
                 raise WorldError("on_tick 需要正的 interval 秒数")
-        self._event_bindings[event].append(
+        self._event_bindings.setdefault(event, []).append(
             _EventBinding(play_id=play_id, handler=handler, interval=float(interval))
         )
 
@@ -628,6 +721,9 @@ class V4WorldEngine:
         self._primitive_overrides = {
             k: v for k, v in self._primitive_overrides.items() if v.play_id != play_id
         }
+        for name in [n for n, b in self._tools.items() if b.play_id == play_id]:
+            self._tools.pop(name, None)
+            self._sync_tool_remove(name)
 
     # ---------- 界面扩展（B9：ui_hook before/after/replace 递归展开） ----------
 
@@ -706,12 +802,25 @@ class V4WorldEngine:
             result = await result
         return result
 
+    async def emit(self, event: str, data: Any = None, *, log: bool = False) -> None:
+        """自定义事件（G8：任意事件名，SSE 推送；默认不写 world_log）。
+
+        Args:
+            event: 事件名（说话/广播等自定义语义由玩法包定义，D1）。
+            data: 事件数据（dict 或任意 JSON 可序列化值）。
+            log: 是否写入 world_log（需回放的事件显式 True）。
+        """
+        await self._emit(event, data, log=log)
+
     async def _emit(self, event: str, *args: Any, log: bool = True) -> None:
         """分发事件给订阅者（串行 + 异常隔离），并写入世界日志。
 
         调用方持锁；handler 内调原语可重入（AsyncRLock）。
+        世界激活过滤（D15）：事件带实体时按实体所在世界检查玩法包激活。
         """
         for binding in list(self._event_bindings.get(event, [])):
+            if not self._binding_active(event, binding.play_id, args):
+                continue
             api = self._play_apis.get(binding.play_id)
             try:
                 await self._invoke(binding.handler, api, *args)
@@ -725,6 +834,27 @@ class V4WorldEngine:
             await self._append_log(event, args)
         if event != "on_tick":
             self._push_to_subscribers(self._event_payload(event, args))
+
+    def _binding_active(self, event: str, play_id: str, args: tuple) -> bool:
+        """世界激活过滤（D15）：on_tick 与无实体事件不过滤。"""
+        if event == "on_tick":
+            return True
+        entity = next((a for a in args if isinstance(a, Entity)), None)
+        if entity is None:
+            return True
+        world_id = self.store.map_world.get(entity.map_id)
+        if world_id is None:
+            return True
+        return self._world_play_active(world_id, play_id)
+
+    def _world_play_active(self, world_id: str | None, play_id: str) -> bool:
+        """世界激活集合判断：世界不存在或 play_ids 为空 = 全部激活（D15）。"""
+        if world_id is None:
+            return True
+        world = self.store.worlds.get(world_id)
+        if world is None or not world.play_ids:
+            return True
+        return play_id in world.play_ids
 
     async def _append_log(self, event: str, args: tuple) -> None:
         """事件写入 world_log（历史/回放数据源；on_tick 不写）。"""
@@ -820,6 +950,9 @@ class V4WorldEngine:
             payload["entity"] = args[0].to_dict()
         elif event == "on_world_edited":
             payload["what"] = args[0]
+        else:
+            # 自定义事件（G8）：数据原样透传（单参 dict 展开为 data）
+            payload["data"] = args[0] if len(args) == 1 else list(args)
         return payload
 
     # ---------- 心跳（A3：单循环 + 各自间隔 + 串行 + 异常隔离） ----------
@@ -1457,6 +1590,11 @@ class V4WorldEngine:
                     raise WorldError(f"「{target.name}」没有「{action}」这个动作")
                 raise WorldError(f"动作「{action}」尚未实现")
             binding = self._interactions[action]
+            # 世界激活过滤（D15）：动作注册包在目标世界未激活 → 动作不可用
+            if not self._world_play_active(
+                self.store.map_world.get(target.map_id), binding.play_id
+            ):
+                raise WorldError(f"「{target.name}」没有「{action}」这个动作")
             req = InteractionRequest(
                 entity_id=entity_id,
                 target=target,
@@ -1769,6 +1907,31 @@ class V4WorldEngine:
             await self.store.save_map(m)
             await self._emit("on_world_edited", {"op": "create_map", "map_id": map_id})
             return m
+
+    async def save_template(self, template: WorldTemplate) -> None:
+        """写回 / 新建模板（地图编辑；D14 玩法包可调）。"""
+        async with self._lock:
+            if not isinstance(template.id, str) or not template.id.strip():
+                raise WorldError("模板 id 不能为空")
+            if not isinstance(template.name, str) or not template.name.strip():
+                raise WorldError("模板名称不能为空")
+            await self.store.save_template(template)
+            await self._emit(
+                "on_world_edited",
+                {"op": "save_template", "template_id": template.id},
+            )
+
+    async def delete_template(self, template_id: str) -> None:
+        """删除模板（地图编辑；D14 玩法包可调）。"""
+        async with self._lock:
+            template_id = _clean_required(template_id, "模板 id")
+            if template_id not in self.store.templates:
+                raise WorldError(f"模板不存在：{template_id}")
+            await self.store.delete_template(template_id)
+            await self._emit(
+                "on_world_edited",
+                {"op": "delete_template", "template_id": template_id},
+            )
 
     async def update_map(
         self,
