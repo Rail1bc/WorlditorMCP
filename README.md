@@ -61,8 +61,13 @@ main.py            # setup(api, context)：注册 kind/交互/事件/工具/视�
 
 玩法包可：注册实体 kind（含字段声明）、交互、事件订阅、MCP 工具
 （参数支持 array，G11）、WebUI 视图、覆盖/禁用行为原语（override/
-disable/过滤器链，D11/G14）、spawn/编辑实体与地图（D14）、读写实体字段
-与按世界隔离的 KV。详见 `DESIGN.md`（设计/协议/路线）与 `GAPS.md`（缺口清单）。
+disable/过滤器链，D11/G14）、跨包服务（M3）、spawn/编辑实体与地图（D14）、
+读写实体字段与按世界隔离的 KV。
+
+- `docs/PLAY_DEV.md`：玩法包开发指南（API 全量 + 约定 + 示例）
+- `DESIGN.md`：设计/协议/路线（唯一权威）
+- `GAPS.md`：平台缺口清单（历史与观察项）
+- 内置 5 个领域包（`worlditor_mcp/builtin_plays/`）即参考实现
 
 ## 开发
 

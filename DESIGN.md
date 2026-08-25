@@ -372,13 +372,18 @@ M1 玩法包基础设施 + 世界与双端口：数据模型（worlds/folders/ma
    管理/游玩双端口（D16）、玩法包管理（list/enable/disable/uninstall+持久化）、
    plays 依赖解析、MCP 动态工具、自定义事件、视图宿主、字段与分类设施、
    原语分派、玩法包 API 开放编辑原语（spawn/地图编辑，D14）、世界激活（D15）
-   —— 内核能力"开放"，默认行为仍在内核（向后兼容）
+   —— 内核能力"开放"，默认行为仍在内核（向后兼容）        ✅ 完成
 M2 内核瘦身：删除 say / 7 个内置 MCP 工具 / 默认页面内容；WebUI 转视图宿主；
-   move 保留为可覆盖的默认实现（D11）
+   move 保留为可覆盖的默认实现（D11）                      ✅ 完成（含 G8：删
+   inventories 表 + give/take/count，持有全下沉 D8）
 M3 领域包逐个落地：items → player → movement → interaction → social（每包独立可测）
+   ✅ 完成（顺序 = movement 先行兼平台验收 → items → player → interaction →
+   social；补跨包服务机制、api.move/list_world_log、工具参数可选语义）
 M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向移动 override move）
    证明可替换；停用全部内置包后世界仍可编辑/浏览（管理页可见空态）；
    测试迁移完成；docs/PLAY_DEV.md；正式发布
+   ✅ 替代玩法包验证（override 全链路）/ 空态 / PLAY_DEV.md / CHANGELOG /
+   wheel 安装冒烟；⏳ 正式发布（git tag）+ Docker 构建验证（需 docker 环境）
 ```
 
 ## 9. 决策记录（D1–D16，已全部确认）
