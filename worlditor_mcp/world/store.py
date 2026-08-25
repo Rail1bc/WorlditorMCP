@@ -472,7 +472,8 @@ class WorldStore:
                 description_json TEXT,
                 timezone TEXT,
                 spawn_row INTEGER NOT NULL DEFAULT 0,
-                spawn_col INTEGER NOT NULL DEFAULT 0
+                spawn_col INTEGER NOT NULL DEFAULT 0,
+                visible TEXT NOT NULL DEFAULT 'public'
             );
             CREATE TABLE IF NOT EXISTS locations (
                 map_id TEXT NOT NULL,

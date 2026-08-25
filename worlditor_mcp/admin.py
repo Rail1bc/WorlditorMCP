@@ -299,10 +299,20 @@ async def _map_create(request: Request) -> Response:
             timezone=data.get("timezone"),
             spawn_row=int(data.get("spawn_row") or 0),
             spawn_col=int(data.get("spawn_col") or 0),
+            visible=str(data.get("visible") or "public"),
         )
     except WorldError as e:
         return _err(e)
     return _ok({"id": m.id, "name": m.name})
+
+
+async def _map_delete(request: Request) -> Response:
+    _require_admin(request)
+    try:
+        await _engine(request).delete_map(request.path_params["map_id"])
+    except WorldError as e:
+        return _err(e)
+    return _ok()
 
 
 async def _location_update(request: Request) -> Response:
@@ -458,6 +468,7 @@ def build_admin_app(
         Route("/admin/invite-codes", _invite_create, methods=["POST"]),
         Route("/admin/tokens/{token}", _token_revoke, methods=["DELETE"]),
         Route("/admin/maps", _map_create, methods=["POST"]),
+        Route("/admin/maps/{map_id}", _map_delete, methods=["DELETE"]),
         Route("/admin/locations", _location_update, methods=["POST"]),
         Route("/admin/locations", _location_delete, methods=["DELETE"]),
         Route("/admin/connections", _connection_update, methods=["POST"]),

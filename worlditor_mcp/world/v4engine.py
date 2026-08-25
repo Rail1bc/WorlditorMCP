@@ -560,9 +560,9 @@ class V4WorldEngine:
             raise WorldError("工具 handler 必须是可调用对象")
         params = dict(params or {})
         for pname, ptype in params.items():
-            if ptype not in ("string", "integer", "number", "boolean"):
+            if ptype not in ("string", "integer", "number", "boolean", "array"):
                 raise WorldError(
-                    f"工具参数类型必须是 string/integer/number/boolean：{pname}"
+                    f"工具参数类型必须是 string/integer/number/boolean/array：{pname}"
                 )
         self._tools[name] = _ToolBinding(
             play_id=play_id,
@@ -1150,8 +1150,17 @@ class V4WorldEngine:
         return self.store.entities.get(entity_id)
 
     def list_entities(
-        self, map_id: str | None = None, row: int | None = None, col: int | None = None
+        self,
+        map_id: str | None = None,
+        row: int | None = None,
+        col: int | None = None,
+        viewer_id: str | None = None,
     ) -> list[Entity]:
+        """实体列表；viewer_id 传入时按隐身过滤（G12）。
+
+        实体字段 ``invisible`` 为真时对普通 viewer 隐藏；viewer 自身字段
+        ``see_invisible`` 为真（真视）或查看自己时可见。
+        """
         entities = list(self.store.entities.values())
         if map_id is not None:
             entities = [e for e in entities if e.map_id == map_id]
@@ -1159,6 +1168,15 @@ class V4WorldEngine:
             entities = [e for e in entities if e.row == row]
         if col is not None:
             entities = [e for e in entities if e.col == col]
+        if viewer_id is not None:
+            viewer = self.store.entities.get(viewer_id)
+            see_all = bool(viewer and viewer.attrs.get("see_invisible"))
+            if not see_all:
+                entities = [
+                    e
+                    for e in entities
+                    if e.id == viewer_id or not e.attrs.get("invisible")
+                ]
         return entities
 
     def get_map(self, map_id: str) -> Any | None:
@@ -1166,6 +1184,24 @@ class V4WorldEngine:
 
     def list_maps(self) -> list:
         return list(self.store.maps.values())
+
+    def map_visible_to(
+        self, map_id: str, entity_id: str | None, tier: str = ""
+    ) -> bool:
+        """地图对某身份的可见性（G1）。
+
+        public 全可见；private 仅该图上有自己身份化实体的玩家可见
+        （"在场即可见"，零名单概念）+ admin 全见。
+        """
+        m = self.store.maps.get(map_id)
+        if m is None:
+            return False
+        if tier == "admin" or m.visible == "public":
+            return True
+        if not entity_id:
+            return False
+        entity = self.store.entities.get(entity_id)
+        return entity is not None and entity.map_id == map_id
 
     def get_location(self, map_id: str, row: int, col: int) -> Any | None:
         return self.store.loc_by_pos.get((map_id, row, col))
@@ -1965,13 +2001,16 @@ class V4WorldEngine:
         timezone: str | None = None,
         spawn_row: int = 0,
         spawn_col: int = 0,
+        visible: str = "public",
     ) -> WorldMap:
-        """新建地图（id 唯一）。"""
+        """新建地图（id 唯一；visible = public/private，G1 可见性）。"""
         async with self._lock:
             map_id = _clean_required(map_id, "地图 id")
             name = _clean_required(name, "地图名称")
             if map_id in self.store.maps:
                 raise WorldError(f"地图已存在：{map_id}")
+            if visible not in ("public", "private"):
+                raise WorldError("visible 必须是 public 或 private")
             _check_pos(spawn_row, spawn_col)
             m = parse_map(
                 {
@@ -1983,11 +2022,28 @@ class V4WorldEngine:
                     "timezone": timezone,
                     "spawn_row": spawn_row,
                     "spawn_col": spawn_col,
+                    "visible": visible,
                 }
             )
             await self.store.save_map(m)
             await self._emit("on_world_edited", {"op": "create_map", "map_id": map_id})
             return m
+
+    async def delete_map(self, map_id: str) -> None:
+        """删除地图（G2：级联地块/实体/世界归属；图上身份化实体在场 → 拒绝）。
+
+        Raises:
+            WorldError: 地图不存在 / 图上仍有玩家/agent 实体。
+        """
+        async with self._lock:
+            map_id = _clean_required(map_id, "地图 id")
+            if map_id not in self.store.maps:
+                raise WorldError(f"地图不存在：{map_id}")
+            for e in self.store.entities.values():
+                if e.map_id == map_id and e.kind in IDENTITY_KINDS:
+                    raise WorldError("地图上仍有玩家/agent 实体，无法删除")
+            await self.store.delete_map(map_id)
+            await self._emit("on_world_edited", {"op": "delete_map", "map_id": map_id})
 
     async def save_template(self, template: WorldTemplate) -> None:
         """写回 / 新建模板（地图编辑；D14 玩法包可调）。"""
@@ -2023,8 +2079,9 @@ class V4WorldEngine:
         timezone: object = _UNSET,
         spawn_row: object = _UNSET,
         spawn_col: object = _UNSET,
+        visible: object = _UNSET,
     ) -> WorldMap:
-        """更新地图属性（``timezone=None`` 显式清空为本地时区）。"""
+        """更新地图属性（``timezone=None`` 显式清空为本地时区；visible 见 G1）。"""
         async with self._lock:
             m = self.store.maps.get(map_id)
             if m is None:
@@ -2048,6 +2105,10 @@ class V4WorldEngine:
                 sc = m.spawn_col if spawn_col is _UNSET else spawn_col
                 _check_pos(sr, sc)
                 m.spawn_row, m.spawn_col = sr, sc
+            if visible is not _UNSET:
+                if visible not in ("public", "private"):
+                    raise WorldError("visible 必须是 public 或 private")
+                m.visible = visible
             await self.store.save_map(m)
             await self._emit("on_world_edited", {"op": "update_map", "map_id": map_id})
             return m

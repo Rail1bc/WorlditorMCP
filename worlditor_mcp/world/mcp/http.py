@@ -180,13 +180,27 @@ def _require_tier(info: TokenInfo | None, tiers: tuple[str, ...]) -> None:
 async def _state(request: Request) -> Response:
     _require_tier(_identity_of(request.scope), ("read", "play", "admin"))
     engine = request.app.state.world_engine
+    info = _identity_of(request.scope)
+    viewer_id = info.entity_id if info else None
+    tier = info.tier if info else ""
+    # G1 可见性：private 地图仅"在场"玩家（+admin）可见，其地块/实体同步隐藏
+    visible_maps = [
+        m for m in engine.list_maps() if engine.map_visible_to(m.id, viewer_id, tier)
+    ]
+    visible_ids = {m.id for m in visible_maps}
     from ..v3model import location_to_dict, map_to_dict
 
     return JSONResponse(
         {
-            "maps": [map_to_dict(m) for m in engine.list_maps()],
-            "locations": [location_to_dict(loc) for loc in engine.list_locations()],
-            "entities": [e.to_dict() for e in engine.list_entities()],
+            "maps": [map_to_dict(m) for m in visible_maps],
+            "locations": [
+                location_to_dict(loc)
+                for loc in engine.list_locations()
+                if loc.map_id in visible_ids
+            ],
+            "entities": [
+                e.to_dict() for e in engine.list_entities() if e.map_id in visible_ids
+            ],
         }
     )
 
@@ -206,7 +220,9 @@ async def _scene(request: Request) -> Response:
     scene = engine._build_scene(entity)
     peers = [
         p
-        for p in engine.list_entities(entity.map_id, entity.row, entity.col)
+        for p in engine.list_entities(
+            entity.map_id, entity.row, entity.col, viewer_id=info.entity_id
+        )
         if p.id != entity.id
     ]
     return JSONResponse(

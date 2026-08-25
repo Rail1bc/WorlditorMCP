@@ -235,7 +235,8 @@ CREATE TABLE IF NOT EXISTS maps (
     description_json TEXT,
     timezone TEXT,
     spawn_row INTEGER NOT NULL DEFAULT 0,
-    spawn_col INTEGER NOT NULL DEFAULT 0
+    spawn_col INTEGER NOT NULL DEFAULT 0,
+    visible TEXT NOT NULL DEFAULT 'public'
 );
 CREATE TABLE IF NOT EXISTS locations (
     map_id TEXT NOT NULL,
@@ -371,6 +372,7 @@ class V4WorldStore:
                     "timezone": row["timezone"],
                     "spawn_row": row["spawn_row"],
                     "spawn_col": row["spawn_col"],
+                    "visible": row["visible"],
                 }
             )
             self.maps[m.id] = m
@@ -494,8 +496,9 @@ class V4WorldStore:
         """写回 / 新建一张地图。"""
         assert self._conn is not None
         await self._conn.execute(
-            "INSERT OR REPLACE INTO maps(id, name, description_json, timezone, spawn_row, spawn_col) "
-            "VALUES(?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO maps("
+            "id, name, description_json, timezone, spawn_row, spawn_col, visible"
+            ") VALUES(?, ?, ?, ?, ?, ?, ?)",
             (
                 m.id,
                 m.name,
@@ -503,6 +506,7 @@ class V4WorldStore:
                 m.timezone,
                 m.spawn_row,
                 m.spawn_col,
+                m.visible,
             ),
         )
         await self._conn.commit()
@@ -542,6 +546,22 @@ class V4WorldStore:
         )
         await self._conn.commit()
         self.loc_by_pos.pop((map_id, row, col), None)
+
+    async def delete_map(self, map_id: str) -> None:
+        """删除地图（级联地块/实体/世界归属；调用方负责身份化实体在场校验）。"""
+        assert self._conn is not None
+        if map_id not in self.maps:
+            raise KeyError(f"地图不存在：{map_id}")
+        for entity in [e for e in self.entities.values() if e.map_id == map_id]:
+            await self.delete_entity(entity.id)  # 级联背包
+        await self._conn.execute("DELETE FROM locations WHERE map_id = ?", (map_id,))
+        await self._conn.execute("DELETE FROM maps WHERE id = ?", (map_id,))
+        await self._conn.execute("DELETE FROM world_maps WHERE map_id = ?", (map_id,))
+        await self._conn.commit()
+        self.maps.pop(map_id, None)
+        self.loc_by_pos = {k: v for k, v in self.loc_by_pos.items() if k[0] != map_id}
+        self.map_world.pop(map_id, None)
+        self.map_folder.pop(map_id, None)
 
     async def save_template(self, template: WorldTemplate) -> None:
         """写回 / 新建一个模板。"""

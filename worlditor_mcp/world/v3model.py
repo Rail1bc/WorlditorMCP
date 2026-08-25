@@ -221,7 +221,11 @@ class Location:
 
 @dataclass
 class WorldMap:
-    """地图：地图唯一，地块不唯一。timezone 为地图级时区，None = 服务器本地。"""
+    """地图：地图唯一，地块不唯一。timezone 为地图级时区，None = 服务器本地。
+
+    visible（G1）：public = 所有人可见；private = 仅该图上有自己身份化实体
+    的玩家（+admin）可见——家地图/对局地图用 private 隐藏内容。
+    """
 
     id: str
     name: str
@@ -229,6 +233,7 @@ class WorldMap:
     timezone: str | None = None
     spawn_row: int = 0
     spawn_col: int = 0
+    visible: str = "public"
 
 
 # ---------- 序列化 / 解析（存储与 API 用；非法条目尽可能容错丢弃） ----------
@@ -376,6 +381,7 @@ def map_to_dict(m: WorldMap) -> dict[str, Any]:
         "timezone": m.timezone,
         "spawn_row": m.spawn_row,
         "spawn_col": m.spawn_col,
+        "visible": m.visible,
     }
 
 
@@ -406,6 +412,9 @@ def parse_map(value: Any) -> WorldMap:
         timezone=str(tz) if isinstance(tz, str) and tz else None,
         spawn_row=spawn_row,
         spawn_col=spawn_col,
+        visible=value.get("visible", "public")
+        if value.get("visible") in ("public", "private")
+        else "public",
     )
 
 

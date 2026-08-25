@@ -104,8 +104,10 @@ class WorlditorPlayAPI:
     def get_entity(self, entity_id: str):
         return self._engine.get_entity(entity_id)
 
-    def list_entities(self, map_id=None, row=None, col=None) -> list:
-        return self._engine.list_entities(map_id, row, col)
+    def list_entities(
+        self, map_id=None, row=None, col=None, viewer_id: str | None = None
+    ) -> list:
+        return self._engine.list_entities(map_id, row, col, viewer_id=viewer_id)
 
     def get_location(self, map_id: str, row: int, col: int):
         return self._engine.get_location(map_id, row, col)
@@ -311,6 +313,10 @@ class WorlditorPlayAPI:
         self, map_id: str, name: str, *, description: str | None = None, **kwargs
     ):
         await self._engine.create_map(map_id, name, description=description, **kwargs)
+
+    async def delete_map(self, map_id: str) -> None:
+        """删除地图（G2：级联清理；图上玩家/agent 在场被拒）。"""
+        await self._engine.delete_map(map_id)
 
     async def save_template(self, template) -> None:
         await self._engine.save_template(template)

@@ -36,12 +36,13 @@ _caller_entity: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "worlditor_caller_entity", default=None
 )
 
-# 玩法包工具参数类型 → Python 注解（FastMCP schema 生成）
+# 玩法包工具参数类型 → Python 注解（FastMCP schema 生成；G11 含 array）
 _TYPE_MAP = {
     "string": str,
     "integer": int,
     "number": float,
     "boolean": bool,
+    "array": list[str],
 }
 
 
