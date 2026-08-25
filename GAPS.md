@@ -27,6 +27,15 @@
 - **成本**：~20 行 + 测试
 - **状态**：待决策
 
+### G11 工具参数缺少数组类型
+- **触发**：多玩家互动玩法——子集选取（`targets: [eid1, eid2]`）和 AOE 类
+  多目标操作需要数组参数，当前 register_tool 参数类型仅
+  string/integer/number/boolean（G2 定稿）
+- **方案**：`_TYPE_MAP` 加 "array" → `list[str]` 映射 + 校验放行（FastMCP
+  原生生成 array schema，pydantic List[str] 支持）；玩法包侧参数为列表
+- **成本**：~5 行 + 测试
+- **状态**：待决策（多玩家是核心场景，数组参数几乎必然用到）
+
 ---
 
 ## 增强候选（等真实需求再定，KISS）
