@@ -1,0 +1,55 @@
+name: 🧪 测试与构建
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  pytest:
+    name: Pytest 单元测试
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -e . pytest pytest-asyncio httpx
+
+      - name: 运行单元测试
+        run: python -m pytest tests/ -q --tb=short
+
+  webui-build:
+    name: WebUI 前端构建
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 设置 Node 环境
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: 构建 WebUI
+        run: |
+          cd webui
+          npm ci
+          npm run build

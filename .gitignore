@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[codz]
+*.egg-info/
+
+# 测试与工具缓存
+.pytest_cache/
+.ruff_cache/
+
+# SQLite 运行时数据
+*.db
+*.db-wal
+*.db-shm
+
+# 环境与运行时数据目录
+.venv/
+venv/
+.env
+data/
+
+# WebUI 前端（依赖不提交；构建产物 webui/dist 提交——服务内置托管需要随发行）
+node_modules/
