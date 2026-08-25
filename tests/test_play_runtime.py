@@ -220,8 +220,8 @@ def test_edit_primitives_via_api(tmp_path):
             # despawn
             await api.remove_entity(npc.id)
             assert npc.id not in engine.store.entities
-            # 建地图（含默认地块归属校验：新地图无地块也可创建）
-            m = await api.create_map("arena", "竞技场")
+            # 建地图（新地图无地块也可创建）
+            await api.create_map("arena", "竞技场")
             assert engine.get_map("arena") is not None
             # 模板
             from worlditor_mcp.world.v3model import WorldTemplate
