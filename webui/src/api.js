@@ -72,6 +72,7 @@ export const login = (username, password) => apiPost("/auth/login", { username, 
 export const registerAgent = (name) => apiPost("/auth/agent-register", { name });
 export const readToken = () => apiGet("/auth/read-token");
 export const logout = () => apiPost("/auth/logout");
+export const deleteAccount = () => apiPost("/auth/delete-account", {});
 export const changePassword = (oldPassword, newPassword) =>
   apiPost("/auth/change-password", { old_password: oldPassword, new_password: newPassword });
 

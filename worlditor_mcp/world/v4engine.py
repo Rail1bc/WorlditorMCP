@@ -1482,16 +1482,44 @@ class V4WorldEngine:
     async def remove_entity(self, entity_id: str) -> None:
         """移除实体（地图编辑，admin；B8）并级联清理其背包。
 
+        D14：身份化实体（玩家/agent）**不可**被玩法包移除——账户注销走
+        ``delete_identity_entity``（身份服务受控通道）。
+
         Raises:
-            WorldError: 实体不存在。
+            WorldError: 实体不存在 / 身份化实体。
         """
         async with self._lock:
             entity = self._require_entity(entity_id)
+            if entity.kind in IDENTITY_KINDS:
+                raise WorldError("身份化实体（玩家/agent）不可被移除（注销走身份服务）")
             await self.store.delete_entity(entity_id)
             await self._emit("on_entity_removed", entity)
             await self._emit(
                 "on_world_edited", {"op": "remove_entity", "entity_id": entity_id}
             )
+
+    async def delete_identity_entity(self, entity_id: str) -> None:
+        """（身份服务受控）删除身份化实体：账户永久注销专用，发事件。
+
+        与 remove_entity 的区别：允许 kind=player/agent（D14 的受控豁免——
+        调用方是内核身份服务，非玩法包权限）。
+        """
+        async with self._lock:
+            entity = self._require_entity(entity_id)
+            if entity.kind not in IDENTITY_KINDS:
+                raise WorldError("只支持身份化实体")
+            await self.store.delete_entity(entity_id)
+            await self._emit("on_entity_removed", entity)
+            await self._emit(
+                "on_world_edited", {"op": "remove_entity", "entity_id": entity_id}
+            )
+
+    def identity_entity_of(self, account_id: str):
+        """账户绑定的身份化实体（user_id == account_id；无则 None）。"""
+        for entity in self.store.entities.values():
+            if entity.user_id == account_id:
+                return entity
+        return None
 
     async def move(
         self, entity_id: str, direction: str, *, path: int | None = None

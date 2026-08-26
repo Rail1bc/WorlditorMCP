@@ -129,19 +129,24 @@ def test_place_entity(tmp_path):
 
 
 def test_remove_entity(tmp_path):
-    """移除实体：实体消失 + on_entity_removed 事件。"""
+    """移除实体：实体消失 + on_entity_removed 事件；身份化实体拒绝（D14）。"""
 
     async def fn(engine: V4WorldEngine, clock=None):
         removed = []
         engine.register_world_event(
             "on_entity_removed", lambda api, e: removed.append(e.id)
         )
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
-        await engine.remove_entity(player.id)
-        assert engine.get_entity(player.id) is None
-        assert removed == [player.id]
+        npc = await engine.place_entity("wolf", "default", 0, 0, name="狼")
+        await engine.remove_entity(npc.id)
+        assert engine.get_entity(npc.id) is None
+        assert removed == [npc.id]
         with pytest.raises(WorldError, match="实体不存在"):
+            await engine.remove_entity(npc.id)
+        # D14：身份化实体（玩家/agent）不可被玩法包移除
+        player = await engine.place_entity("player", "default", 0, 0, name="小明")
+        with pytest.raises(WorldError, match="身份化"):
             await engine.remove_entity(player.id)
+        assert engine.get_entity(player.id) is not None
 
     _run(_scenario(tmp_path, fn))
 
@@ -510,7 +515,9 @@ def test_delete_location_cascade(tmp_path):
         player = await engine.place_entity("player", "default", 1, 0, name="小明")
         with pytest.raises(WorldError, match="无法删除"):
             await engine.delete_location("default", 1, 0)
-        await engine.remove_entity(player.id)
+        await engine.move_entity(
+            player.id, "default", 0, 0
+        )  # 身份化实体移走（不可移除）
         await engine.delete_location("default", 1, 0)
 
     _run(_scenario(tmp_path, fn))

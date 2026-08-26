@@ -269,6 +269,29 @@ async def _accounts(request: Request) -> Response:
     )
 
 
+async def _account_delete(request: Request) -> Response:
+    """永久注销账户（删账户 + 吊销凭据 + 删除玩家实体，不可恢复）。"""
+    _require_admin(request)
+    try:
+        await _identity(request).delete_account(request.path_params["account_id"])
+    except IdentityError as e:
+        return _err(e)
+    return _ok()
+
+
+async def _account_update(request: Request) -> Response:
+    """变更角色（user/admin）：吊销全部凭据，对方重新登录生效。"""
+    _require_admin(request)
+    data = await _json_body(request)
+    try:
+        result = await _identity(request).set_account_role(
+            request.path_params["account_id"], str(data.get("role") or "")
+        )
+    except IdentityError as e:
+        return _err(e)
+    return _ok(result)
+
+
 async def _invite_create(request: Request) -> Response:
     _require_admin(request)
     data = await _json_body(request)
@@ -471,6 +494,8 @@ def build_admin_app(
         Route("/admin/folders/{folder_id}/move", _folder_move, methods=["POST"]),
         Route("/admin/folders/{folder_id}", _folder_delete, methods=["DELETE"]),
         Route("/admin/accounts", _accounts),
+        Route("/admin/accounts/{account_id}", _account_delete, methods=["DELETE"]),
+        Route("/admin/accounts/{account_id}", _account_update, methods=["PATCH"]),
         Route("/admin/invite-codes", _invite_create, methods=["POST"]),
         Route("/admin/tokens/{token}", _token_revoke, methods=["DELETE"]),
         Route("/admin/maps", _map_create, methods=["POST"]),

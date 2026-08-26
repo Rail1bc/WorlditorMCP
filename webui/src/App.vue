@@ -19,6 +19,7 @@
             <span>{{ v.title }}</span>
           </button>
         </nav>
+        <button class="logout-btn" title="永久注销账户" @click="doDeleteAccount">🗑</button>
         <button class="logout-btn" title="退出登录" @click="doLogout">⎋</button>
       </header>
 
@@ -45,7 +46,7 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import * as Vue from "vue";
-import { getToken, listViews, logout, setToken } from "./api";
+import { getToken, listViews, logout, setToken, deleteAccount } from "./api";
 import { store } from "./store";
 import AuthPage from "./pages/AuthPage.vue";
 import UiBlockRenderer from "./components/UiBlockRenderer.vue";
@@ -101,6 +102,16 @@ function doLogout() {
   store.world = null;
   store.log = [];
   location.hash = "#/auth";
+}
+
+async function doDeleteAccount() {
+  if (!confirm("确定永久注销账户？角色与实体将被删除，该操作不可恢复。")) return;
+  try {
+    await deleteAccount();
+    doLogout();
+  } catch (e) {
+    store.error = e.message;
+  }
 }
 
 onMounted(() => {

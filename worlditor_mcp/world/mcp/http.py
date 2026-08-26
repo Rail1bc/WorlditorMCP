@@ -335,6 +335,19 @@ async def _logout(request: Request) -> Response:
     return JSONResponse({"ok": ok})
 
 
+async def _delete_account(request: Request) -> Response:
+    """本人永久注销（token 即凭据；不可恢复，调用方 UI 负责确认）。"""
+    identity: IdentityService = request.app.state.world_identity
+    info = _identity_of(request.scope)
+    if info is None or not info.account_id:
+        return _identity_error_response(IdentityError("无效的凭据"))
+    try:
+        await identity.delete_own_account(info.token)
+    except IdentityError as e:
+        return _identity_error_response(e)
+    return JSONResponse({"ok": True})
+
+
 async def _change_password(request: Request) -> Response:
     identity: IdentityService = request.app.state.world_identity
     info = _identity_of(request.scope)
@@ -410,6 +423,7 @@ def build_http_app(
         Route("/auth/read-token", _read_token, methods=["GET"]),
         Route("/auth/logout", _logout, methods=["POST"]),
         Route("/auth/change-password", _change_password, methods=["POST"]),
+        Route("/auth/delete-account", _delete_account, methods=["POST"]),
         Route("/plays/{play_id}/web/{path:path}", _play_web, methods=["GET"]),
     ]
     # 合并 FastMCP app 的 lifespan（session manager / task group 初始化）——

@@ -251,6 +251,54 @@ class IdentityService:
         async with self._engine._lock:
             return await self._engine.store.set_token_revoked(token, True)
 
+    # ---------- 账户生命周期（永久注销 / 角色管理） ----------
+
+    async def delete_own_account(self, token: str) -> None:
+        """本人永久注销：删账户 + 吊销全部凭据 + 删除玩家实体（不可恢复）。
+
+        token 即凭据（与改密/登出同权限模型）；确认由调用方 UI 承担。
+        """
+        info = self.resolve(token)
+        if info is None or not info.account_id:
+            raise IdentityError("无效的凭据")
+        await self.delete_account(info.account_id)
+
+    async def delete_account(self, account_id: str) -> None:
+        """永久注销账户（管理员 / 本人通道共用）。
+
+        级联：账户行 + 全部凭据（吊销）+ 身份化实体（受控删除，D14），
+        玩家实体删除会触发 on_entity_removed / on_world_edited（玩法包可响应清理）。
+
+        Raises:
+            IdentityError: 账户不存在。
+        """
+        async with self._engine._lock:
+            account = self._engine.store.get_account(account_id)
+            if account is None:
+                raise IdentityError("账户不存在")
+            await self._engine.store.revoke_tokens_of_account(account_id)
+            entity = self._engine.identity_entity_of(account_id)
+            if entity is not None:
+                await self._engine.delete_identity_entity(entity.id)
+            await self._engine.store.delete_account(account_id)
+
+    async def set_account_role(self, account_id: str, role: str) -> dict:
+        """变更账户角色（user/admin）：吊销全部凭据，重新登录按新角色。
+
+        Raises:
+            IdentityError: 账户不存在 / 角色非法。
+        """
+        if role not in ("user", "admin"):
+            raise IdentityError("角色必须是 user 或 admin")
+        async with self._engine._lock:
+            account = self._engine.store.get_account(account_id)
+            if account is None:
+                raise IdentityError("账户不存在")
+            account.role = role
+            await self._engine.store.save_account(account)
+            await self._engine.store.revoke_tokens_of_account(account_id)
+        return {"username": account.username, "role": role}
+
     # ---------- 邀请码（invite 模式，管理员） ----------
 
     async def create_invite_codes(self, count: int = 1) -> list[str]:

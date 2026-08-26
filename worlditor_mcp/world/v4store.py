@@ -740,6 +740,13 @@ class V4WorldStore:
             t: v for t, v in self.tokens.items() if v.account_id != account_id
         }
 
+    async def delete_account(self, account_id: str) -> None:
+        """删除账户行（永久注销；调用方负责吊销凭据与身份化实体）。"""
+        assert self._conn is not None
+        await self._conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+        await self._conn.commit()
+        self.accounts.pop(account_id, None)
+
     async def save_invite_code(self, code: str, created_ts: float) -> None:
         assert self._conn is not None
         await self._conn.execute(
