@@ -1,0 +1,49 @@
+name: 🚀 发布镜像
+
+# 打版本标签（v*）→ 测试 → 构建并推送 Docker 镜像到 ghcr.io/rail1bc/worlditor
+# 首次发布后在 GitHub Packages 页把「worlditor」包可见性改为 Public，
+# 服务器才能免登录 docker pull。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    name: 测试 + 构建 + 推送镜像
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖并运行测试
+        run: |
+          pip install --upgrade pip
+          pip install -e . pytest pytest-asyncio httpx
+          python -m pytest tests/ -q --tb=short
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/rail1bc/worlditor:${{ github.ref_name }}
+            ghcr.io/rail1bc/worlditor:latest

@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir .
 
 ENV WORLDITOR_DATA_DIR=/data \
     WORLDITOR_HOST=0.0.0.0 \
-    WORLDITOR_PORT=6288
+    WORLDITOR_PORT=6288 \
+    WORLDITOR_STATIC_DIR=/app/webui/dist
 
 VOLUME ["/data"]
 EXPOSE 6288

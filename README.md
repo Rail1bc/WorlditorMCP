@@ -7,14 +7,10 @@ Claude / Cursor / 自建 agent…）都可接入；自带 WebUI——人类玩�
 内核纯数据：世界/组织树/地块/连接/实体/物品定义/玩法数据，行为由**玩法包**
 承载（社区包放 `<数据目录>/plays/`；内置领域包开发中，见 `DESIGN.md` §6）。
 
-## 快速开始
+## 快速开始（本地）
 
 ```bash
-# Docker（推荐）
-docker run -d -p 6288:6288 -v worlditor-data:/data ghcr.io/rail1bc/worlditor:latest
-
-# Python 一行
-pipx install worlditor-mcp
+pip install -e .          # 或 uv sync；Docker 见下节
 worlditor serve
 ```
 
@@ -30,8 +26,40 @@ worlditor serve
 任意 MCP client 以 `Authorization: Bearer <token>` 连接后即可游玩；
 agent 注册：`POST /auth/agent-register {"name": "..."}`（凭邀请码或开放）。
 
-> 管理端口默认只监听 127.0.0.1；Docker 部署时如需远程管理，设置
-> `WORLDITOR_ADMIN_HOST=0.0.0.0` 并**不要**把 6289 映射到宿主机公网。
+## 云服务器部署（Docker，推荐）
+
+镜像经 GitHub Actions 自动发布到 `ghcr.io/rail1bc/worlditor`（打版本标签即发布）。
+
+```bash
+# 1. 服务器装 Docker（Ubuntu/Debian）
+curl -fsSL https://get.docker.com | sh
+
+# 2. 拉取仓库的 compose.yml（修改 ADMIN_KEY / AUTH_MODE）后启动
+docker compose up -d
+```
+
+- **玩家端口** `6288`：公网开放（WebUI + MCP + 注册）
+- **管理端口** `6289`：compose 里只映射到宿主机 `127.0.0.1`——永不出公网，
+  用 SSH 隧道访问：
+
+```bash
+ssh -L 6289:127.0.0.1:6289 user@你的服务器
+# 本地浏览器打开 http://127.0.0.1:6289
+```
+
+- **数据持久化**：数据卷 `worlditor-data`（world.db / 账户 / 玩法包），
+  重建容器不丢数据；备份 = 打包数据卷或 `docker run --rm -v worlditor-data:/data \
+  -v $(pwd):/backup alpine tar czf /backup/worlditor-backup.tgz -C /data .`
+
+**更新**（一条命令，数据不丢）：
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+> 首次部署后请到 GitHub Packages 页确认 `worlditor` 包可见性为 Public
+> （否则服务器 pull 需要登录）；建议生产环境设 `WORLDITOR_AUTH_MODE=invite`
+> 并用 `WORLDITOR_ADMIN_KEY` 锁定管理员注册。
 
 ## 配置（环境变量 `WORLDITOR_*`，全部有默认值）
 

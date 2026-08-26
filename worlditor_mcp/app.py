@@ -27,7 +27,15 @@ def _builtin_plays_dir() -> Path:
 
 
 def _default_static_dir() -> Path:
-    """WebUI 构建产物默认位置（仓库布局：worlditor_mcp/ 同级 webui/dist）。"""
+    """WebUI 构建产物默认位置：包内（wheel 分发）优先，源码树兜底。
+
+    wheel 经 force-include 把 webui/dist 打进 ``worlditor_mcp/webui_dist``；
+    源码布局下 ``worlditor_mcp/`` 与 ``webui/`` 同级。Docker 部署经
+    ``WORLDITOR_STATIC_DIR`` 显式指定（镜像内 /app/webui/dist）。
+    """
+    in_package = Path(__file__).resolve().parent / "webui_dist"
+    if in_package.is_dir():
+        return in_package
     return Path(__file__).resolve().parent.parent / "webui" / "dist"
 
 

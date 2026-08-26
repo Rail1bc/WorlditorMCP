@@ -1,0 +1,25 @@
+# worlditor 云服务器部署模板
+# 用法：复制本文件到服务器 → 修改 ADMIN_KEY / AUTH_MODE → docker compose up -d
+# 更新：docker compose pull && docker compose up -d
+
+services:
+  worlditor:
+    image: ghcr.io/rail1bc/worlditor:latest
+    container_name: worlditor
+    ports:
+      - "6288:6288" # 玩家端口（公网：WebUI + MCP + 注册登录）
+      # 管理端口仅绑定宿主机本机——SSH 隧道访问（docker compose 无法动态放行
+      # 容器内 127.0.0.1，故容器内监听 0.0.0.0，映射收敛到 127.0.0.1，D16 双保险）
+      - "127.0.0.1:6289:6289"
+    environment:
+      - WORLDITOR_ADMIN_HOST=0.0.0.0
+      - WORLDITOR_ADMIN_KEY=请改成强密钥
+      - WORLDITOR_AUTH_MODE=invite # open=任意注册 / invite=邀请码 / closed=关闭
+      - WORLDITOR_ALLOW_AGENT_REGISTER=1
+      # - WORLDITOR_ALLOWED_ORIGINS=https://你的域名（跨域时才需要）
+    volumes:
+      - worlditor-data:/data
+    restart: unless-stopped
+
+volumes:
+  worlditor-data:
