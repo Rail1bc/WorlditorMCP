@@ -12,6 +12,12 @@
       <form class="auth-form" @submit.prevent="submit">
         <input v-model="username" placeholder="用户名" required minlength="2" maxlength="24" />
         <input v-model="password" type="password" placeholder="密码" required minlength="6" />
+        <input
+          v-if="mode === 'register'"
+          v-model="adminKey"
+          type="password"
+          placeholder="管理员注册密钥（拥有者，可选）"
+        />
         <button type="submit" class="btn btn-primary" :disabled="busy">
           {{ busy ? "请稍候……" : mode === "login" ? "登录" : "注册并进入" }}
         </button>
@@ -43,6 +49,7 @@ import { store } from "../store";
 const mode = ref("login");
 const username = ref("");
 const password = ref("");
+const adminKey = ref("");
 const agentName = ref("");
 const agentToken = ref("");
 const busy = ref(false);
@@ -55,7 +62,7 @@ async function submit() {
     const data =
       mode.value === "login"
         ? await login(username.value, password.value)
-        : await register(username.value, password.value);
+        : await register(username.value, password.value, adminKey.value);
     enter(data.token);
   } catch (e) {
     error.value = e.message;

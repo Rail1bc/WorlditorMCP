@@ -62,7 +62,12 @@ export async function apiPost(path, body) {
 }
 
 // 身份
-export const register = (username, password) => apiPost("/auth/register", { username, password });
+export const register = (username, password, adminKey = "") =>
+  apiPost("/auth/register", {
+    username,
+    password,
+    admin_key: adminKey || undefined,
+  });
 export const login = (username, password) => apiPost("/auth/login", { username, password });
 export const registerAgent = (name) => apiPost("/auth/agent-register", { name });
 export const readToken = () => apiGet("/auth/read-token");
