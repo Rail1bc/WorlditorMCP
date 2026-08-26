@@ -4,6 +4,7 @@ import { reactive } from "vue";
 
 export const store = reactive({
   token: "",
+  mode: "play", // play（玩家端口）/ admin（管理端口），运行时来自 /meta
   entity: null, // 我的实体（player/agent）
   scene: null, // 我的场景（含路径）
   peers: [], // 同地块实体（含 actions）

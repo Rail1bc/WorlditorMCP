@@ -41,6 +41,7 @@ PUBLIC_PATHS = (
     "/auth/login",
     "/auth/agent-register",
     "/auth/read-token",
+    "/meta",
 )
 
 
@@ -371,6 +372,11 @@ async def _views(request: Request) -> Response:
     return JSONResponse({"views": engine.list_views()})
 
 
+async def _meta(request: Request) -> Response:
+    """前端模式识别：玩家端 = play（管理模式界面分离的运行时依据）。"""
+    return JSONResponse({"mode": "play"})
+
+
 async def _play_web(request: Request) -> Response:
     _require_tier(_identity_of(request.scope), ("read", "play", "admin"))
     loader = request.app.state.world_loader
@@ -424,6 +430,7 @@ def build_http_app(
         Route("/auth/logout", _logout, methods=["POST"]),
         Route("/auth/change-password", _change_password, methods=["POST"]),
         Route("/auth/delete-account", _delete_account, methods=["POST"]),
+        Route("/meta", _meta),
         Route("/plays/{play_id}/web/{path:path}", _play_web, methods=["GET"]),
     ]
     # 合并 FastMCP app 的 lifespan（session manager / task group 初始化）——

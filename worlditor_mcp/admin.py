@@ -120,6 +120,11 @@ async def _views(request: Request) -> Response:
     return JSONResponse({"views": _engine(request).list_views()})
 
 
+async def _meta(request: Request) -> Response:
+    """前端模式识别：管理端 = admin（前端据此切换管理界面，与玩家端分离）。"""
+    return JSONResponse({"mode": "admin"})
+
+
 async def _services(request: Request) -> Response:
     _require_admin(request)
     return JSONResponse({"services": _engine(request).list_services()})
@@ -304,6 +309,12 @@ async def _invite_create(request: Request) -> Response:
     return _ok({"codes": codes})
 
 
+async def _invite_revoke(request: Request) -> Response:
+    _require_admin(request)
+    ok = await _identity(request).revoke_invite_code(request.path_params["code"])
+    return _ok({"revoked": ok})
+
+
 async def _token_revoke(request: Request) -> Response:
     _require_admin(request)
     token = request.path_params["token"]
@@ -471,6 +482,7 @@ def build_admin_app(
         Route("/admin/tools", _tools),
         Route("/admin/views", _views),
         Route("/admin/services", _services),
+        Route("/meta", _meta),
         Route("/admin/worlds", _worlds_list),
         Route("/admin/worlds", _world_create, methods=["POST"]),
         Route("/admin/worlds/{world_id}", _world_update, methods=["PATCH"]),
@@ -497,6 +509,7 @@ def build_admin_app(
         Route("/admin/accounts/{account_id}", _account_delete, methods=["DELETE"]),
         Route("/admin/accounts/{account_id}", _account_update, methods=["PATCH"]),
         Route("/admin/invite-codes", _invite_create, methods=["POST"]),
+        Route("/admin/invite-codes/{code}", _invite_revoke, methods=["DELETE"]),
         Route("/admin/tokens/{token}", _token_revoke, methods=["DELETE"]),
         Route("/admin/maps", _map_create, methods=["POST"]),
         Route("/admin/maps/{map_id}", _map_delete, methods=["DELETE"]),
@@ -537,6 +550,7 @@ def build_admin_app(
             "/auth/register",
             "/auth/login",
             "/auth/agent-register",
+            "/meta",
             "/assets",
             "/favicon.ico",
         ),

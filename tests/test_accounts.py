@@ -184,6 +184,42 @@ def test_http_admin_account_management(tmp_path):
     _run(_scenario(tmp_path / "world.db", fn))
 
 
+# ---------- 模式识别端点（管理/玩家界面分离） ----------
+
+
+def test_meta_endpoints(tmp_path):
+    """/meta：玩家端口 = play、管理端口 = admin；免认证可访问。"""
+
+    async def fn(engine, identity):
+        from worlditor_mcp.world.mcp import build_mcp_server
+
+        play_app = build_http_app(build_mcp_server(engine), identity, engine=engine)
+        admin_app = build_admin_app(identity, engine=engine)
+        play = TestClient(play_app)
+        admin = TestClient(admin_app)
+        assert play.get("/meta").json()["mode"] == "play"
+        assert admin.get("/meta").json()["mode"] == "admin"
+
+    _run(_scenario(tmp_path / "world.db", fn))
+
+
+def test_http_admin_invite_revoke(tmp_path):
+    """管理端邀请码吊销端点（AdminPanel 依赖）。"""
+
+    async def fn(engine, identity):
+        admin = await identity.register_human("管理员", "pass123", admin_key="sekret")
+        codes = await identity.create_invite_codes(1)
+        app = build_admin_app(identity, engine=engine)
+        client = TestClient(app)
+        h = {"Authorization": f"Bearer {admin.token}"}
+        r = client.delete(f"/admin/invite-codes/{codes[0]}", headers=h)
+        assert r.status_code == 200
+        # 吊销 = used 失效标记（0.x 简化：无独立 revoked 字段）
+        assert identity.list_invite_codes()[0]["used"] is True
+
+    _run(_scenario(tmp_path / "world.db", fn))
+
+
 # ---------- D14 身份化保护（内核层） ----------
 
 

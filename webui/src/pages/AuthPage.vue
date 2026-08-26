@@ -12,22 +12,33 @@
       <form class="auth-form" @submit.prevent="submit">
         <input v-model="username" placeholder="用户名" required minlength="2" maxlength="24" />
         <input v-model="password" type="password" placeholder="密码" required minlength="6" />
+        <!-- 玩家端注册：邀请码（邀请模式必填）；管理端注册：管理员注册密钥 -->
         <input
-          v-if="mode === 'register'"
+          v-if="mode === 'register' && store.mode === 'play'"
+          v-model="inviteCode"
+          placeholder="邀请码（邀请模式必填，open 模式可留空）"
+        />
+        <input
+          v-if="mode === 'register' && store.mode === 'admin'"
           v-model="adminKey"
           type="password"
-          placeholder="管理员注册密钥（拥有者，可选）"
+          placeholder="管理员注册密钥（拥有者）"
         />
         <button type="submit" class="btn btn-primary" :disabled="busy">
           {{ busy ? "请稍候……" : mode === "login" ? "登录" : "注册并进入" }}
         </button>
       </form>
 
-      <button class="btn btn-ghost watch-btn" :disabled="busy" @click="watch">
+      <button
+        v-if="store.mode === 'play'"
+        class="btn btn-ghost watch-btn"
+        :disabled="busy"
+        @click="watch"
+      >
         以围观者身份进入（read 档）
       </button>
 
-      <details class="agent-register">
+      <details v-if="store.mode === 'play'" class="agent-register">
         <summary>agent 接入</summary>
         <form class="auth-form" @submit.prevent="submitAgent">
           <input v-model="agentName" placeholder="agent 名称" minlength="2" maxlength="24" />
@@ -49,6 +60,7 @@ import { store } from "../store";
 const mode = ref("login");
 const username = ref("");
 const password = ref("");
+const inviteCode = ref("");
 const adminKey = ref("");
 const agentName = ref("");
 const agentToken = ref("");
@@ -62,7 +74,12 @@ async function submit() {
     const data =
       mode.value === "login"
         ? await login(username.value, password.value)
-        : await register(username.value, password.value, adminKey.value);
+        : await register(
+            username.value,
+            password.value,
+            inviteCode.value,
+            adminKey.value,
+          );
     enter(data.token);
   } catch (e) {
     error.value = e.message;

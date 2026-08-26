@@ -62,10 +62,11 @@ export async function apiPost(path, body) {
 }
 
 // 身份
-export const register = (username, password, adminKey = "") =>
+export const register = (username, password, inviteCode = "", adminKey = "") =>
   apiPost("/auth/register", {
     username,
     password,
+    invite_code: inviteCode || undefined,
     admin_key: adminKey || undefined,
   });
 export const login = (username, password) => apiPost("/auth/login", { username, password });
@@ -84,6 +85,9 @@ export const getBag = () => apiGet("/bag");
 
 // 视图列表（G3：玩法包 register_view）
 export const listViews = () => apiGet("/views");
+
+// 模式识别：play（玩家端口）/ admin（管理端口）——前端界面分离的运行时依据
+export const getMeta = () => apiGet("/meta");
 
 // SSE 事件流（play 档；EventSource 无法带 header，用 query token）
 export function eventsUrl() {
