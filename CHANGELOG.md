@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.2（2026-08-26）
+
+- feat: **账户生命周期**——本人永久注销（`POST /auth/delete-account` + WebUI 🗑
+  按钮，级联吊销凭据 + 删除玩家实体）、管理员删除账户（`DELETE /admin/accounts/{id}`）、
+  角色变更（`PATCH /admin/accounts/{id}`，升降级即吊销旧凭据强制重登）
+- fix: D14 真落地——`remove_entity` 拒绝身份化实体（文档与实现脱节），身份服务
+  专用受控通道 `delete_identity_entity`
+- feat: WebUI 注册页管理员注册密钥输入框（带 `admin_key` 注册即 admin 角色）
+- 7 个新测试（账户生命周期 + 端点 + D14 保护）
+
 ## v0.1.1（2026-08-25）
 
 - fix: Docker 构建失败——`.dockerignore` 排除 `*.md` 导致容器内 README.md
