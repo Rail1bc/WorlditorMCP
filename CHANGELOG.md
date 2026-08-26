@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.1（2026-08-25）
+
+- fix: Docker 构建失败——`.dockerignore` 排除 `*.md` 导致容器内 README.md
+  缺失，hatchling 生成 wheel 元数据报 `file does not exist: README.md`
+- fix: tzdata 改为无条件依赖（python:3.12-slim 无系统时区数据，容器内
+  首次 `astimezone()` 会崩）
+- fix: WebUI 打进 wheel（force-include `webui_dist` + 包内探测兜底），
+  pip 安装场景也有界面；Dockerfile 显式 `WORLDITOR_STATIC_DIR`
+
 ## v0.1.0（2026-08-25）
 
 独立世界服务首版（插件仓库作废后全新重开，D4）。

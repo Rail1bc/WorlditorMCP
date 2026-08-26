@@ -1,3 +1,5 @@
+# 注意：不要排除 *.md / LICENSE——pyproject 引用 README.md（readme 字段），
+# hatchling 构建 wheel 元数据时文件缺失会直接失败（docker build 6s 翻车教训）。
 .git
 .github
 tests
@@ -6,5 +8,3 @@ __pycache__
 .pytest_cache
 node_modules
 data
-*.md
-LICENSE
