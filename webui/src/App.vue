@@ -72,7 +72,8 @@ async function refreshViews() {
   try {
     views.value = (await listViews()).views || [];
   } catch (e) {
-    store.error = e.message;
+    // 视图列表失败不弹全局错误（登录前 401 属正常流程，静默）
+    console.warn("视图列表加载失败：", e.message);
   }
   // 默认进入第一个视图
   if (!route.value && views.value.length) {
@@ -86,7 +87,10 @@ async function goto(key) {
   const meta = views.value.find((v) => v.key === key);
   if (!meta) return;
   try {
-    const res = await fetch(meta.provider.url);
+    const headers = {};
+    const token = getToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(meta.provider.url, { headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const code = await res.text();
     // 视图组件协议（G3）：(function(Vue, UiBlock) { return { ...组件选项... } })

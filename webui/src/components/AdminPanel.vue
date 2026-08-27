@@ -113,21 +113,25 @@ async function refresh() {
   if (busy.value) return;
   busy.value = true;
   error.value = "";
-  try {
-    const [acc, pl, inv] = await Promise.all([
-      authFetch("/admin/accounts"),
-      authFetch("/admin/plays"),
-      authFetch("/admin/accounts"), // 邀请码在同一响应中
-    ]);
-    accounts.value = acc.accounts || [];
-    inviteCodes.value = acc.invite_codes || [];
-    plays.value = pl.plays || [];
-    store.token = getToken();
-  } catch (e) {
-    /* authFetch 已设置 error */
-  } finally {
-    busy.value = false;
+  // 各区块独立加载：一个失败不影响其他面板（避免整表空白）
+  const [acc, pl] = await Promise.allSettled([
+    authFetch("/admin/accounts"),
+    authFetch("/admin/plays"),
+  ]);
+  if (acc.status === "rejected") {
+    error.value = acc.reason.message.includes("403")
+      ? "当前账号无管理员权限，请用管理员账号登录管理端"
+      : acc.reason.message;
+  } else {
+    accounts.value = acc.value.accounts || [];
+    inviteCodes.value = acc.value.invite_codes || [];
   }
+  if (pl.status === "rejected") {
+    error.value = error.value || pl.reason.message;
+  } else {
+    plays.value = pl.value.plays || [];
+  }
+  busy.value = false;
 }
 
 async function toggleRole(a) {
