@@ -130,6 +130,9 @@ onMounted(async () => {
   window.addEventListener("hashchange", () => {
     route.value = location.hash.replace(/^#/, "") || "";
   });
-  refreshViews();
+  // 管理模式不加载玩家视图（/views 仅玩家端口存在，D16 界面分离）
+  if (store.mode === "play") {
+    refreshViews();
+  }
 });
 </script>
