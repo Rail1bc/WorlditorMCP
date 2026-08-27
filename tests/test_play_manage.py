@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 from play_fixtures import install_demo_play
 
+from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.play import PlayLoader
-from worlditor_mcp.world.v4engine import V4WorldEngine, WorldError
-from worlditor_mcp.world.v4store import V4WorldStore
+from worlditor_mcp.world.store import WorldStore
 
 
 def _run(coro):
@@ -38,8 +38,8 @@ def _write_play(
     return play_dir
 
 
-async def _make(tmp_path: Path) -> tuple[V4WorldEngine, PlayLoader]:
-    engine = V4WorldEngine(V4WorldStore(tmp_path / "world.db"))
+async def _make(tmp_path: Path) -> tuple[WorldEngine, PlayLoader]:
+    engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
     loader = PlayLoader(engine, plays_dir=tmp_path / "plays", worlditor_version="0.3.0")
     return engine, loader

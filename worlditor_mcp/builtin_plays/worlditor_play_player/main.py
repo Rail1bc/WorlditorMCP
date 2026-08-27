@@ -11,8 +11,8 @@
 
 from __future__ import annotations
 
+from worlditor_mcp.world import WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
-from worlditor_mcp.world.v4engine import WorldError
 
 ITEMS_PLAY = "worlditor_play_items"
 _GOLD_ATTR = "gold"

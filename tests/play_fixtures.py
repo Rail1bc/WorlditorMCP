@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
-from worlditor_mcp.world.v4model import (
+from worlditor_mcp.world import (
     InteractionRequest,
     InteractionResult,
     MenuButton,

@@ -8,20 +8,20 @@ from pathlib import Path
 import httpx
 import pytest
 
+from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.identity import IdentityService
 from worlditor_mcp.world.mcp import build_dynamic_tool
 from worlditor_mcp.world.play import PlayLoader
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
-from worlditor_mcp.world.v4engine import V4WorldEngine, WorldError
-from worlditor_mcp.world.v4store import V4WorldStore
+from worlditor_mcp.world.store import WorldStore
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-async def _engine(tmp_path: Path) -> V4WorldEngine:
-    engine = V4WorldEngine(V4WorldStore(tmp_path / "world.db"))
+async def _engine(tmp_path: Path) -> WorldEngine:
+    engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
     return engine
 

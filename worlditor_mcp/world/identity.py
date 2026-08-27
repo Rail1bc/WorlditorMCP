@@ -1,4 +1,4 @@
-"""v4.1 身份注册与凭据（B13 自助注册 / B4 token 三档）。
+"""身份注册与凭据（B13 自助注册 / B4 token 三档）。
 
 统一注册机制服务两类接入者：人类（WebUI）与 agent（MCP/远程），
 **不依赖管理员人工签发**：
@@ -108,7 +108,7 @@ class IdentityService:
         allow_agent_register: bool = True,
         clock: Callable[[], float] | None = None,
     ) -> None:
-        self._engine = engine  # V4WorldEngine（创建 player/agent 实体）
+        self._engine = engine  # WorldEngine（创建 player/agent 实体）
         if auth_mode not in AUTH_MODES:
             raise ValueError(f"auth_mode 必须是 {'/'.join(AUTH_MODES)} 之一")
         self.auth_mode = auth_mode

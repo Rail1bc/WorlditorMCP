@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..v4engine import V4WorldEngine, WorldError
+from ..engine import WorldEngine, WorldError
 from .api import WorlditorPlayAPI
 from .spec import PlaySpec, load_play_spec, version_ok
 
@@ -55,7 +55,7 @@ class PlayLoader:
 
     def __init__(
         self,
-        engine: V4WorldEngine,
+        engine: WorldEngine,
         *,
         plays_dir: Path,
         builtin_dir: Path | None = None,

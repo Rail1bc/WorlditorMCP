@@ -20,9 +20,9 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from .world import WorldError
 from .world.identity import IdentityError
 from .world.mcp.http import AuthMiddleware, _identity_of
-from .world.v4engine import WorldError
 
 
 def _require_admin(request: Request) -> None:
@@ -403,7 +403,7 @@ async def _connection_update(request: Request) -> Response:
 
 async def _template_create(request: Request) -> Response:
     _require_admin(request)
-    from .world.v3model import WorldTemplate
+    from .world import WorldTemplate
 
     data = await _json_body(request)
     try:

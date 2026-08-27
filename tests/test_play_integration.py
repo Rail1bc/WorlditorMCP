@@ -1,4 +1,4 @@
-"""玩法包加载器测试（DESIGN_V4.md「发现加载流程」）。
+"""玩法包加载器测试（DESIGN.md「发现加载流程」）。
 
 覆盖：demo_play 加载与行为集成、社区玩法包发现、namespace 隔离、
 异常隔离（坏包不阻断）、版本校验、teardown。
@@ -16,12 +16,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from play_fixtures import PLAY_ID, install_demo_play  # noqa: E402
 
-from worlditor_mcp.world.play import PlayLoader  # noqa: E402
-from worlditor_mcp.world.v4engine import (  # noqa: E402
-    V4WorldEngine,
+from worlditor_mcp.world.engine import (  # noqa: E402
+    WorldEngine,
     WorldError,
 )
-from worlditor_mcp.world.v4store import V4WorldStore  # noqa: E402
+from worlditor_mcp.world.play import PlayLoader  # noqa: E402
+from worlditor_mcp.world.store import WorldStore  # noqa: E402
 
 SEED_LOCATION_COUNT = 41
 
@@ -31,7 +31,7 @@ def _run(coro):
 
 
 def make_loader(db_path: Path, plays_dir: Path) -> PlayLoader:
-    engine = V4WorldEngine(V4WorldStore(db_path))
+    engine = WorldEngine(WorldStore(db_path))
     return PlayLoader(
         engine,
         plays_dir=plays_dir,
@@ -65,7 +65,7 @@ def test_demo_play_loaded(tmp_path):
     """演示玩法包加载：注册表（kind/interaction/event）就位。"""
     install_demo_play(tmp_path / "plays")
 
-    async def fn(engine: V4WorldEngine, loader: PlayLoader):
+    async def fn(engine: WorldEngine, loader: PlayLoader):
         plays = await loader.load_all()
         assert [p.play_id for p in plays] == [PLAY_ID]
         assert set(engine._kind_specs) == {"merchant", "sign", "door"}
@@ -82,7 +82,7 @@ def test_demo_play_loaded(tmp_path):
         assert len(tick_bindings) == 1 and tick_bindings[0].interval == 5
         # 物品落库（flush 后持久化；喇叭 = 内核定义 D13，苹果归 items 包）
         await engine.terminate()
-        engine2 = V4WorldEngine(V4WorldStore(db_path))
+        engine2 = WorldEngine(WorldStore(db_path))
         await engine2.initialize()
         try:
             assert "megaphone" in engine2.store.items
@@ -107,7 +107,7 @@ def test_demo_full_interaction_chain(tmp_path):
     """演示玩法包全链路：talk → trade → buy（effects 结算）→ eat（事件回血）。"""
     install_demo_play(tmp_path / "plays")
 
-    async def fn(engine: V4WorldEngine, loader: PlayLoader):
+    async def fn(engine: WorldEngine, loader: PlayLoader):
         await loader.load_all()
         merchant = [e for e in engine.list_entities() if e.kind == "merchant"][0]
         player = await engine.place_entity(
@@ -178,7 +178,7 @@ def test_demo_door_blocks_and_enter_forest(tmp_path):
     """演示玩法包门阻挡 + 进入迷雾提示（on_entity_enter 事件 → fog_enter 自定义事件）。"""
     install_demo_play(tmp_path / "plays")
 
-    async def fn(engine: V4WorldEngine, loader: PlayLoader):
+    async def fn(engine: WorldEngine, loader: PlayLoader):
         await loader.load_all()
         player = await engine.place_entity("player", "default", 2, 0, name="小明")
         # 木门挡路（demo 注册 kind=door block_move）
@@ -204,7 +204,7 @@ def test_discover_community_plays(tmp_path):
     """发现：plays/ 下 worlditor_play_* 社区玩法包（非前缀目录忽略）。"""
     install_demo_play(tmp_path / "plays")
 
-    async def fn(engine: V4WorldEngine, loader: PlayLoader):
+    async def fn(engine: WorldEngine, loader: PlayLoader):
         (tmp_path / "plays" / "not_a_play").mkdir(parents=True, exist_ok=True)
         plays = await loader.load_all()
         ids = [p.play_id for p in plays]
@@ -224,7 +224,7 @@ def test_namespace_isolation(tmp_path):
     """kv namespace 隔离：两个玩法包同 key 互不干扰。"""
     install_demo_play(tmp_path / "plays")
 
-    async def fn(engine: V4WorldEngine, loader: PlayLoader):
+    async def fn(engine: WorldEngine, loader: PlayLoader):
         await loader.load_all()
         api_a = loader.plays[PLAY_ID].api
         api_b = loader.plays["worlditor_play_kv"].api
@@ -245,7 +245,7 @@ def test_bad_play_isolated(tmp_path):
     """异常隔离：main.py 抛异常的玩法包被跳过，不阻断演示包与其他包。"""
     install_demo_play(tmp_path / "plays")
 
-    async def fn(engine: V4WorldEngine, loader: PlayLoader):
+    async def fn(engine: WorldEngine, loader: PlayLoader):
         plays = await loader.load_all()
         ids = [p.play_id for p in plays]
         assert PLAY_ID in ids
@@ -268,7 +268,7 @@ def test_bad_play_isolated(tmp_path):
 def test_missing_play_yaml_skipped(tmp_path):
     """play.yaml 缺失的目录被跳过。"""
 
-    async def fn(engine: V4WorldEngine, loader: PlayLoader):
+    async def fn(engine: WorldEngine, loader: PlayLoader):
         plays = await loader.load_all()
         assert all(p.play_id != "worlditor_play_noyaml" for p in plays)
 
@@ -282,7 +282,7 @@ def test_missing_play_yaml_skipped(tmp_path):
 def test_version_requirement_checked(tmp_path):
     """requires.worlditor 不兼容 → 跳过（v4.0 只校验 worlditor 版本）。"""
 
-    async def fn(engine: V4WorldEngine, loader: PlayLoader):
+    async def fn(engine: WorldEngine, loader: PlayLoader):
         plays = await loader.load_all()
         assert all(p.play_id != "worlditor_play_future" for p in plays)
 
@@ -299,7 +299,7 @@ def test_unload_calls_teardown(tmp_path):
     """unload_all：调用 teardown(api)；api 引用解除。"""
     install_demo_play(tmp_path / "plays")
 
-    async def fn(engine: V4WorldEngine, loader: PlayLoader):
+    async def fn(engine: WorldEngine, loader: PlayLoader):
         await loader.load_all()
         assert PLAY_ID in loader.plays
         await loader.unload_all()

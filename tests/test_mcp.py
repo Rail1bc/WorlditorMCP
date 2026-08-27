@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from play_fixtures import install_demo_play  # noqa: E402
 
+from worlditor_mcp.world.engine import WorldEngine  # noqa: E402
 from worlditor_mcp.world.identity import IdentityService  # noqa: E402
 from worlditor_mcp.world.mcp import build_mcp_server  # noqa: E402
 from worlditor_mcp.world.mcp.http import (  # noqa: E402
@@ -18,8 +19,7 @@ from worlditor_mcp.world.mcp.http import (  # noqa: E402
     _inject_identity,
 )
 from worlditor_mcp.world.play import PlayLoader  # noqa: E402
-from worlditor_mcp.world.v4engine import V4WorldEngine  # noqa: E402
-from worlditor_mcp.world.v4store import V4WorldStore  # noqa: E402
+from worlditor_mcp.world.store import WorldStore  # noqa: E402
 
 
 def _run(coro):
@@ -40,7 +40,7 @@ def _content_text(result) -> str:
 async def _make_world(tmp_path: Path):
     """引擎 + 演示玩法包 + 一个 agent 凭据（先加载玩法包，出生礼包才生效）。"""
     install_demo_play(tmp_path / "plays")
-    engine = V4WorldEngine(V4WorldStore(tmp_path / "world.db"))
+    engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
     loader = PlayLoader(engine, plays_dir=tmp_path / "plays")
     await loader.load_all(None)
@@ -227,7 +227,7 @@ def test_stdio_end_to_end(tmp_path):
                 payload = json.loads(text)
                 assert "我是" in payload["text"]
                 # 无效 token 的进程：拒绝启动（无凭据时 stdio 退出）
-        engine2 = V4WorldEngine(V4WorldStore(tmp_path / "world.db"))
+        engine2 = WorldEngine(WorldStore(tmp_path / "world.db"))
         await engine2.initialize()
         try:
             bad = IdentityService(engine2)

@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
+from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.play import PlayLoader
-from worlditor_mcp.world.v4engine import V4WorldEngine, WorldError
-from worlditor_mcp.world.v4store import V4WorldStore
+from worlditor_mcp.world.store import WorldStore
 
 BUILTIN_DIR = Path(__file__).resolve().parent.parent / "worlditor_mcp" / "builtin_plays"
 WARP_ID = "worlditor_play_warp"
@@ -76,8 +76,8 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _make(db_path: Path, plays_root: Path) -> tuple[V4WorldEngine, PlayLoader]:
-    engine = V4WorldEngine(V4WorldStore(db_path))
+def _make(db_path: Path, plays_root: Path) -> tuple[WorldEngine, PlayLoader]:
+    engine = WorldEngine(WorldStore(db_path))
     loader = PlayLoader(
         engine,
         plays_dir=plays_root,

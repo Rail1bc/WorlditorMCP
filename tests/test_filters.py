@@ -7,29 +7,29 @@ from pathlib import Path
 
 import pytest
 
+from worlditor_mcp.world.engine import WorldEngine, WorldError
+from worlditor_mcp.world.model import ShortCircuit
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
-from worlditor_mcp.world.v4engine import V4WorldEngine, WorldError
-from worlditor_mcp.world.v4model import ShortCircuit
-from worlditor_mcp.world.v4store import V4WorldStore
+from worlditor_mcp.world.store import WorldStore
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-async def _engine(tmp_path: Path) -> V4WorldEngine:
-    engine = V4WorldEngine(V4WorldStore(tmp_path / "world.db"))
+async def _engine(tmp_path: Path) -> WorldEngine:
+    engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
     return engine
 
 
-async def _player(engine: V4WorldEngine):
+async def _player(engine: WorldEngine):
     return await engine.place_entity(
         "player", "default", 0, 0, name="小明", attrs={"gold": 5}
     )
 
 
-def _api(engine: V4WorldEngine, play_id: str) -> WorlditorPlayAPI:
+def _api(engine: WorldEngine, play_id: str) -> WorlditorPlayAPI:
     api = WorlditorPlayAPI(engine, play_id)
     engine.attach_play_api(play_id, api)
     return api

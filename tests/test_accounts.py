@@ -13,18 +13,18 @@ import pytest
 from starlette.testclient import TestClient
 
 from worlditor_mcp.admin import build_admin_app
+from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.identity import IdentityError, IdentityService
 from worlditor_mcp.world.mcp.http import build_http_app
-from worlditor_mcp.world.v4engine import V4WorldEngine, WorldError
-from worlditor_mcp.world.v4store import V4WorldStore
+from worlditor_mcp.world.store import WorldStore
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-def _make(db_path: Path, **kwargs) -> tuple[V4WorldEngine, IdentityService]:
-    engine = V4WorldEngine(V4WorldStore(db_path))
+def _make(db_path: Path, **kwargs) -> tuple[WorldEngine, IdentityService]:
+    engine = WorldEngine(WorldStore(db_path))
     identity = IdentityService(engine, auth_mode="open", admin_key="sekret", **kwargs)
     return engine, identity
 
@@ -232,7 +232,7 @@ def test_remove_identity_entity_protected(tmp_path):
             await engine.remove_entity(info.entity_id)
         assert engine.get_entity(info.entity_id) is not None
         # 受控通道（身份服务）
-        from worlditor_mcp.world.v4engine import WorldError as WE
+        from worlditor_mcp.world import WorldError as WE
 
         await engine.delete_identity_entity(info.entity_id)
         assert engine.get_entity(info.entity_id) is None

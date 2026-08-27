@@ -9,19 +9,19 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-from worlditor_mcp.world.v4engine import (  # noqa: E402
-    V4WorldEngine,
+from worlditor_mcp.world.engine import (  # noqa: E402
+    WorldEngine,
     WorldError,
 )
-from worlditor_mcp.world.v4store import V4WorldStore  # noqa: E402
+from worlditor_mcp.world.store import WorldStore  # noqa: E402
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-def make_engine(db_path: Path, clock=None) -> V4WorldEngine:
-    return V4WorldEngine(V4WorldStore(db_path), clock=clock)
+def make_engine(db_path: Path, clock=None) -> WorldEngine:
+    return WorldEngine(WorldStore(db_path), clock=clock)
 
 
 async def _scenario(tmp_path: Path, fn, *, clock=None):
@@ -39,7 +39,7 @@ async def _scenario(tmp_path: Path, fn, *, clock=None):
 def test_create_update_delete_location(tmp_path):
     """地块 CRUD：新建/改名/改描述/删除（级联）。"""
 
-    async def fn(engine: V4WorldEngine):
+    async def fn(engine: WorldEngine):
         edited = []
         engine.register_world_event(
             "on_world_edited", lambda api, what: edited.append(what)
@@ -66,7 +66,7 @@ def test_create_update_delete_location(tmp_path):
 def test_move_location_rewrites_refs_and_entities(tmp_path):
     """移动地块：全图引用重写 + 实体跟随。"""
 
-    async def fn(engine: V4WorldEngine):
+    async def fn(engine: WorldEngine):
         # 把告示牌移到 (-1,0)（地块移动前），再移动地块 → 实体跟随
         sign = [e for e in engine.list_entities() if e.kind == "sign"][0]
         await engine.move_entity(sign.id, "default", -1, 0)
@@ -89,7 +89,7 @@ def test_move_location_rewrites_refs_and_entities(tmp_path):
 def test_update_connection(tmp_path):
     """连接槽位更新：enabled / paths 整体替换。"""
 
-    async def fn(engine: V4WorldEngine):
+    async def fn(engine: WorldEngine):
         plaza = engine.get_location("default", 0, 0)
         assert plaza.connections["up"].enabled is True  # 种子默认连步行街
         await engine.update_connection("default", 0, 0, "up", enabled=False)
@@ -126,7 +126,7 @@ def test_update_connection(tmp_path):
 def test_map_crud(tmp_path):
     """地图 CRUD：新建/更新（多图前端支持）。"""
 
-    async def fn(engine: V4WorldEngine):
+    async def fn(engine: WorldEngine):
         m = await engine.create_map(
             "dungeon", "地下城", description="幽暗的地牢。", spawn_row=1, spawn_col=1
         )
@@ -144,7 +144,7 @@ def test_map_crud(tmp_path):
 def test_update_entity_fields(tmp_path):
     """实体字段更新（admin 编辑：name/desc/attrs/state 整体替换）。"""
 
-    async def fn(engine: V4WorldEngine):
+    async def fn(engine: WorldEngine):
         sign = [e for e in engine.list_entities() if e.kind == "sign"][0]
         changed = []
         engine.register_world_event(
@@ -173,7 +173,7 @@ def test_update_entity_fields(tmp_path):
 def test_subscribe_receives_events(tmp_path):
     """订阅者收到事件 payload（含实体与事件字段）；unsubscribe 停止。"""
 
-    async def fn(engine: V4WorldEngine):
+    async def fn(engine: WorldEngine):
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         queue = engine.subscribe()  # 先建实体再订阅（place 触发 on_world_edited）
         await engine.emit("my_say", "hello")
@@ -203,7 +203,7 @@ def test_subscribe_receives_events(tmp_path):
 def test_subscribe_queue_full_drops_oldest(tmp_path):
     """队列满丢最旧（慢消费者不阻塞世界）。"""
 
-    async def fn(engine: V4WorldEngine):
+    async def fn(engine: WorldEngine):
         queue = engine.subscribe()
         for i in range(250):  # 超过 maxsize=200
             await engine.emit("msg_loop", f"msg-{i}")
@@ -232,7 +232,7 @@ def test_tick_not_pushed_to_subscribers(tmp_path):
         def advance(self, s):
             self.ts += s
 
-    async def fn(engine: V4WorldEngine, clock: FakeClock):
+    async def fn(engine: WorldEngine, clock: FakeClock):
         queue = engine.subscribe()
         runs = []
         engine.register_world_event("on_tick", _tick_append(runs), interval=1)

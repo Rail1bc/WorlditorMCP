@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-from worlditor_mcp.world.v4model import (  # noqa: E402
+from worlditor_mcp.world import (  # noqa: E402
     Entity,
     InteractionResult,
     ItemDef,

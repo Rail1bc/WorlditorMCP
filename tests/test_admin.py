@@ -8,12 +8,12 @@ import httpx
 from play_fixtures import install_demo_play
 
 from worlditor_mcp.admin import build_admin_app
+from worlditor_mcp.world.engine import WorldEngine
 from worlditor_mcp.world.identity import IdentityService
 from worlditor_mcp.world.mcp import build_mcp_server
 from worlditor_mcp.world.mcp.http import build_http_app
 from worlditor_mcp.world.play import PlayLoader
-from worlditor_mcp.world.v4engine import V4WorldEngine
-from worlditor_mcp.world.v4store import V4WorldStore
+from worlditor_mcp.world.store import WorldStore
 
 
 def _run(coro):
@@ -22,7 +22,7 @@ def _run(coro):
 
 async def _scenario(tmp_path, fn, *, admin_key="sekret"):
     install_demo_play(tmp_path / "plays")
-    engine = V4WorldEngine(V4WorldStore(tmp_path / "world.db"))
+    engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
     loader = PlayLoader(engine, plays_dir=tmp_path / "plays", worlditor_version="0.3.0")
     await loader.load_all()

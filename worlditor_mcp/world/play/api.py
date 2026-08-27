@@ -1,7 +1,7 @@
-"""WorlditorPlayAPI：玩法包唯一入口（DESIGN_V4.md「WorlditorPlayAPI」）。
+"""WorlditorPlayAPI：玩法包唯一入口（DESIGN.md「WorlditorPlayAPI」）。
 
 每个玩法包一个独立实例：kv 带 play id（namespace 隔离）；所有引擎动作
-转发到 V4WorldEngine（引擎锁内执行）。玩法包拿不到引擎内部对象，只能通过
+转发到 WorldEngine（引擎锁内执行）。玩法包拿不到引擎内部对象，只能通过
 API 原语操作；API 版本随内核版本绑定。
 """
 
@@ -9,14 +9,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..v4engine import V4WorldEngine
-from ..v4model import ItemDef
+from ..engine import WorldEngine
+from ..model import ItemDef
 
 
 class WorlditorPlayAPI:
     """玩法包 API（构造由 PlayLoader 完成；玩法包在 setup(api, context) 中使用）。"""
 
-    def __init__(self, engine: V4WorldEngine, play_id: str) -> None:
+    def __init__(self, engine: WorldEngine, play_id: str) -> None:
         self._engine = engine
         self.play_id = play_id
 
@@ -98,11 +98,11 @@ class WorlditorPlayAPI:
         )
 
     def register_ui_component(self, name: str, web_entry: str) -> None:
-        """注册自定义界面组件（B9；v4.1 WebUI 落地）。"""
+        """注册自定义界面组件（B9；WebUI 落地）。"""
         self._engine.register_ui_component(name, web_entry, play_id=self.play_id)
 
     def register_ui_hook(self, block_kind: str, position: str, provider) -> None:
-        """向已有界面块注入子块（B9：before/after/replace；v4.1 渲染落地）。"""
+        """向已有界面块注入子块（B9：before/after/replace；渲染落地）。"""
         self._engine.register_ui_hook(
             block_kind, position, provider, play_id=self.play_id
         )

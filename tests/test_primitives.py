@@ -7,22 +7,22 @@ from pathlib import Path
 
 import pytest
 
+from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
-from worlditor_mcp.world.v4engine import V4WorldEngine, WorldError
-from worlditor_mcp.world.v4store import V4WorldStore
+from worlditor_mcp.world.store import WorldStore
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-async def _engine(tmp_path: Path) -> V4WorldEngine:
-    engine = V4WorldEngine(V4WorldStore(tmp_path / "world.db"))
+async def _engine(tmp_path: Path) -> WorldEngine:
+    engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
     return engine
 
 
-async def _player(engine: V4WorldEngine):
+async def _player(engine: WorldEngine):
     return await engine.place_entity(
         "player", "default", 0, 0, name="小明", attrs={"gold": 5}
     )
@@ -226,7 +226,7 @@ def test_item_fields(tmp_path):
         try:
             api = WorlditorPlayAPI(engine, "pkg_a")
             engine.attach_play_api("pkg_a", api)
-            from worlditor_mcp.world.v4model import ItemDef
+            from worlditor_mcp.world import ItemDef
 
             api.register_item_def(
                 ItemDef(id="sword", name="剑"),

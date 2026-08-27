@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from worlditor_mcp.world.engine import WorldEngine
 from worlditor_mcp.world.play import PlayLoader
-from worlditor_mcp.world.v4engine import V4WorldEngine
-from worlditor_mcp.world.v4store import V4WorldStore
+from worlditor_mcp.world.store import WorldStore
 
 BUILTIN_DIR = Path(__file__).resolve().parent.parent / "worlditor_mcp" / "builtin_plays"
 PLAYER_ID = "worlditor_play_player"
@@ -24,7 +24,7 @@ def _run(coro):
 
 
 def _scenario(db_path, fn):
-    engine = V4WorldEngine(V4WorldStore(db_path))
+    engine = WorldEngine(WorldStore(db_path))
     loader = PlayLoader(
         engine,
         plays_dir=db_path.parent / "plays",
@@ -129,7 +129,7 @@ def test_starter_pack_once(tmp_path):
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         # 重复触发 place_entity 编辑事件（如移动实体引发的编辑事件）不再发
         await engine.set_attrs(player.id, {"gold": 999})
-        from worlditor_mcp.world.v4model import WORLD_EVENTS
+        from worlditor_mcp.world.model import WORLD_EVENTS
 
         assert "on_world_edited" in WORLD_EVENTS
         # 直接再触发一次 on_world_edited（place_entity op）

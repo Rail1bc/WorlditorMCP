@@ -13,9 +13,8 @@
 
 from __future__ import annotations
 
+from worlditor_mcp.world import ItemDef, WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
-from worlditor_mcp.world.v4engine import WorldError
-from worlditor_mcp.world.v4model import ItemDef
 
 BAG_SLOTS = 20
 STACK_MAX = 99

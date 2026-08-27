@@ -11,12 +11,11 @@ from typing import Any
 
 from . import __version__
 from .config import Settings
+from .world import WorldEngine, WorldStore
 from .world.identity import IdentityService
 from .world.mcp import build_mcp_server
 from .world.mcp.http import build_http_app
 from .world.play import PlayLoader
-from .world.v4engine import V4WorldEngine
-from .world.v4store import V4WorldStore
 
 logger = logging.getLogger("worlditor")
 
@@ -44,7 +43,7 @@ class WorlditorService:
 
     Attributes:
         settings: 服务配置。
-        engine: v4 世界引擎（事实层 + 原语 + 事件总线）。
+        engine: 世界引擎（事实层 + 原语 + 事件总线）。
         identity: 身份服务（账户 / token 三档 / 邀请码）。
         play_loader: 玩法包加载器（内置包 + 数据目录 plays/）。
         mcp_server: FastMCP 实例（工具已注册）。
@@ -52,7 +51,7 @@ class WorlditorService:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.engine = V4WorldEngine(V4WorldStore(settings.db_path))
+        self.engine = WorldEngine(WorldStore(settings.db_path))
         self.identity = IdentityService(
             self.engine,
             auth_mode=settings.auth_mode,

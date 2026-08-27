@@ -1,4 +1,4 @@
-"""进程内 MCP server（v4.1，B7 / B10 / B11；v5 动态工具 G2/D2）。
+"""进程内 MCP server（B7 / B10 / B11；动态工具 G2/D2）。
 
 工具 = 引擎动作原语的薄封装（协议无关层零改动）；返回**结构化 JSON**
 ``{text, ui, effects}``——agent 消费 ``text``，WebUI 渲染 ``ui``，一次实现
@@ -25,7 +25,7 @@ from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from ..v4engine import WorldError
+from ..engine import WorldError
 
 # MCP 工具返回：结构化 JSON 字符串（ensure_ascii=False，LLM/UI 双端消费）
 _META_ENTITY_KEY = "worlditor_entity_id"
@@ -79,7 +79,7 @@ def build_dynamic_tool(
     ``{text, ui}`` 结构化 JSON）；调用前注入调用者身份（api.caller() 可读）。
 
     Args:
-        engine: V4WorldEngine（取玩法包 API 与 handler 调用）。
+        engine: WorldEngine（取玩法包 API 与 handler 调用）。
         binding: engine._tools[name]（_ToolBinding：play_id/handler/params）。
         name: 工具名。
         fixed_identity: stdio 模式固定身份（HTTP 模式 None，身份经 _meta）。
@@ -145,7 +145,7 @@ def build_mcp_server(engine: Any, fixed_identity: Any = None) -> FastMCP:
     绑定固定身份（HTTP 模式身份经请求 _meta 注入）。
 
     Args:
-        engine: V4WorldEngine 实例。
+        engine: WorldEngine 实例。
         fixed_identity: stdio 模式绑定的固定身份（TokenInfo）；HTTP 模式传 None。
 
     Returns:

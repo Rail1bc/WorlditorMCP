@@ -1,4 +1,4 @@
-"""v4 世界引擎单元测试（DESIGN_V4.md 契约）。
+"""v4 世界引擎单元测试（DESIGN.md 契约）。
 
 以 namespace package 加载插件（与 test_engine.py 相同模式）；时钟与 PRNG
 注入保证确定性；每个测试 ``asyncio.run`` 起单循环（aiosqlite 连接绑定循环）。
@@ -15,17 +15,17 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-from worlditor_mcp.world.v4engine import (  # noqa: E402
-    V4WorldEngine,
-    WorldError,
-)
-from worlditor_mcp.world.v4model import (  # noqa: E402
+from worlditor_mcp.world import (  # noqa: E402
     InteractionRequest,
     InteractionResult,
     ItemDef,
 )
-from worlditor_mcp.world.v4store import (  # noqa: E402
-    V4WorldStore,
+from worlditor_mcp.world.engine import (  # noqa: E402
+    WorldEngine,
+    WorldError,
+)
+from worlditor_mcp.world.store import (  # noqa: E402
+    WorldStore,
 )
 
 SH_TZ = ZoneInfo("Asia/Shanghai")
@@ -54,10 +54,8 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def make_engine(db_path: Path, clock=None, rand=None) -> V4WorldEngine:
-    return V4WorldEngine(
-        V4WorldStore(db_path), clock=clock or fixed_clock(12), rand=rand
-    )
+def make_engine(db_path: Path, clock=None, rand=None) -> WorldEngine:
+    return WorldEngine(WorldStore(db_path), clock=clock or fixed_clock(12), rand=rand)
 
 
 async def _scenario(tmp_path: Path, fn, *, clock=None, rand=None):
@@ -75,7 +73,7 @@ async def _scenario(tmp_path: Path, fn, *, clock=None, rand=None):
 def test_seed_world(tmp_path):
     """种子世界 v4：41 地块 + 3 个种子实体 + 1 个种子物品（喇叭，D13）。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         assert len(engine.list_locations()) == SEED_LOCATION_COUNT
         assert len(engine.list_entities()) == SEED_ENTITY_COUNT
         assert len(engine.store.items) == 1
@@ -94,7 +92,7 @@ def test_seed_world(tmp_path):
 def test_seed_is_idempotent(tmp_path):
     """重复初始化不重复播种（幂等）。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         await engine.terminate()
         engine2 = make_engine(tmp_path / "world.db")
         await engine2.initialize()
@@ -113,7 +111,7 @@ def test_seed_is_idempotent(tmp_path):
 def test_place_entity(tmp_path):
     """放置实体：uuid id、name 缺省取 kind label、地块必须存在。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         engine.register_entity_kind("workshop", label="工坊")
         e = await engine.place_entity("workshop", "default", 1, 0, desc="叮叮当当。")
         assert len(e.id) == 32 and all(c in "0123456789abcdef" for c in e.id)
@@ -131,7 +129,7 @@ def test_place_entity(tmp_path):
 def test_remove_entity(tmp_path):
     """移除实体：实体消失 + on_entity_removed 事件；身份化实体拒绝（D14）。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         removed = []
         engine.register_world_event(
             "on_entity_removed", lambda api, e: removed.append(e.id)
@@ -157,7 +155,7 @@ def test_remove_entity(tmp_path):
 def test_move_identity_entity(tmp_path):
     """身份化实体路径移动（v3 语义）：广场 (0,0) 向北到步行街南街口。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         scene = await engine.move(player.id, "up")
         assert (scene.map_id, scene.row, scene.col) == ("default", -1, 0)
@@ -176,7 +174,7 @@ def test_move_identity_entity(tmp_path):
 def test_move_blocked_by_door(tmp_path):
     """block_move：木门（kind 声明）阻挡移动；开门（state 覆盖）后可通过。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         engine.register_entity_kind("door", block_move=True, interactions=("open",))
         player = await engine.place_entity("player", "default", 2, 0, name="小明")
         # (2,0) 老路 → 南 (3,0) 林间路口（木门在此）
@@ -193,7 +191,7 @@ def test_move_blocked_by_door(tmp_path):
 def test_move_entity_teleport(tmp_path):
     """move_entity：直接坐标（行为驱动），触发 on_entity_move/on_entity_enter。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         moves = []
         engine.register_world_event(
             "on_entity_move", lambda api, e, f, t: moves.append((e.id, f, t))
@@ -214,7 +212,7 @@ def test_move_entity_teleport(tmp_path):
 def test_attrs_state_patch(tmp_path):
     """set_attrs/set_state 合并写；on_entity_changed 事件；重复实体不存在报错。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         changed = []
         engine.register_world_event(
             "on_entity_changed", lambda api, e, c: changed.append((e.id, c))
@@ -235,7 +233,7 @@ def test_attrs_state_patch(tmp_path):
 # ---------- 交互（A1：effects 内核结算） ----------
 
 
-def _demo_registry(engine: V4WorldEngine) -> None:
+def _demo_registry(engine: WorldEngine) -> None:
     engine.register_entity_kind(
         "merchant", interactions=("talk", "trade"), label="商贩"
     )
@@ -277,7 +275,7 @@ async def _buy_handler(api, req: InteractionRequest) -> InteractionResult:
 def test_interact_flow_command_mode(tmp_path):
     """交互全流程（D12 命令式）：可用动作（C3）→ handler 直接调原语生效。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
         engine.attach_play_api("test_play", WorlditorPlayAPI(engine, "test_play"))
@@ -312,7 +310,7 @@ def test_interact_flow_command_mode(tmp_path):
 def test_interact_use_item(tmp_path):
     """物品 use 交互：item_id 注入 + on_item_used 事件。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         # handler 需要 api：挂一个真实 WorlditorPlayAPI 实例（模拟 PlayLoader 绑定）
         from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
@@ -351,7 +349,7 @@ def test_interact_handler_error_isolated(tmp_path):
     async def boom(api, req):
         raise RuntimeError("玩法包炸了")
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         engine.register_interaction("boom", boom, label="自爆")
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         with pytest.raises(WorldError, match="交互执行出错"):
@@ -367,7 +365,7 @@ def test_interact_handler_error_isolated(tmp_path):
 def test_interact_command_reentrant(tmp_path):
     """D12 命令式：handler 内直接调 move_entity 等原语（可重入锁不死锁）。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
         engine.attach_play_api("test_play", WorlditorPlayAPI(engine, "test_play"))
@@ -400,7 +398,7 @@ async def _activate_handler(api, req: InteractionRequest) -> InteractionResult:
 def test_events_and_world_log(tmp_path):
     """事件总线分发（含 handler 异常隔离）+ world_log 写入。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         seen = []
         engine.register_world_event("my_say", _bad_event_handler)
         engine.register_world_event(
@@ -435,7 +433,7 @@ async def _bad_event_handler(api, *args):
 def test_world_log_capacity(tmp_path):
     """world_log 上限 5000 条（B3）：超限写入自动清理最旧。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         for i in range(5050):
             await engine.emit("msg_loop", f"msg-{i}", log=True)
         logs = await engine.store.list_world_log(limit=99999)
@@ -454,7 +452,7 @@ def test_world_log_capacity(tmp_path):
 def test_tick_schedule_intervals(tmp_path):
     """on_tick：各自间隔 + dt 语义 + 异常隔离（手动驱动 _tick_once）。"""
 
-    async def fn(engine: V4WorldEngine, clock: FakeClock):
+    async def fn(engine: WorldEngine, clock: FakeClock):
         runs = []
         engine.register_world_event(
             "on_tick", _tick_handler_factory(runs, "slow"), interval=3
@@ -501,7 +499,7 @@ async def _bad_tick_handler(api, dt: float):
 def test_delete_location_cascade(tmp_path):
     """删除地块：级联删其上实体 + 全图引用清理；有身份化实体在场拒绝。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         sign = [e for e in engine.list_entities() if e.kind == "sign"][0]
         # 把告示牌移到步行街南街口 (-1,0) 然后删除该地块
         await engine.move_entity(sign.id, "default", -1, 0)
@@ -526,7 +524,7 @@ def test_delete_location_cascade(tmp_path):
 def test_register_item_def_and_flush(tmp_path):
     """register_item_def（同步）→ flush_item_defs 落库；重启后仍在。"""
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         engine.register_item_def(
             ItemDef(id="sword_01", name="木剑", desc="练习用木剑。", stackable=False)
         )
@@ -544,9 +542,9 @@ def test_register_item_def_and_flush(tmp_path):
 def test_apply_ui_hooks_positions(tmp_path):
     """ui_hook 三位置：before 插入 / after 追加 / replace 重写（递归展开）。"""
 
-    from worlditor_mcp.world.v4model import UiBlock
+    from worlditor_mcp.world.model import UiBlock
 
-    async def fn(engine: V4WorldEngine, clock=None):
+    async def fn(engine: WorldEngine, clock=None):
         # before / after
         engine.register_ui_hook(
             "text",

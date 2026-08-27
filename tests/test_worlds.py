@@ -7,18 +7,18 @@ from pathlib import Path
 
 import pytest
 
+from worlditor_mcp.world.engine import WorldEngine, WorldError
+from worlditor_mcp.world.model import World, WorldFolder
 from worlditor_mcp.world.play import PlayLoader
-from worlditor_mcp.world.v4engine import V4WorldEngine, WorldError
-from worlditor_mcp.world.v4model import World, WorldFolder
-from worlditor_mcp.world.v4store import DEFAULT_WORLD_ID, V4WorldStore
+from worlditor_mcp.world.store import DEFAULT_WORLD_ID, WorldStore
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-async def _engine(tmp_path: Path) -> V4WorldEngine:
-    engine = V4WorldEngine(V4WorldStore(tmp_path / "world.db"))
+async def _engine(tmp_path: Path) -> WorldEngine:
+    engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
     return engine
 

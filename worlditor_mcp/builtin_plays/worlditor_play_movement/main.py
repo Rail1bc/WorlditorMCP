@@ -14,9 +14,8 @@
 
 from __future__ import annotations
 
+from worlditor_mcp.world import DIRECTIONS, WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
-from worlditor_mcp.world.v3model import DIRECTIONS
-from worlditor_mcp.world.v4engine import WorldError
 
 _FACING_ATTR = "facing"
 _DEFAULT_FACING = "up"

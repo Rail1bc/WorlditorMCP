@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.play import PlayLoader
-from worlditor_mcp.world.v4engine import V4WorldEngine, WorldError
-from worlditor_mcp.world.v4store import V4WorldStore
+from worlditor_mcp.world.store import WorldStore
 
 BUILTIN_DIR = Path(__file__).resolve().parent.parent / "worlditor_mcp" / "builtin_plays"
 SOCIAL_ID = "worlditor_play_social"
@@ -27,7 +27,7 @@ def _run(coro):
 
 
 def _scenario(db_path, fn):
-    engine = V4WorldEngine(V4WorldStore(db_path))
+    engine = WorldEngine(WorldStore(db_path))
     loader = PlayLoader(
         engine,
         plays_dir=db_path.parent / "plays",

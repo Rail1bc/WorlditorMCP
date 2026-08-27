@@ -1,12 +1,12 @@
-"""v4 世界引擎：世界底子的核心动作（协议无关，见 DESIGN_V4.md）。
+"""世界引擎：世界底子的核心动作（协议无关，见 DESIGN.md）。
 
-与 v3 WorldEngine 的差异：
-- **实体统一模型**（B12）：玩家/agent/布景实体都是 ``Entity``（entities 表），
-  v3 的"玩家"概念被身份化实体（kind=player/agent）取代。
+设计要点：
+- **实体统一模型**：玩家/agent/布景实体都是 ``Entity``（entities 表）；
+  玩家/agent 为身份化实体（可认证绑定、位置持久化）。
 - **物品**：定义（ItemDef）为内核注册表；持有下沉玩法包（D8，无 inventories）。
 - **交互**：handler 命令式调用内核原语（D12，无 effects 清单）。
 - **事件总线**：单一事件源（9 事件），玩法包订阅 + world_log 历史；
-  SSE 是 v4.1 的序列化出口。
+  SSE 是事件总线的序列化出口。
 - **注册表**：kind / interaction / event / ui 组件与钩子，玩法包扩展入口。
 - **on_tick 调度**（A3）：单循环按 1s 粒度检查，各 handler 各自间隔，
   串行执行 + 异常隔离。
@@ -14,6 +14,18 @@
 并发模型：实例级**可重入**异步锁（AsyncRLock）——事件/tick handler 由引擎在
 锁内调用，handler 内再调 API 原语必须重入（普通 asyncio.Lock 会自锁死锁）。
 时钟与 PRNG 注入（``clock`` / ``rand``），保证时间感知描述与加权抽取可测。
+
+分区地图（行号随演化漂移，按节定位的辅助锚点）：
+- 注册表区：~380–1010（物品/kind/字段/工具/视图/服务/原语分派/交互/事件/UI/清理）
+- 事件总线区：~1030–1220（emit / SSE 推送 / tick 循环）
+- 只读查询：~1220–1330（实体/地图/世界/组织）
+- 世界组织 CRUD：~1330–1430（worlds / folders / 归属）
+- 实体原语：~1430–1530（place / remove / 身份化受控删除）
+- 移动区：~1530–1610（move / move_entity / 默认实现）
+- 数据字段区：~1610–1670（attrs / state / set/get_data）
+- 场景构建：~1670–1760（路径解析 / 阻挡 / SceneView）
+- 交互区：~1760–1840（interact / 可用动作）
+- 地图编辑区：~1840–2210（地块 / 连接 / 地图 / 模板 / 删除级联）
 """
 
 from __future__ import annotations
@@ -29,12 +41,22 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .v3model import (
+from .model import (
     DIRECTIONS,
+    WORLD_EVENTS,
     ConnectionPath,
+    Entity,
+    EntityKindSpec,
+    InteractionRequest,
+    InteractionResult,
+    ItemDef,
+    MenuButton,
     ScenePath,
     SceneView,
+    ShortCircuit,
     Target,
+    World,
+    WorldFolder,
     WorldMap,
     WorldTemplate,
     parse_location,
@@ -42,19 +64,7 @@ from .v3model import (
     parse_path,
     parse_text_schedule,
 )
-from .v4model import (
-    WORLD_EVENTS,
-    Entity,
-    EntityKindSpec,
-    InteractionRequest,
-    InteractionResult,
-    ItemDef,
-    MenuButton,
-    ShortCircuit,
-    World,
-    WorldFolder,
-)
-from .v4store import V4WorldStore
+from .store import WorldStore
 
 logger = logging.getLogger("worlditor")
 
@@ -66,7 +76,7 @@ _UNSET = object()
 
 # 交互 handler 签名：async def handler(api, req: InteractionRequest) -> InteractionResult
 InteractionHandler = Callable[[Any, InteractionRequest], Any]
-# 事件 handler 签名随事件（见 v4model.WORLD_EVENTS 注释）
+# 事件 handler 签名随事件（见 model.WORLD_EVENTS 注释）
 WorldEventHandler = Callable[..., Any]
 # UI 钩子 provider：async def provider(api, block: UiBlock) -> list[UiBlock]
 UiHookProvider = Callable[..., Any]
@@ -284,12 +294,12 @@ def _check_direction(direction: object) -> str:
     return str(direction)
 
 
-class V4WorldEngine:
-    """世界底子的唯一权威引擎（插件进程内；v4 事实模型 + 原语 + 注册表 + 事件总线）。"""
+class WorldEngine:
+    """世界底子的唯一权威引擎（插件进程内；事实模型 + 原语 + 注册表 + 事件总线）。"""
 
     def __init__(
         self,
-        store: V4WorldStore,
+        store: WorldStore,
         *,
         clock: Callable[[], datetime] | None = None,
         rand: Callable[[], float] | None = None,
@@ -851,7 +861,7 @@ class V4WorldEngine:
         """订阅世界事件；on_tick 需给出 interval（各自间隔，A3）。
 
         事件名开放（D1/G8：任意事件名，语义由玩法包定义）；预置事件见
-        v4model.WORLD_EVENTS。
+        model.WORLD_EVENTS。
         """
         event = _clean_required(event, "事件名")
         if not callable(handler):
@@ -866,7 +876,7 @@ class V4WorldEngine:
     def register_ui_component(
         self, name: str, web_entry: str, *, play_id: str = ""
     ) -> None:
-        """注册自定义界面组件（B9；v4.1 WebUI 落地）。"""
+        """注册自定义界面组件（B9；WebUI 落地）。"""
         name = _clean_required(name, "组件名")
         if play_id:
             name = f"{play_id}.{name}"
@@ -880,7 +890,7 @@ class V4WorldEngine:
         *,
         play_id: str = "",
     ) -> None:
-        """向已有界面块注入子块（B9：before/after/replace；v4.1 渲染落地）。"""
+        """向已有界面块注入子块（B9：before/after/replace；渲染落地）。"""
         if position not in ("before", "after", "replace"):
             raise WorldError("position 必须是 before/after/replace 之一")
         if not callable(provider):
@@ -964,7 +974,7 @@ class V4WorldEngine:
         Returns:
             展开后的 UiBlock；``block`` 为 None 时返回 None。
         """
-        from .v4model import UiBlock
+        from .model import UiBlock
 
         if block is None:
             return None
@@ -1009,7 +1019,7 @@ class V4WorldEngine:
 
     async def _expand_children(self, blocks: list) -> list:
         """递归展开一组子块（None 剔除）。"""
-        from .v4model import UiBlock
+        from .model import UiBlock
 
         expanded: list[UiBlock] = []
         for child in blocks:
@@ -1534,7 +1544,7 @@ class V4WorldEngine:
     async def _move_default(
         self, entity_id: str, direction: str, *, path: int | None = None
     ) -> SceneView:
-        """默认路径移动（v3 语义：死引用剔除 + 加权抽目标；可被覆盖，D11）。"""
+        """默认路径移动（死引用剔除 + 加权抽目标；可被覆盖，D11）。"""
         async with self._lock:
             entity = self._require_entity(entity_id)
             if entity.kind not in IDENTITY_KINDS:
@@ -1662,7 +1672,7 @@ class V4WorldEngine:
             return entity.attrs.get(name)
         return dict(entity.attrs)
 
-    # ---------- 移动辅助（v3 语义） ----------
+    # ---------- 移动辅助 ----------
 
     def _resolve_main(self, p: ConnectionPath, from_map_id: str) -> Target | None:
         if not p.targets:

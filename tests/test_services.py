@@ -11,17 +11,17 @@ from pathlib import Path
 
 import pytest
 
+from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
-from worlditor_mcp.world.v4engine import V4WorldEngine, WorldError
-from worlditor_mcp.world.v4store import V4WorldStore
+from worlditor_mcp.world.store import WorldStore
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-def _make(db_path: Path) -> tuple[V4WorldEngine, WorlditorPlayAPI]:
-    engine = V4WorldEngine(V4WorldStore(db_path))
+def _make(db_path: Path) -> tuple[WorldEngine, WorlditorPlayAPI]:
+    engine = WorldEngine(WorldStore(db_path))
     return engine, WorlditorPlayAPI(engine, "pkg_a")
 
 

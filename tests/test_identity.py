@@ -13,12 +13,12 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+from worlditor_mcp.world.engine import WorldEngine  # noqa: E402
 from worlditor_mcp.world.identity import (  # noqa: E402
     IdentityError,
     IdentityService,
 )
-from worlditor_mcp.world.v4engine import V4WorldEngine  # noqa: E402
-from worlditor_mcp.world.v4store import V4WorldStore  # noqa: E402
+from worlditor_mcp.world.store import WorldStore  # noqa: E402
 
 
 def _run(coro):
@@ -26,7 +26,7 @@ def _run(coro):
 
 
 def make_identity(db_path: Path, **kwargs) -> IdentityService:
-    engine = V4WorldEngine(V4WorldStore(db_path))
+    engine = WorldEngine(WorldStore(db_path))
     return IdentityService(engine, **kwargs)
 
 

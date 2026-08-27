@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 
-from worlditor_mcp.world.v3model import (
+from worlditor_mcp.world.model import (
     DIR_OFFSETS,
     DIRECTIONS,
     OPPOSITE_DIR,

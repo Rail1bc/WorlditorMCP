@@ -4,6 +4,11 @@
 > 内置 5 个领域包（`worlditor_mcp/builtin_plays/`）即参考实现；社区包
 > 放 `<数据目录>/plays/worlditor_play_*/`。本文档 = 玩法包唯一权威开发说明
 > （与 DESIGN.md 一致；GAPS.md 记录平台缺口历史）。
+>
+> **SDK 稳定出口**：玩法包只允许 `from worlditor_mcp.world.play.api import
+> WorlditorPlayAPI` 与 `from worlditor_mcp.world import ...`（WorldError /
+> 数据模型 / DIRECTIONS）——**禁止 import 内核内部模块**（engine / store /
+> model 路径可能随重构变化，已据此统一全部内置包）。
 
 ---
 
@@ -28,7 +33,7 @@ requires:
 
 ```python
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
-from worlditor_mcp.world.v4engine import WorldError
+from worlditor_mcp.world import WorldError
 
 
 def setup(api: WorlditorPlayAPI, context) -> None:
@@ -142,6 +147,10 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 `caller()`：当前调用者实体 id（MCP 工具 handler 内有效；HTTP 模式经请求身份注入，stdio 模式为固定身份）。无身份返回 `None`。
 
+**账户生命周期（内核提供，玩法包感知）**：
+- 玩家可永久注销（`POST /auth/delete-account`，级联吊销凭据 + 删除玩家实体）；管理员可删除账户/变更角色（`PATCH /admin/accounts/{id}`，变更即吊销旧凭据强制重登）
+- **对玩法包的影响**：注销 = 身份化实体被**受控删除**（非玩法包 remove_entity 通道），会触发 `on_entity_removed` / `on_world_edited`——需要按实体清理自身数据的包订阅该事件（如 items 包背包、social 包冷却）
+
 ## 5. 原语覆盖与过滤器链（D11 / G14）
 
 5 个可覆盖原语：`move` / `move_entity` / `set_data` / `get_data` / `interact`。
@@ -233,9 +242,13 @@ api.register_view(
 
 - 组件 props 收到 `view`（注册元数据）；**数据通道 = MCP 工具**（视图内嵌轻量
   callTool，见内置包 `web/*.js` 参考）或只读 REST（/scene 等），不新增数据通道（D7）
+- **请求需带 Bearer**：`/plays/<id>/web/*`、`/scene` 等要求认证——视图内部
+  fetch 一律带 `Authorization: Bearer <localStorage 的 worlditor_token>`（内置包示例）
 - `UiBlock` 参数 = 内核 UiBlockRenderer 组件（用 UiBlock 树渲染列表/表单/文本
   免写组件；复杂界面直接写 Vue）
 - 兜底：无任何视图时 WebUI 显示内核"无视图"提示（D7）
+- `/meta` 返回 `{mode: "play"|"admin"}`：同一前端按端口切换界面（玩家视图宿主
+  vs 管理面板）——视图只在玩家模式加载（D16 界面分离）
 
 ## 9. 事件
 

@@ -1,6 +1,6 @@
-"""玩法包元数据（play.yaml）解析与版本校验（DESIGN_V4.md「玩法包规范」）。
+"""玩法包元数据（play.yaml）解析与版本校验（DESIGN.md「玩法包规范」）。
 
-v4.0 只校验 worlditor 版本；``plays`` 依赖声明保留（解析与加载顺序 v4.2 实现）。
+校验 worlditor 版本与 ``plays`` 依赖声明（拓扑加载已实现）。
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ class PlaySpec:
     author: str = ""
     desc: str = ""
     requires_worlditor: str = "*"
-    requires_plays: list[str] = field(default_factory=list)  # 声明保留，v4.2 解析
+    requires_plays: list[str] = field(default_factory=list)  # 依赖声明（拓扑加载）
     icon: str = ""
 
     @property

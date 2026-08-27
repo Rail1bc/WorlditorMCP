@@ -1,4 +1,4 @@
-"""stdio 传输入口（v4.1，B7 本地接入）。
+"""stdio 传输入口（B7 本地接入）。
 
 独立进程运行：本地 AstrBot（或任意 MCP client）以 stdio 配置连接——
 一个 stdio 连接绑定**一个实体身份**（启动凭据），工具调用默认以该身份执行。
@@ -19,10 +19,10 @@ import os
 import sys
 from pathlib import Path
 
+from ..engine import WorldEngine
 from ..identity import IdentityService
 from ..play import PlayLoader
-from ..v4engine import V4WorldEngine
-from ..v4store import V4WorldStore
+from ..store import WorldStore
 from . import build_mcp_server
 
 _PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -48,7 +48,7 @@ async def _amain(argv: list[str]) -> None:
         raise SystemExit("缺少 --db（或环境变量 WORLDITOR_DB）")
     if not args.token:
         raise SystemExit("缺少 --token（或环境变量 WORLDITOR_TOKEN）")
-    engine = V4WorldEngine(V4WorldStore(Path(args.db)))
+    engine = WorldEngine(WorldStore(Path(args.db)))
     await engine.initialize()
     try:
         identity = IdentityService(engine, auth_mode="open")

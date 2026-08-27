@@ -7,11 +7,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-from worlditor_mcp.world.store import WorldStore  # noqa: E402
-from worlditor_mcp.world.v4model import ItemDef  # noqa: E402
-from worlditor_mcp.world.v4store import (  # noqa: E402
+from worlditor_mcp.world import ItemDef  # noqa: E402
+from worlditor_mcp.world.store import (  # noqa: E402
     WORLD_LOG_LIMIT,
-    V4WorldStore,
+    WorldStore,  # noqa: E402
 )
 
 
@@ -19,8 +18,8 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-async def _make_store(db_path: Path) -> V4WorldStore:
-    store = V4WorldStore(db_path)
+async def _make_store(db_path: Path) -> WorldStore:
+    store = WorldStore(db_path)
     await store.initialize()
     return store
 
@@ -79,34 +78,6 @@ def test_world_log_capacity(tmp_path):
             assert logs[-1]["data"]["n"] == 50  # 最旧 50 条已清
         finally:
             await store.close()
-
-    _run(fn())
-
-
-def test_coexist_with_v3_store(tmp_path):
-    """与 v3 WorldStore 同库共存：v3 表共享、v4 表独立、互不干扰。"""
-
-    async def fn():
-        db = tmp_path / "world.db"
-        v3 = WorldStore(db)
-        await v3.initialize()
-        v4 = V4WorldStore(db)
-        await v4.initialize()
-        try:
-            # v3 视角：只有 v3 数据
-            assert len(v3.loc_by_pos) == 41
-            # v4 视角：v3 地块 + v4 实体/物品
-            assert len(v4.loc_by_pos) == 41
-            assert len(v4.entities) == 3
-            # v3 写地图 → v4 内存不感知（过渡期已知限制，v4.1 统一）
-            loc = v3.loc_by_pos[("default", 0, 0)]
-            await v3.save_location(loc)  # 不报错即可
-            # v4 写实体 → v3 不感知
-            await v4.set_play_kv("ns", "k", 1)
-            assert ("ns", "k") not in v3.__dict__.get("play_data", {})
-        finally:
-            await v4.close()
-            await v3.close()
 
     _run(fn())
 

@@ -1,4 +1,4 @@
-"""世界服务（v4.1，独立端口 6288；B7 修订为独立 uvicorn 服务）。
+"""世界服务（独立端口 6288；B7 修订为独立 uvicorn 服务）。
 
 WebUI 与远程 MCP 客户端的**单一连接源**：
 
@@ -190,7 +190,7 @@ async def _state(request: Request) -> Response:
         m for m in engine.list_maps() if engine.map_visible_to(m.id, viewer_id, tier)
     ]
     visible_ids = {m.id for m in visible_maps}
-    from ..v3model import location_to_dict, map_to_dict
+    from ..model import location_to_dict, map_to_dict
 
     return JSONResponse(
         {
@@ -414,7 +414,7 @@ def build_http_app(
     Args:
         mcp: FastMCP 实例（工具已注册）。
         identity: 身份服务。
-        engine: V4WorldEngine（快照/SSE 数据源）。
+        engine: WorldEngine（快照/SSE 数据源）。
         loader: PlayLoader（玩法包 web 资源）。
         allowed_origins: CORS 允许的来源（WebUI 独立部署域；内置托管时同源可留空）。
         static_dir: WebUI 构建产物目录（webui/dist）；存在时挂载为根路径静态资源
