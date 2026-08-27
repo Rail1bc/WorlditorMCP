@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.6（2026-08-27）
+
+- refactor: 内核语义命名重构（维护性审查整改）——v4engine→engine、
+  v4store→store、v3model+v4model→model（统一数据模型层）、类名
+  WorldEngine/WorldStore；测试文件语义改名；代码零 v3/v4 版本痕迹
+- feat: 玩法包 **SDK 稳定出口**——`from worlditor_mcp.world import ...`
+  （官方 import 约定，内置包已统一，内核模块路径可自由重构）
+- 删除 v3 WorldStore 死代码（~210 行）与共存测试；engine 分区导航注释；
+  文档同步（DESIGN/PLAY_DEV/GAPS）
+- ⚠️ 行为零变化（193 测试全绿）；玩法包 API 不变，容器部署无感
+
 ## v0.1.5（2026-08-27）
 
 - fix: `/views` 改公共端点（登录页初始化也需视图列表，D7 前端路由共用；
