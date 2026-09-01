@@ -7,13 +7,9 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from pathlib import Path
 
 import pytest
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
 from play_fixtures import PLAY_ID, install_demo_play  # noqa: E402
 
 from worlditor_mcp.world.engine import (  # noqa: E402
@@ -307,48 +303,6 @@ def test_unload_calls_teardown(tmp_path):
         assert engine._play_apis.get(PLAY_ID) is None
 
     _run(_play_scenario(tmp_path, fn))
-
-
-def test_plugin_alias_registration(tmp_path):
-    """AstrBot 真实环境（插件以 data.plugins.* 加载，顶层名缺失）下，
-    PlayLoader 把插件包注册顶层别名，玩法包按文档路径导入可用（同一模块对象）。"""
-
-    top = "worlditor_mcp"
-    fake_root = "data.plugins." + top
-    # 先确保目标子模块已加载（真实环境由 main 链加载 data.plugins.*.world.play）
-    import importlib
-
-    importlib.import_module(top + ".world.play")
-    # 模拟宿主：把当前包以 data.plugins.* 名注册（同一模块对象）
-    sys.modules[fake_root] = sys.modules[top]
-    for k, mod in list(sys.modules.items()):
-        if k.startswith(top + "."):
-            sys.modules[fake_root + k[len(top) :]] = mod
-    # 临时移除顶层别名（真实环境只有 data.plugins.* 形式）
-    saved = {
-        k: sys.modules[k]
-        for k in list(sys.modules)
-        if k == top or k.startswith(top + ".")
-    }
-    for k in saved:
-        del sys.modules[k]
-    try:
-        loader = make_loader(tmp_path / "world.db", tmp_path / "plays")
-        loader.register_plugin_aliases()
-        # 顶层名已注册且指向同一模块对象（无双份加载）
-        assert sys.modules[top] is sys.modules[fake_root]
-        assert (
-            sys.modules[top + ".world.play"] is sys.modules[fake_root + ".world.play"]
-        )
-        # 按文档路径导入 == 真实包路径导入（同一类对象）
-        top_api = importlib.import_module(top + ".world.play")
-        real_api = importlib.import_module(fake_root + ".world.play")
-        assert top_api.PlayLoader is real_api.PlayLoader
-    finally:
-        sys.modules.update(saved)
-        for k in list(sys.modules):
-            if k.startswith(fake_root):
-                del sys.modules[k]
 
 
 def test_version_ok_unit():

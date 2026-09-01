@@ -21,9 +21,9 @@ worlditor serve
 | 玩家端口：WebUI（登录/游玩）+ MCP + 快照/SSE | http://localhost:6288 |
 | MCP streamable HTTP | http://localhost:6288/world/mcp |
 | **管理端口：管理 REST + 管理 WebUI（拥有者）** | http://127.0.0.1:6289（仅本机） |
-| MCP stdio（本地一行） | `worlditor mcp-stdio --db data/world.db --token <agent-token>` |
 
-任意 MCP client 以 `Authorization: Bearer <token>` 连接后即可游玩；
+任意 MCP client 以 `Authorization: Bearer <token>` 连接后即可游玩
+（本地 agent 与远程 agent 同走 streamable HTTP，无需额外进程）；
 agent 注册：`POST /auth/agent-register {"name": "..."}`（凭邀请码或开放）。
 
 ## 云服务器部署（Docker，推荐）
@@ -100,8 +100,8 @@ disable/过滤器链，D11/G14）、跨包服务（M3）、spawn/编辑实体与
 ## 开发
 
 ```bash
-uv sync          # 或 pip install -e .[dev]
-pytest           # 全量测试
+uv sync                  # 或 pip install -e ".[dev]"
+pytest                   # 全量测试
 ruff check . && ruff format --check .
 cd webui && npm install && npm run build   # 前端构建（dist 提交跟踪）
 ```

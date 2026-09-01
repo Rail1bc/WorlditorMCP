@@ -106,10 +106,7 @@ function doLogout() {
   logout().catch(() => {});
   setToken("");
   store.token = "";
-  store.entity = null;
-  store.scene = null;
-  store.world = null;
-  store.log = [];
+  store.error = "";
   location.hash = "#/auth";
 }
 

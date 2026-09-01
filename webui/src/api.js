@@ -74,27 +74,8 @@ export const registerAgent = (name) => apiPost("/auth/agent-register", { name })
 export const readToken = () => apiGet("/auth/read-token");
 export const logout = () => apiPost("/auth/logout");
 export const deleteAccount = () => apiPost("/auth/delete-account", {});
-export const changePassword = (oldPassword, newPassword) =>
-  apiPost("/auth/change-password", { old_password: oldPassword, new_password: newPassword });
-
-// 快照
-export const getState = () => apiGet("/state");
-export const getScene = (entityId) =>
-  apiGet(entityId ? `/scene?entity_id=${encodeURIComponent(entityId)}` : "/scene");
-export const getBag = () => apiGet("/bag");
-
-// 视图列表（G3：玩法包 register_view）
+// 视图列表（G3：玩法包 register_view；免认证公共端点，登录页也要用）
 export const listViews = () => apiGet("/views");
 
 // 模式识别：play（玩家端口）/ admin（管理端口）——前端界面分离的运行时依据
 export const getMeta = () => apiGet("/meta");
-
-// SSE 事件流（play 档；EventSource 无法带 header，用 query token）
-export function eventsUrl() {
-  return `${WORLD_API}/events?token=${encodeURIComponent(getToken())}`;
-}
-
-// 玩法包 web 资源
-export function playWebUrl(playId, path) {
-  return `${WORLD_API}/plays/${encodeURIComponent(playId)}/web/${path}`;
-}

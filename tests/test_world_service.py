@@ -7,12 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 
 import httpx
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
 from play_fixtures import install_demo_play  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine  # noqa: E402
@@ -114,7 +110,7 @@ def test_public_auth_endpoints(tmp_path):
 
 
 def test_snapshot_and_auth(tmp_path):
-    """快照：无 token 401；read 档可读 state/scene；bag 需 play。"""
+    """快照：无 token 401；read 档可读 state/scene。"""
 
     async def fn(client, identity, engine, loader, app):
         assert (await client.get("/state")).status_code == 401
@@ -125,20 +121,14 @@ def test_snapshot_and_auth(tmp_path):
         data = resp.json()
         assert len(data["locations"]) == 41
         assert any(e["kind"] == "merchant" for e in data["entities"])
-        # scene（含 peers + actions）
+        # scene（商贩视角；无玩家在场 → peers 为空）
         merchant = [e for e in data["entities"] if e["kind"] == "merchant"][0]
         resp = await client.get(
             "/scene", params={"entity_id": merchant["id"]}, headers=h
         )
         data = resp.json()
         assert data["scene"]["location"]["name"] == "小镇广场"
-        assert any(p["entity"]["id"] == merchant["id"] for p in data["peers"]) or True
-        # 广场 peers 含 actions（demo 已注册 talk/trade）
-        resp = await client.get(
-            "/scene", params={"entity_id": merchant["id"]}, headers=h
-        )
-        peers = resp.json()["peers"]
-        assert all("actions" in p for p in peers)
+        assert data["peers"] == []
 
     _run(_scenario(tmp_path, fn))
 
@@ -239,7 +229,7 @@ def test_mcp_endpoint_auth(tmp_path):
     """MCP 端点：无 token 401；带 token 放行到 MCP app。
 
     注：MCP streamable HTTP 握手需 anyio 运行时（uvicorn），httpx ASGITransport
-    无法直调；协议级握手已由 stdio 端到端测试覆盖（test_mcp.py）。
+    无法直调；协议级握手见 test_mcp_http_end_to_end（真实 uvicorn 端到端）。
     """
 
     async def fn(client, identity, engine, loader, app):
@@ -285,8 +275,10 @@ def test_scene_actions_with_demo(tmp_path):
             resp = await client.get(
                 "/scene", params={"entity_id": entity["id"]}, headers=h
             )
-            peers = resp.json()["peers"]
-            # 商贩的 peers 是玩家？（广场无其他实体时 peers 空）——直接查 state 实体
+            # 无玩家在场：场景可读、peers 为空（动作暴露见下文玩家注册后的校验）
+            assert resp.status_code == 200
+            assert resp.json()["scene"]["player_id"] == entity["id"]
+            assert resp.json()["peers"] == []
         # 玩家注册后 scene 自己能看到广场实体 actions
         info = await identity.register_human("小明", "pass123")
         resp = await client.get("/scene", headers=_auth(info.token))

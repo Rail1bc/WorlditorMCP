@@ -78,6 +78,3 @@ def test_cli_serve_argparse():
     assert settings.port == 9999
     assert settings.data_dir == Path("x")
     assert settings.admin_key == "k"
-
-    args = _parse_args(["mcp-stdio"])
-    assert args.command == "mcp-stdio"

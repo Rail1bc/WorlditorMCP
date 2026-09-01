@@ -1,4 +1,4 @@
-"""命令行入口：``worlditor serve`` / ``worlditor mcp-stdio``。
+"""命令行入口：``worlditor serve``。
 
 一行命令部署：``pipx install worlditor-mcp && worlditor serve``。
 配置走环境变量（WORLDITOR_*，见 config.py），CLI 参数可覆盖。
@@ -52,10 +52,6 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     serve.add_argument("--static-dir", help="WebUI 构建产物目录（默认自动探测）")
     serve.add_argument("--verbose", action="store_true", help="详细日志")
 
-    sub.add_parser(
-        "mcp-stdio", help="以 stdio 传输启动 MCP 服务（本地 agent 一行接入）"
-    )
-
     return parser.parse_args(argv)
 
 
@@ -66,10 +62,6 @@ def main(argv: list[str] | None = None) -> None:
         _setup_logging(args.verbose)
         settings = _settings_from_args(args)
         asyncio.run(_serve(settings))
-    elif args.command == "mcp-stdio":
-        from .world.mcp.stdio import main as stdio_main
-
-        stdio_main()
 
 
 def _settings_from_args(args: argparse.Namespace) -> Settings:

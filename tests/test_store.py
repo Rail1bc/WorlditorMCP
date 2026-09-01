@@ -82,16 +82,14 @@ def test_world_log_capacity(tmp_path):
     _run(fn())
 
 
-def test_item_crud(tmp_path):
-    """物品定义：save/delete。"""
+def test_item_save(tmp_path):
+    """物品定义：save（定义随玩法包注册/刷新；内核无删除 API）。"""
 
     async def fn():
         store = await _make_store(tmp_path / "world.db")
         try:
             await store.save_item(ItemDef(id="sword_01", name="木剑"))
             assert "sword_01" in store.items
-            await store.delete_item("sword_01")
-            assert "sword_01" not in store.items
         finally:
             await store.close()
 

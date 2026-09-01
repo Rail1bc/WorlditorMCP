@@ -1,18 +1,16 @@
 """进程内 MCP server（B7 / B10 / B11；动态工具 G2/D2）。
 
 工具 = 引擎动作原语的薄封装（协议无关层零改动）；返回**结构化 JSON**
-``{text, ui, effects}``——agent 消费 ``text``，WebUI 渲染 ``ui``，一次实现
-两端复用。
+``{text, ui}``（D12：无 effects；ui 可选）——agent 消费 ``text``，WebUI
+渲染 ``ui``，一次实现两端复用。
 
 连接身份验证（token → 实体）：
 - HTTP（streamable HTTP）：认证中间件校验 ``Authorization: Bearer <token>``，
   把 ``{entity_id, tier}`` 注入每个 JSON-RPC 请求的 ``params._meta``，
   工具经 ``ctx.request_context.meta`` 读取（read 档无实体 → 工具不可用）。
-- stdio（本地）：启动时经 ``--token`` / 环境变量绑定固定实体。
 
-工具集：内置 world_look / world_move / world_say / world_bag / world_use /
-world_interact / world_who（M2 删除，改由玩法包注册）+ 玩法包动态工具
-（register_tool：handler(api, ctx, **args)，身份经 api.caller() 读取）。
+工具集：全部由玩法包 register_tool 动态注册（M2 起内核无内置工具）——
+handler(api, ctx, **args)，身份经 api.caller() 读取（HTTP 经请求 _meta 注入）。
 """
 
 from __future__ import annotations
@@ -55,10 +53,8 @@ def _result(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def _entity_id(ctx: Context, fixed_identity: Any = None) -> str:
-    """从连接身份解析实体 id（HTTP 读 _meta；stdio 用固定身份）。"""
-    if fixed_identity is not None:
-        return fixed_identity.entity_id
+def _entity_id(ctx: Context) -> str:
+    """从连接身份解析实体 id（HTTP 读 _meta；无请求上下文时不可用）。"""
     meta = None
     try:
         meta = ctx.request_context.meta if ctx.request_context else None
@@ -70,9 +66,7 @@ def _entity_id(ctx: Context, fixed_identity: Any = None) -> str:
     return entity_id
 
 
-def build_dynamic_tool(
-    engine: Any, binding: Any, name: str, fixed_identity: Any = None
-) -> Callable:
+def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
     """从玩法包工具登记构建 FastMCP 动态工具（G2）。
 
     handler 签名：``async (api, ctx, **args) -> str | dict``（返回文本或
@@ -82,7 +76,6 @@ def build_dynamic_tool(
         engine: WorldEngine（取玩法包 API 与 handler 调用）。
         binding: engine._tools[name]（_ToolBinding：play_id/handler/params）。
         name: 工具名。
-        fixed_identity: stdio 模式固定身份（HTTP 模式 None，身份经 _meta）。
 
     Returns:
         可传给 FastMCP.add_tool 的动态函数。
@@ -93,7 +86,7 @@ def build_dynamic_tool(
         if api is None:
             return _result({"text": f"玩法包未加载：{binding.play_id}"})
         try:
-            entity_id = _entity_id(ctx, fixed_identity)
+            entity_id = _entity_id(ctx)
         except McpAuthError as e:
             return _result({"text": str(e)})
         token = _caller_entity.set(entity_id)
@@ -137,16 +130,14 @@ def build_dynamic_tool(
     return _dynamic
 
 
-def build_mcp_server(engine: Any, fixed_identity: Any = None) -> FastMCP:
+def build_mcp_server(engine: Any) -> FastMCP:
     """构建 worlditor MCP server（M2：无内置工具，工具全部由玩法包注册）。
 
     工具 = 玩法包 register_tool 动态注册（build_dynamic_tool）；M3 领域包
-    将注册 world_look/world_move 等行为工具。fixed_identity 供 stdio 模式
-    绑定固定身份（HTTP 模式身份经请求 _meta 注入）。
+    将注册 world_look/world_move 等行为工具。身份经请求 _meta 注入。
 
     Args:
         engine: WorldEngine 实例。
-        fixed_identity: stdio 模式绑定的固定身份（TokenInfo）；HTTP 模式传 None。
 
     Returns:
         空工具集 FastMCP 实例（engine.attach_mcp 后动态工具同步注册）。

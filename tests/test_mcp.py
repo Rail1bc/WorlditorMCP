@@ -1,19 +1,16 @@
-"""v4.1 MCP 测试：工具（进程内 call_tool + stdio 端到端）+ HTTP 认证中间件。"""
+"""v4.1 MCP 测试：工具（进程内 call_tool）+ HTTP 认证中间件。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from play_fixtures import install_demo_play  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine  # noqa: E402
 from worlditor_mcp.world.identity import IdentityService  # noqa: E402
-from worlditor_mcp.world.mcp import build_mcp_server  # noqa: E402
+from worlditor_mcp.world.mcp import build_dynamic_tool, build_mcp_server  # noqa: E402
 from worlditor_mcp.world.mcp.http import (  # noqa: E402
     AuthMiddleware,
     _inject_identity,
@@ -61,20 +58,35 @@ async def _scenario(tmp_path: Path, fn):
 
 
 def test_dynamic_tool_via_mcp(tmp_path):
-    """MCP 动态工具：attach_mcp 后玩法包注册的工具可 call_tool。"""
+    """MCP 动态工具：attach_mcp 后玩法包注册的工具可调用；身份经请求 _meta 注入。"""
 
     async def fn(engine, identity, info):
-        mcp = build_mcp_server(engine, fixed_identity=info)
-        engine.attach_mcp(mcp, fixed_identity=info)
-        result = await mcp.call_tool("world_whoami", {})
-        payload = _loads(_content_text(result))
-        assert "我是" in payload["text"]
+        mcp = build_mcp_server(engine)
+        engine.attach_mcp(mcp)
         # 未 attach 的引擎工具集为空（M2 无内置工具）
         mcp2 = build_mcp_server(engine)
         tools = await mcp2.list_tools()
         assert tools == []
-
-    _run(_scenario(tmp_path, fn))
+        # attach 后动态工具同步注册
+        tools = await mcp.list_tools()
+        names = {t.name if hasattr(t, "name") else t[0] for t in tools}
+        assert "world_whoami" in names
+        # 无请求上下文：身份不可用 → 认证守卫拒绝
+        result = await mcp.call_tool("world_whoami", {})
+        payload = _loads(_content_text(result))
+        assert "未认证" in payload["text"]
+        # 注入请求 _meta 后以连接实体身份执行（同 HTTP 路径的身份来源）
+        meta = type(
+            "Meta",
+            (),
+            {"worlditor_entity_id": info.entity_id, "worlditor_tier": info.tier},
+        )()
+        request_ctx = type("RequestContext", (), {"meta": meta})()
+        ctx = type("Context", (), {"request_context": request_ctx})()
+        tool = build_dynamic_tool(engine, engine._tools["world_whoami"], "world_whoami")
+        result = await tool(ctx)
+        payload = _loads(result)
+        assert "我是" in payload["text"]
 
     _run(_scenario(tmp_path, fn))
 
@@ -165,98 +177,6 @@ def test_auth_middleware_injects_identity(tmp_path):
         parsed = json.loads(seen["body"])
         assert parsed["params"]["_meta"]["worlditor_entity_id"] == info.entity_id
         assert parsed["params"]["_meta"]["worlditor_tier"] == info.tier
-
-    _run(_scenario(tmp_path, fn))
-
-
-# ---------- stdio 端到端（真实 MCP client 连接，同 AstrBot 接入方式） ----------
-
-
-def test_stdio_end_to_end(tmp_path):
-    """stdio 入口：MCP client 连接 → 认证 → 工具调用（真实全链路）。"""
-
-    async def fn(engine, identity, info):
-        import os
-
-        from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
-
-        env = dict(os.environ)
-        env["PYTHONPATH"] = str(REPO_ROOT.parent)
-        params = StdioServerParameters(
-            command=sys.executable,
-            args=[
-                "-m",
-                "worlditor_mcp.world.mcp.stdio",
-                "--db",
-                str(tmp_path / "world.db"),
-                "--token",
-                info.token,
-            ],
-            env=env,
-        )
-        async with stdio_client(params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                tools = await session.list_tools()
-                # mcp 1.28 client：ListToolsResult.tools（元素可能是 tuple(name, Tool)）
-                tool_list = tools.tools if hasattr(tools, "tools") else tools
-                names = {t.name if hasattr(t, "name") else t[0] for t in tool_list}
-                # M3：5 个内置领域包工具 + 演示玩法包 world_whoami
-                assert names == {
-                    # movement
-                    "world_look",
-                    "world_move",
-                    "world_turn",
-                    "world_who",
-                    # items
-                    "world_bag",
-                    "world_use",
-                    # player
-                    "world_profile",
-                    # interaction
-                    "world_interact",
-                    # social
-                    "world_say",
-                    "world_log",
-                    # demo 夹具
-                    "world_whoami",
-                }
-                result = await session.call_tool("world_whoami", {})
-                text = result.content[0].text
-                payload = json.loads(text)
-                assert "我是" in payload["text"]
-                # 无效 token 的进程：拒绝启动（无凭据时 stdio 退出）
-        engine2 = WorldEngine(WorldStore(tmp_path / "world.db"))
-        await engine2.initialize()
-        try:
-            bad = IdentityService(engine2)
-            bad_info = await bad.register_agent("坏凭据")
-            await bad.revoke_token(bad_info.token)  # 吊销后无效
-            import subprocess
-
-            proc = await asyncio.to_thread(
-                subprocess.run,
-                [
-                    sys.executable,
-                    "-m",
-                    "worlditor_mcp.world.mcp.stdio",
-                    "--db",
-                    str(tmp_path / "world.db"),
-                    "--token",
-                    bad_info.token,
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-                env=env,
-            )
-            assert proc.returncode != 0
-            assert "凭据无效" in proc.stderr
-        finally:
-            await engine2.terminate()
 
     _run(_scenario(tmp_path, fn))
 

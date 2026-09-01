@@ -1,7 +1,7 @@
 // worlditor_play_movement 视野视图（3×3 网格）。
 // 视图组件协议（G3/D7）：new Function("Vue", "UiBlock", code) 动态加载——
 // 本文件即该函数体：返回 Vue 组件选项对象。
-// 数据通道：MCP tools/call（与 mcpc.js 同协议），动作统一走 MCP（B10）。
+// 数据通道：MCP tools/call（动作统一走 MCP，B10）。
 
 (function (Vue, UiBlock) {
   "use strict";
@@ -21,7 +21,7 @@
   };
   const FACING_ARROW = { up: "▲", right: "▶", down: "▼", left: "◀" };
 
-  // 轻量 MCP 调用（与 webui/src/mcpc.js 同协议；组件无法 import，内嵌实现）
+  // 轻量 MCP 调用（组件无法 import，内嵌实现；协议见 PLAY_DEV §8）
   async function callTool(name, args) {
     const resp = await fetch("/world/mcp", {
       method: "POST",

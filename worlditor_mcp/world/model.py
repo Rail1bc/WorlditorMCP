@@ -24,7 +24,7 @@ from typing import Any
 DIRECTIONS = ("up", "right", "down", "left")
 
 # 方向 ↔ 坐标偏移（行, 列）：up=行-1 / down=行+1 / left=列-1 / right=列+1。
-# 与前端 pages/world/shared.js 的 DIR_OFFSETS 保持一致。
+# 权威定义；前端视图组件（worlditor_play_movement/web/view.js）按此约定渲染网格。
 DIR_OFFSETS: dict[str, tuple[int, int]] = {
     "up": (-1, 0),
     "down": (1, 0),
@@ -420,34 +420,7 @@ def parse_map(value: Any) -> WorldMap:
     )
 
 
-# ---------- 玩家与场景视图（移动 / 展示用） ----------
-
-
-@dataclass
-class Player:
-    """玩家化身：位置 = (map_id, row, col)。人类玩家仅内存；agent 持久化。"""
-
-    player_id: str
-    name: str
-    map_id: str
-    row: int
-    col: int
-    is_agent: bool = False
-    last_active_ts: float = 0.0
-    user_id: str | None = None
-
-    def pos_key(self) -> tuple[str, int, int]:
-        return (self.map_id, self.row, self.col)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "player_id": self.player_id,
-            "name": self.name,
-            "map_id": self.map_id,
-            "row": self.row,
-            "col": self.col,
-            "is_agent": self.is_agent,
-        }
+# ---------- 场景视图（移动 / 展示用） ----------
 
 
 @dataclass
@@ -508,96 +481,6 @@ class WorldTemplate:
     id: str
     name: str
     data: dict[str, Any]
-
-
-def location_to_template_data(loc: Location) -> dict[str, Any]:
-    """把地块捕获为模板负载。"""
-
-    def target_data(t: Target) -> dict[str, Any]:
-        if not t.map_id or t.map_id == loc.map_id:
-            return {"dr": t.row - loc.row, "dc": t.col - loc.col, "weight": t.weight}
-        return {"map_id": t.map_id, "row": t.row, "col": t.col, "weight": t.weight}
-
-    def path_data(p: ConnectionPath) -> dict[str, Any]:
-        d: dict[str, Any] = {"reveal_target": p.reveal_target}
-        if p.label:
-            d["label"] = p.label.to_dict()
-        d["targets"] = [target_data(t) for t in p.targets]
-        return d
-
-    return {
-        "name": loc.name,
-        "description": loc.description.to_dict() if loc.description else None,
-        "connections": {
-            d: {"enabled": s.enabled, "paths": [path_data(p) for p in s.paths]}
-            for d, s in loc.connections.items()
-        },
-    }
-
-
-def parse_template_data(data: Any, *, map_id: str, row: int, col: int) -> Location:
-    """把模板负载解析为放置在 (map_id, row, col) 的地块；非法条目容错丢弃。
-
-    同图目标（{dr, dc}）按放置位置平移；跨图目标（{map_id, row, col}）原样复制。
-    """
-    if not isinstance(data, dict):
-        raise ValueError("模板数据必须是对象")
-    name = data.get("name")
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError("模板名称不能为空")
-    description = None
-    if data.get("description") is not None:
-        description = parse_text_schedule(data.get("description"))
-    conns = default_connections()
-    raw = data.get("connections")
-    if isinstance(raw, dict):
-        for d in DIRECTIONS:
-            slot = raw.get(d)
-            if not isinstance(slot, dict):
-                continue
-            enabled = slot.get("enabled", False)
-            paths = []
-            for p in slot.get("paths") or []:
-                paths.append(_parse_template_path(p, map_id, row, col))
-            conns[d] = ConnectionSlot(
-                direction=d,
-                enabled=enabled if isinstance(enabled, bool) else False,
-                paths=paths,
-            )
-    return Location(
-        map_id=map_id,
-        row=row,
-        col=col,
-        name=name.strip(),
-        description=description,
-        connections=conns,
-    )
-
-
-def _parse_template_path(p: Any, map_id: str, row: int, col: int) -> ConnectionPath:
-    if not isinstance(p, dict):
-        return ConnectionPath()
-    label = parse_text_schedule(p.get("label")) if p.get("label") is not None else None
-    reveal = p.get("reveal_target", True)
-    targets = []
-    for t in p.get("targets") or []:
-        if not isinstance(t, dict):
-            continue
-        weight = _norm_weight(t.get("weight", 1.0))
-        if "dr" in t or "dc" in t:
-            dr, dc = t.get("dr"), t.get("dc")
-            if not _is_int(dr) or not _is_int(dc):
-                continue
-            targets.append(Target(map_id="", row=row + dr, col=col + dc, weight=weight))
-        else:
-            parsed = parse_target(t)
-            if parsed is not None:
-                targets.append(parsed)
-    return ConnectionPath(
-        label=label,
-        reveal_target=reveal if isinstance(reveal, bool) else True,
-        targets=targets,
-    )
 
 
 # ---------- 世界与组织（D15） ----------
@@ -1007,20 +890,3 @@ def item_from_row(row: Any) -> ItemDef | None:
             "attrs": _load_json(row["attrs_json"], {}),
         }
     )
-
-
-__all__ = [
-    "Entity",
-    "EntityKindSpec",
-    "InteractionRequest",
-    "InteractionResult",
-    "ShortCircuit",
-    "ItemDef",
-    "MenuButton",
-    "UiBlock",
-    "WORLD_EVENTS",
-    "entity_db_row",
-    "entity_from_row",
-    "item_db_row",
-    "item_from_row",
-]

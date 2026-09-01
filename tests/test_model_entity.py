@@ -1,10 +1,6 @@
-"""v4 数据模型解析容错测试（v4model.py）。"""
+"""数据模型解析容错测试（model.py）。"""
 
 from __future__ import annotations
-
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from worlditor_mcp.world import (  # noqa: E402
     Entity,

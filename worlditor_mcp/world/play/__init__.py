@@ -101,49 +101,8 @@ class PlayLoader:
 
     # ---------- 加载 ----------
 
-    @staticmethod
-    def _plugin_root_dir() -> Path:
-        """当前包目录（world/play/__init__.py → 上三级 = worlditor_mcp 包）。"""
-        return Path(__file__).resolve().parents[2]
-
-    def register_plugin_aliases(self) -> None:
-        """把当前服务包注册为顶层名（幂等）。
-
-        玩法包统一按文档路径导入：``from worlditor_mcp.api import ...``。
-        独立服务环境包以正规名加载（顶层名已在 sys.modules），此处幂等跳过；
-        保留供宿主以 ``data.plugins.*`` 形式加载的兼容场景。
-        """
-        top = self._plugin_root_dir().name  # worlditor_mcp
-        if top in sys.modules:
-            return
-        root = self._plugin_root_dir()
-        root_name = None
-        for name, mod in list(sys.modules.items()):
-            paths = getattr(mod, "__path__", None)
-            if not paths:
-                continue
-            if not (name == top or name.endswith("." + top)):
-                continue
-            try:
-                resolved = {Path(str(p)).resolve() for p in paths}
-            except (OSError, TypeError):
-                continue
-            if root in resolved or root.parent in resolved:
-                root_name = name
-                break
-        if root_name is None:
-            logger.warning(
-                "[worlditor] 未定位当前服务包模块，玩法包按顶层包名导入可能失败"
-            )
-            return
-        for name, mod in list(sys.modules.items()):
-            if name == root_name or name.startswith(root_name + "."):
-                sys.modules[top + name[len(root_name) :]] = mod
-        logger.info("[worlditor] 服务包顶层别名注册：%s → %s", root_name, top)
-
     async def load_all(self, context: Any | None = None) -> list[PlayInfo]:
         """按启用标记与依赖拓扑加载全部候选玩法包；返回成功加载的列表。"""
-        self.register_plugin_aliases()
         await self._load_disabled_state()
         self._load_errors = {}
         specs: dict[str, tuple[PlaySpec, Path, bool]] = {}

@@ -327,23 +327,6 @@ class IdentityService:
             return None
         return self._engine.store.get_token(token)
 
-    def require_entity(self, info: TokenInfo | None) -> str:
-        """要求 play/admin 档（有实体）；围观者无实体不可动作。
-
-        Raises:
-            IdentityError: 未认证或围观档。
-        """
-        if info is None:
-            raise IdentityError("无效的凭据")
-        if info.tier not in ("play", "admin") or not info.entity_id:
-            raise IdentityError("当前凭据只能围观，不能执行该操作")
-        return info.entity_id
-
-    def require_admin(self, info: TokenInfo | None) -> None:
-        """要求 admin 档（编辑/管理）。"""
-        if info is None or info.tier != "admin":
-            raise IdentityError("需要管理员凭据")
-
     # ---------- 内部 ----------
 
     def _now(self) -> float:

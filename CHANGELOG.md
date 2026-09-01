@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.7（2026-09-01）
+
+- refactor: **移除 `mcp-stdio` 入口**——本地/远程 agent 统一走
+  `worlditor serve` 的 MCP streamable HTTP（`/world/mcp`）；删除
+  stdio.py、CLI 子命令、`fixed_identity` 全链路（`build_mcp_server`/
+  `attach_mcp`/`build_dynamic_tool`）与 stdio 端到端测试；文档同步
+  （README/DESIGN/PLAY_DEV）
+- refactor: 内核清理——删除 effects 结算（D12 无 effects）、`on_say`
+  事件负载（9→8 事件）、`Player`/模板解析函数（model）、未用
+  `require_entity`/`require_admin`（identity）、`delete_item`（物品定义
+  随玩法包注册刷新，无内核删除 API）；字段容器与 state 语义明确分离
+- refactor: WebUI 精简——删除 mcpc.js 与 474 行未用样式；dist 重新构建
+- test: 移除 REPO_ROOT/`v4` 文档痕迹等测试清理；`test_play_integration`
+  收敛（46 行删除）
+- docs: GAPS 追加 G15 观察（多世界激活未覆盖 MCP 工具与原语分派）
+- ⚠️ 行为零变化（191 测试全绿）；玩法包 API 不变，单机部署无感
+
 ## v0.1.6（2026-08-27）
 
 - refactor: 内核语义命名重构（维护性审查整改）——v4engine→engine、

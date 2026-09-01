@@ -130,8 +130,8 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 |---|---|
 | `move(entity_id, direction, path=None)` | 路径移动（**分派入口**：可被过滤器改写/覆盖，返回 SceneView） |
 | `move_entity(entity_id, map_id, row, col)` | 直接位移（行为驱动，不做阻挡检查） |
-| `set_attrs(entity_id, patch)` / `get_attrs(entity_id)` | 实体 attrs（玩法数据）合并读写 |
-| `set_data(entity_id, name, value)` / `get_data(entity_id, name)` | 字段原语（**可被覆盖/禁用**，D11） |
+| `set_attrs(entity_id, patch)` / `get_attrs(entity_id)` | 实体 attrs（玩法数据）合并读写（不经原语分派） |
+| `set_data(entity_id, name, value)` / `get_data(entity_id, name)` | 字段原语（**可被覆盖/禁用**，D11）；读写容器 = attrs，与 `set_attrs` 同容器 |
 | `interact(entity_id, target_id, action, args, item_id)` | 交互（**可被覆盖/禁用**） |
 | `emit(event, data, log=False)` | 自定义事件（SSE 推送；`log=True` 写 world_log） |
 | `place_entity(kind, map_id, row, col, ...)` / `remove_entity(id)` | 实体生命周期（D14；身份化实体不可 remove） |
@@ -145,7 +145,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 ### 身份
 
-`caller()`：当前调用者实体 id（MCP 工具 handler 内有效；HTTP 模式经请求身份注入，stdio 模式为固定身份）。无身份返回 `None`。
+`caller()`：当前调用者实体 id（MCP 工具 handler 内有效；身份经请求 `_meta` 注入）。无身份返回 `None`。
 
 **账户生命周期（内核提供，玩法包感知）**：
 - 玩家可永久注销（`POST /auth/delete-account`，级联吊销凭据 + 删除玩家实体）；管理员可删除账户/变更角色（`PATCH /admin/accounts/{id}`，变更即吊销旧凭据强制重登）
@@ -273,6 +273,10 @@ SSE 推送；`log=True` 才写 world_log（高频事件勿写，5000 条上限�
 
 - 实体数据 = attrs（玩法数据，内核不解释）+ state（动态状态）；kind 注册可声明
   字段 schema `{name, label, type, default?}`（type: str/int/float/bool/json）
+- **两套字段读写**：`set_attrs`（合并写、不经分派，日常推荐）与 `set_data`
+  （走原语分派，可被其他包 override/过滤器拦截）**都写 attrs**，对同一实体
+  二选一即可；`state` 独立（`set_state`/`get_state`，门开/关、`block_move`
+  动态覆盖等，不经分派），两者互不干扰
 - 分类字段：`add_category_fields` 使该分类全部 kind 获得字段；有效字段 =
   kind 声明 ∪ 分类声明（运行时合并）；实例可写任意未声明字段（buff 等临时效果）
 - 物品定义同构（ItemDef + 字段）

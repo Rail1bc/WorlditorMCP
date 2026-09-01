@@ -40,6 +40,7 @@ from .model import (
     target_to_dict,
 )
 
+# 表结构版本（沿用 v4 引擎表布局；D13 无迁移逻辑，仅写入 world_meta 记录）
 SCHEMA_VERSION = "4"
 DEFAULT_MAP_ID = "default"
 
@@ -436,7 +437,7 @@ WORLD_LOG_LIMIT = 5000
 # 内置广播道具（B2：say scope=world 消耗 1 个 + 每人 30s 冷却）
 MEGAPHONE_ITEM_ID = "megaphone"
 
-# ---------- v4 种子数据 ----------
+# ---------- 种子数据（entities / items 播种） ----------
 
 
 def _seed_entities() -> list[Entity]:
@@ -509,7 +510,8 @@ def _seed_items() -> list[ItemDef]:
 
 # ---------- 表 SQL ----------
 
-_V4_TABLES_SQL = """
+# 实体/身份/世界层：实体、物品、玩法数据、日志、账户、凭据、世界与组织
+_ENTITY_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS entities (
     id TEXT PRIMARY KEY,
     map_id TEXT NOT NULL,
@@ -593,7 +595,8 @@ CREATE TABLE IF NOT EXISTS world_maps (
 
 DEFAULT_WORLD_ID = "default"
 
-_V3_TABLES_SQL = """
+# 地图层：地图 / 地块 / 模板 / 世界元数据
+_MAP_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS maps (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -625,7 +628,7 @@ CREATE TABLE IF NOT EXISTS world_meta (
 
 
 class WorldStore:
-    """v4 世界的 SQLite 持久化 + 内存态（启动时全量载入）。"""
+    """worlditor SQLite 持久化 + 内存态（启动时全量载入）。"""
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = Path(db_path)
@@ -650,13 +653,13 @@ class WorldStore:
     # ---------- 生命周期 ----------
 
     async def initialize(self) -> None:
-        """打开连接、建表、幂等播种（v3 种子 + v4 种子）、全量载入内存。"""
+        """打开连接、建表、幂等播种（maps/entities/items/worlds 各自空则播）、全量载入内存。"""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = await aiosqlite.connect(self.db_path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA journal_mode=WAL")
-        await self._conn.executescript(_V3_TABLES_SQL)
-        await self._conn.executescript(_V4_TABLES_SQL)
+        await self._conn.executescript(_MAP_TABLES_SQL)
+        await self._conn.executescript(_ENTITY_TABLES_SQL)
         await self._seed_if_empty()
         await self._load_all()
 
@@ -909,7 +912,7 @@ class WorldStore:
         if map_id not in self.maps:
             raise KeyError(f"地图不存在：{map_id}")
         for entity in [e for e in self.entities.values() if e.map_id == map_id]:
-            await self.delete_entity(entity.id)  # 级联背包
+            await self.delete_entity(entity.id)  # 级联清理实体（在场校验由引擎负责）
         await self._conn.execute("DELETE FROM locations WHERE map_id = ?", (map_id,))
         await self._conn.execute("DELETE FROM maps WHERE id = ?", (map_id,))
         await self._conn.execute("DELETE FROM world_maps WHERE map_id = ?", (map_id,))
@@ -978,13 +981,6 @@ class WorldStore:
             item_db_row(item),
         )
         await self._conn.commit()
-
-    async def delete_item(self, item_id: str) -> None:
-        """删除物品定义。"""
-        assert self._conn is not None
-        await self._conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
-        await self._conn.commit()
-        self.items.pop(item_id, None)
 
     # ---------- 玩法数据 KV（namespace 隔离） ----------
 

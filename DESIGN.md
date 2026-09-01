@@ -69,7 +69,7 @@
 | `place_entity` / `remove_entity` | 实体生命周期（玩法包可 spawn/despawn，D14；身份化实体不可 remove） | 内核 |
 | `move` | 路径移动（身份化实体） | 内核：读 connections → 按权重抽目标（死引用剔除） |
 | `move_entity(map,row,col)` | 直接位移（行为驱动，传送语义） | 内核 |
-| `set_data` / `get_data` | 字段读写（合并写 / 全量读） | 内核 |
+| `set_data` / `get_data` | 字段读写（合并写 / 全量读；容器 = attrs） | 内核 |
 | `interact` | 交互通道：handler 命令式调内核原语（无 effects 清单，D12）；结果 = text + ui | 内核：按 register_interaction 注册表分发（动作校验 → handler → on_interact 事件）；override 则整体替换该通道（校验/事件语义由覆盖者决定，同 §2.4 末句） |
 
 行为原语默认实现由内核提供，**可被玩法包覆盖/禁用**（§2.4，D11）；
@@ -153,8 +153,9 @@ place/remove 可调用但不可覆盖（治理域，D14）。
 
 **玩法包绑定（世界激活集合）**：
 - 玩法包**全局加载一次**（注册表机制不变，避免多实例），世界声明激活集合
-- 分发时（interact / event / kind / tool）按实体所在世界过滤：未激活包的
-  交互不可用（"这个世界的规则不同"）、事件不触发、工具不可见
+- 分发时（interact / event / kind）按实体所在世界过滤：未激活包的
+  交互不可用（"这个世界的规则不同"）、事件不触发；MCP 工具与原语
+  过滤器/覆盖当前为全局生效（多世界工具级过滤待需求，见 GAPS G15）
 - 切换即时生效：给某世界停用一个包 = 该世界失去对应行为，其他世界不受影响
 
 **跳转（MCP）**：
@@ -167,8 +168,9 @@ place/remove 可调用但不可覆盖（治理域，D14）。
 
 ### 3.1 实体（字段化 + 分类，D9 / D10）
 
-实体只保留**最小身份与位置**，一切数据以**字段**承载；实体类型（kind）可挂
-**分类标签**，供玩法包精准选取一组实体类型。
+实体只保留**最小身份与位置**，一切数据以**字段**承载（容器为 `attrs` 与
+`state` 两个 dict）；实体类型（kind）可挂**分类标签**，供玩法包精准选取
+一组实体类型。
 
 ```python
 @dataclass
@@ -180,7 +182,8 @@ class Entity:
     col: int
     name: str        # 显示主元素
     desc: str = ""
-    data: dict = {}  # 字段：kind 声明 ∪ 分类声明 ∪ 实例自定义（内核不解释）
+    attrs: dict = {}  # 玩法数据（hp/exp/gold/facing...，内核不解释；set_attrs/set_data 写）
+    state: dict = {}  # 动态状态（门开/关、block_move 动态覆盖...；set_state 写，不经分派）
     user_id: str | None = None   # 身份化实体绑定
     last_active_ts: float = 0.0
 ```
@@ -191,15 +194,15 @@ class Entity:
 |---|---|---|
 | kind 声明字段 | `register_entity_kind(kind, ..., fields=[{name,label,type,default?}])` | 类型级 schema，UI 通用渲染（角色卡/编辑表单）；类型 str/int/float/bool/json |
 | 向已有 kind 追加字段 | `add_kind_fields(kind, fields)` | 玩法包 B 给其他包的 kind 加字段（如 monster 加 poison） |
-| 实例任意字段 | `set_data(entity_id, name, value)` | buff 等临时效果，无需声明；未声明字段 UI 降级通用键值 |
+| 实例任意字段 | `set_data(entity_id, name, value)`（容器 = attrs，走原语分派） | buff 等临时效果，无需声明；未声明字段 UI 降级通用键值。同容器的 `set_attrs` 为合并写（不经分派），二选一 |
 
 **分类标签（D10）**：`register_entity_kind(..., categories=("生物",))`——kind 挂
 标签（宽松，无需预注册）；**分类字段** `add_category_fields("生物", [hp])` 使该
 分类全部 kind 获得字段（运行时合并：kind 有效字段 = kind 声明 ∪ 所属分类声明）；
 `list_kinds(category=None)` 精准选取（"给所有生物加血量" / "战斗目标 = 同地块生物"）。
 
-**其他规则**：阻挡判定 `data["block_move"]` 优先于 kind 声明（门开/关玩法包写
-字段）；实体无内置背包字段（D8）。
+**其他规则**：阻挡判定 `state["block_move"]` 优先于 kind 声明（门开/关玩法包写
+state）；实体无内置背包字段（D8）。
 
 ### 3.2 物品定义（D8：定义回内核，持有下沉）
 
@@ -211,7 +214,7 @@ class ItemDef:
     id: str          # 类型键（如 apple），物品定义即"类型"
     name: str
     desc: str = ""
-    data: dict = {}  # 字段（同实体字段机制）
+    attrs: dict = {}  # 字段（同实体字段机制：玩法数据容器）
 ```
 
 - `register_item_def(item, fields=[...])` 定义物品类型；`add_item_fields(item_id,
@@ -416,4 +419,4 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
   供参考/复用；主线（WorlditorMCP）不含插件时代兼容代码（D4/D13）
 - 内核代码已迁移（M0 完成，见 §7.2）；行为层按 v5 设计整体以玩法包重写
 - 所有玩法包（内置+社区）面向同一套内核 API 与协议，与宿主形态无关
-- AstrBot（或任意 agent 框架）经 MCP streamable HTTP / stdio 接入，无插件耦合
+- AstrBot（或任意 agent 框架）经 MCP streamable HTTP 接入，无插件耦合

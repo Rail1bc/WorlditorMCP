@@ -1,4 +1,4 @@
-"""v4.1 身份服务测试（B13 自助注册 / B4 token 三档）。
+"""身份服务测试（B13 自助注册 / B4 token 三档）。
 
 覆盖：open/invite/closed 三模式、人类注册/登录/改密/注销、agent 注册、
 admin_key、read 档围观、凭据吊销、邀请码、持久化。
@@ -10,8 +10,6 @@ import asyncio
 from pathlib import Path
 
 import pytest
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from worlditor_mcp.world.engine import WorldEngine  # noqa: E402
 from worlditor_mcp.world.identity import (  # noqa: E402
@@ -107,9 +105,6 @@ def test_read_token_open_only(tmp_path):
         info = await identity.create_read_token()
         assert info.tier == "read" and info.kind == "readonly"
         assert info.entity_id == ""
-        # 围观者不能动作
-        with pytest.raises(IdentityError, match="只能围观"):
-            identity.require_entity(info)
 
     _run_scenario(tmp_path, fn)
 

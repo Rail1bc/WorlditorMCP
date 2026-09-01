@@ -243,7 +243,7 @@ class WorlditorPlayAPI:
         """注册 MCP 工具：handler(api, ctx, **args)，返回 str 或 {text, ui}。
 
         同名工具冲突**报错拒绝**（D2）；参数类型限
-        string/integer/number/boolean（FastMCP schema 生成）。
+        string/integer/number/boolean/array（G11；FastMCP schema 生成）。
         """
         self._engine.register_tool(
             name,

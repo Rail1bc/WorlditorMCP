@@ -1,7 +1,7 @@
 // worlditor_play_items 背包视图。
 // 视图组件协议（G3/D7）：new Function("Vue", "UiBlock", code) 动态加载——
 // 本文件即该函数体：返回 Vue 组件选项对象。
-// 数据通道：MCP tools/call（与 mcpc.js 同协议，动作统一走 MCP）。
+// 数据通道：MCP tools/call（动作统一走 MCP，B10）。
 
 (function (Vue, UiBlock) {
   "use strict";

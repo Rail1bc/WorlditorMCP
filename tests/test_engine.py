@@ -13,8 +13,6 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
 from worlditor_mcp.world import (  # noqa: E402
     InteractionRequest,
     InteractionResult,

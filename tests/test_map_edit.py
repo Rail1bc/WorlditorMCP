@@ -1,4 +1,4 @@
-"""v4 引擎扩展测试：地图编辑原语（v4.1 admin 端点用）+ 事件流订阅（SSE 出口）。"""
+"""引擎扩展测试：地图编辑原语（admin 端点用）+ 事件流订阅（SSE 出口）。"""
 
 from __future__ import annotations
 
@@ -6,8 +6,6 @@ import asyncio
 from pathlib import Path
 
 import pytest
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from worlditor_mcp.world.engine import (  # noqa: E402
     WorldEngine,

@@ -5,7 +5,7 @@
   玩家/agent 为身份化实体（可认证绑定、位置持久化）。
 - **物品**：定义（ItemDef）为内核注册表；持有下沉玩法包（D8，无 inventories）。
 - **交互**：handler 命令式调用内核原语（D12，无 effects 清单）。
-- **事件总线**：单一事件源（9 事件），玩法包订阅 + world_log 历史；
+- **事件总线**：单一事件源（8 事件），玩法包订阅 + world_log 历史；
   SSE 是事件总线的序列化出口。
 - **注册表**：kind / interaction / event / ui 组件与钩子，玩法包扩展入口。
 - **on_tick 调度**（A3）：单循环按 1s 粒度检查，各 handler 各自间隔，
@@ -15,17 +15,17 @@
 锁内调用，handler 内再调 API 原语必须重入（普通 asyncio.Lock 会自锁死锁）。
 时钟与 PRNG 注入（``clock`` / ``rand``），保证时间感知描述与加权抽取可测。
 
-分区地图（行号随演化漂移，按节定位的辅助锚点）：
-- 注册表区：~380–1010（物品/kind/字段/工具/视图/服务/原语分派/交互/事件/UI/清理）
-- 事件总线区：~1030–1220（emit / SSE 推送 / tick 循环）
-- 只读查询：~1220–1330（实体/地图/世界/组织）
-- 世界组织 CRUD：~1330–1430（worlds / folders / 归属）
-- 实体原语：~1430–1530（place / remove / 身份化受控删除）
-- 移动区：~1530–1610（move / move_entity / 默认实现）
-- 数据字段区：~1610–1670（attrs / state / set/get_data）
-- 场景构建：~1670–1760（路径解析 / 阻挡 / SceneView）
-- 交互区：~1760–1840（interact / 可用动作）
-- 地图编辑区：~1840–2210（地块 / 连接 / 地图 / 模板 / 删除级联）
+分区地图（按节定位的辅助锚点；行号随演化漂移属正常）：
+- 注册表区：~395–1030（物品/kind/字段/工具/视图/服务/原语分派/交互/事件/UI/清理）
+- 事件总线区：~1031–1227（emit / SSE 推送 / tick 循环）
+- 只读查询：~1229–1326（实体/地图/世界/组织）
+- 世界组织 CRUD：~1330–1432（worlds / folders / 归属）
+- 实体原语：~1441–1532（place / remove / 身份化受控删除）
+- 移动区：~1534–1616（move / move_entity / 默认实现）
+- 数据字段区：~1648–1673（attrs / state / set/get_data）
+- 场景构建：~1675–1756（路径解析 / 阻挡 / SceneView）
+- 交互区：~1758–1845（interact / 可用动作）
+- 地图编辑区：~1849–2207（地块 / 连接 / 地图 / 模板 / 删除级联）
 """
 
 from __future__ import annotations
@@ -328,7 +328,6 @@ class WorldEngine:
         # D2/G2 MCP 工具注册表（玩法包 register_tool；MCP server 动态同步）
         self._tools: dict[str, _ToolBinding] = {}
         self._mcp: Any | None = None  # 绑定后工具注册/清理即时 add/remove
-        self._mcp_fixed_identity: Any = None  # stdio 固定身份（HTTP 模式 None）
         # G3/D7 视图注册表（玩法包 register_view；GET /views 暴露）
         self._views: dict[str, _ViewBinding] = {}
         # M3 跨包服务注册表：play_id -> name -> binding（玩法包间同步调用）
@@ -517,15 +516,9 @@ class WorldEngine:
 
     # ---------- MCP 工具注册（D2 / G2） ----------
 
-    def attach_mcp(self, mcp: Any, fixed_identity: Any = None) -> None:
-        """绑定 MCP server：此后 register_tool / 清理工具即时同步 add/remove。
-
-        Args:
-            mcp: FastMCP 实例。
-            fixed_identity: stdio 模式固定身份（HTTP 模式为 None，身份经 _meta）。
-        """
+    def attach_mcp(self, mcp: Any) -> None:
+        """绑定 MCP server：此后 register_tool / 清理工具即时同步 add/remove。"""
         self._mcp = mcp
-        self._mcp_fixed_identity = fixed_identity
         for name in list(self._tools):
             self._sync_tool_add(name)
 
@@ -538,9 +531,7 @@ class WorldEngine:
         from .mcp import build_dynamic_tool
 
         self._mcp.add_tool(
-            build_dynamic_tool(
-                self, binding, name, fixed_identity=self._mcp_fixed_identity
-            ),
+            build_dynamic_tool(self, binding, name),
             name=name,
             description=binding.description or f"玩法包工具：{name}",
         )
@@ -1155,10 +1146,7 @@ class WorldEngine:
             "ts": self._now_ts(),
             "entity": entity.to_dict() if entity else None,
         }
-        if event == "on_say":
-            payload["text"] = args[1]
-            payload["scope"] = args[2]
-        elif event == "on_entity_move":
+        if event == "on_entity_move":
             payload["from"] = list(args[1])
             payload["to"] = list(args[2])
         elif event == "on_entity_enter":
@@ -1490,7 +1478,7 @@ class WorldEngine:
             return entity
 
     async def remove_entity(self, entity_id: str) -> None:
-        """移除实体（地图编辑，admin；B8）并级联清理其背包。
+        """移除实体（地图编辑，admin；B8）。
 
         D14：身份化实体（玩家/agent）**不可**被玩法包移除——账户注销走
         ``delete_identity_entity``（身份服务受控通道）。
@@ -1652,7 +1640,7 @@ class WorldEngine:
         return await self._dispatch_primitive("set_data", entity_id, name, value)
 
     async def _set_data_default(self, entity_id: str, name: str, value: Any) -> None:
-        """默认字段写：合并写实体字段（v5 字段容器 = attrs，M2 与 state 合并）。"""
+        """默认字段写：合并写实体玩法字段（容器 = attrs；state 走 set_state，不经分派）。"""
         name = _clean_required(name, "字段名")
         async with self._lock:
             entity = self._require_entity(entity_id)
@@ -1665,7 +1653,7 @@ class WorldEngine:
         return await self._dispatch_primitive("get_data", entity_id, name)
 
     async def _get_data_default(self, entity_id: str, name: str | None = None) -> Any:
-        """默认字段读：单字段或全量（v5 字段容器 = attrs，M2 与 state 合并）。"""
+        """默认字段读：单字段或全量（容器 = attrs）。"""
         entity = self._require_entity(entity_id)
         if name is not None:
             name = _clean_required(name, "字段名")
@@ -1778,13 +1766,12 @@ class WorldEngine:
         args: dict | None = None,
         item_id: str | None = None,
     ) -> InteractionResult:
-        """默认交互：校验可用动作（C3）→ 玩法包 handler → 结算 effects。
+        """默认交互：校验可用动作（C3）→ 玩法包 handler → 返回结果。
 
         交互 handler 异常会被隔离并转为可展示的 WorldError（不拖垮内核）。
 
         Raises:
-            WorldError: 实体/目标不存在、动作不可用或未实现、handler 出错、
-                effects 结算失败。
+            WorldError: 实体/目标不存在、动作不可用或未实现、handler 出错。
         """
         async with self._lock:
             entity = self._require_entity(entity_id)
