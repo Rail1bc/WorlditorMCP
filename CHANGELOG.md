@@ -15,6 +15,10 @@
   管理端改用 `.side-logout` 归位侧栏底部
 - test: 管理端 UI 端到端验证脚本（Playwright + 系统 Edge，.uitools/ 本地工具
   不入库）：导航四页切换 + 地图编辑器进入 + 布局断言全通过
+- fix: **.gitignore GBK 编码损坏导致 CI 发布失败**——追加 .uitools/ 行时用
+  PowerShell Add-Content（GBK 编码）写入中文注释，hatchling 构建时读取
+  .gitignore（VCS 排除模式）UTF-8 解码崩溃（0xb1），`pip install -e .`
+  在 CI 失败（release 不产镜像）；已以纯 UTF-8 重写并全仓库编码普查
 
 ## v0.1.12（2026-09-10）
 
