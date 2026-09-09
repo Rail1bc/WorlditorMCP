@@ -1,50 +1,49 @@
 <template>
-  <div class="app">
+  <!-- 管理端口：管理台全宽布局（PC 优先，脱离玩家端 720px 容器） -->
+  <AdminPanel v-if="hasToken && store.mode === 'admin'" />
+
+  <div v-else class="app">
     <!-- 未登录 → 登录/注册 -->
     <AuthPage v-if="!hasToken" />
 
     <template v-else>
-      <!-- 管理端口：管理面板（D16 界面分离）；玩家端口：视图宿主（D7/G3） -->
-      <AdminPanel v-if="store.mode === 'admin'" />
+      <!-- 玩家端口：视图宿主（D7/G3） -->
+      <header class="app-header">
+        <span class="brand">worlditor</span>
+        <nav class="view-tabs">
+          <button
+            v-for="v in views"
+            :key="v.key"
+            class="tab"
+            :class="{ on: route === '/view/' + v.key }"
+            @click="goto(v.key)"
+          >
+            <span class="tab-icon">{{ v.icon || "📄" }}</span>
+            <span>{{ v.title }}</span>
+          </button>
+        </nav>
+        <button class="logout-btn" title="永久注销账户" @click="doDeleteAccount">🗑</button>
+        <button class="logout-btn" title="退出登录" @click="doLogout">⎋</button>
+      </header>
 
-      <template v-else>
-        <header class="app-header">
-          <span class="brand">worlditor</span>
-          <nav class="view-tabs">
-            <button
-              v-for="v in views"
-              :key="v.key"
-              class="tab"
-              :class="{ on: route === '/view/' + v.key }"
-              @click="goto(v.key)"
-            >
-              <span class="tab-icon">{{ v.icon || "📄" }}</span>
-              <span>{{ v.title }}</span>
-            </button>
-          </nav>
-          <button class="logout-btn" title="永久注销账户" @click="doDeleteAccount">🗑</button>
-          <button class="logout-btn" title="退出登录" @click="doLogout">⎋</button>
-        </header>
-
-        <main class="app-main">
-          <component
-            v-if="currentView && currentView.comp"
-            :is="currentView.comp"
-            :view="currentView.meta"
-          />
-          <div v-else class="empty-hint">
-            <p>这个世界还没有任何视图。</p>
-            <p class="dim">管理员可在管理端口（默认 6289）安装玩法包。</p>
-          </div>
-        </main>
-      </template>
-
-      <!-- 全局错误提示 -->
-      <Transition name="fade">
-        <div v-if="store.error" class="toast">{{ store.error }}</div>
-      </Transition>
+      <main class="app-main">
+        <component
+          v-if="currentView && currentView.comp"
+          :is="currentView.comp"
+          :view="currentView.meta"
+        />
+        <div v-else class="empty-hint">
+          <p>这个世界还没有任何视图。</p>
+          <p class="dim">管理员可在管理端口（默认 6289）安装玩法包。</p>
+        </div>
+      </main>
     </template>
   </div>
+
+  <!-- 全局错误提示 -->
+  <Transition name="fade">
+    <div v-if="store.error" class="toast">{{ store.error }}</div>
+  </Transition>
 </template>
 
 <script setup>

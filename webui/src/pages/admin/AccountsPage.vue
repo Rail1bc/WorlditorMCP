@@ -25,48 +25,54 @@
 
     <p v-if="error" class="error-text">{{ error }}</p>
 
-    <table class="table">
-      <thead>
-        <tr>
-          <th>用户名</th>
-          <th>角色</th>
-          <th>注册时间</th>
-          <th>玩家实体</th>
-          <th>凭据</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="a in rows" :key="a.id" :class="{ on: openId === a.id }">
-          <td>
-            <button class="link" @click="toggleDetails(a)">{{ a.username }}</button>
-          </td>
-          <td>
-            <span class="tag" :class="a.role === 'admin' ? 'tag-admin' : ''">{{
-              a.role === "admin" ? "管理员" : "用户"
-            }}</span>
-          </td>
-          <td>{{ fmtTime(a.created_ts) }}</td>
-          <td>
-            <template v-if="a.entity">
-              {{ a.entity.name }}
-              <span class="dim">（{{ a.entity.kind }} · {{ a.entity.map_id }} {{ a.entity.row }},{{ a.entity.col }}）</span>
-            </template>
-            <span v-else class="dim">—</span>
-          </td>
-          <td>{{ a.token_count }}</td>
-          <td class="ops">
-            <button class="btn btn-ghost" @click="toggleRole(a)">
-              {{ a.role === "admin" ? "降级" : "升为管理员" }}
-            </button>
-            <button class="btn btn-danger" @click="removeAccount(a)">删除</button>
-          </td>
-        </tr>
-        <tr v-if="!rows.length && !busy">
-          <td colspan="6" class="dim center">没有匹配的账户</td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>用户名</th>
+            <th>角色</th>
+            <th>注册时间</th>
+            <th>玩家实体</th>
+            <th>凭据</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="a in rows" :key="a.id" :class="{ on: openId === a.id }">
+            <td>
+              <button class="link" @click="toggleDetails(a)">{{ a.username }}</button>
+            </td>
+            <td>
+              <span class="tag" :class="a.role === 'admin' ? 'tag-admin' : ''">{{
+                a.role === "admin" ? "管理员" : "用户"
+              }}</span>
+            </td>
+            <td>{{ fmtTime(a.created_ts) }}</td>
+            <td>
+              <template v-if="a.entity">
+                {{ a.entity.name }}
+                <span class="dim"
+                  >（{{ a.entity.kind }} · {{ a.entity.map_id }} {{ a.entity.row }},{{
+                    a.entity.col
+                  }}）</span
+                >
+              </template>
+              <span v-else class="dim">—</span>
+            </td>
+            <td>{{ a.token_count }}</td>
+            <td class="ops">
+              <button class="btn btn-ghost" @click="toggleRole(a)">
+                {{ a.role === "admin" ? "降级" : "升为管理员" }}
+              </button>
+              <button class="btn btn-danger" @click="removeAccount(a)">删除</button>
+            </td>
+          </tr>
+          <tr v-if="!rows.length && !busy">
+            <td colspan="6" class="dim center">没有匹配的账户</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <div class="pager">
       <button class="btn btn-ghost" :disabled="page <= 1" @click="prev">‹ 上一页</button>
@@ -77,36 +83,38 @@
     </div>
 
     <!-- 详情：凭据明细 -->
-    <div v-if="details" class="detail card-inner">
+    <div v-if="details" class="detail card">
       <h3>
         {{ details.username }} 的凭据
         <button class="btn btn-ghost" @click="openId = null">收起</button>
       </h3>
-      <table class="table">
-        <thead>
-          <tr>
-            <th>token</th>
-            <th>档位</th>
-            <th>类型</th>
-            <th>实体</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="t in detailsTokens" :key="t.token">
-            <td><code class="token" :title="t.token">{{ t.token.slice(0, 12) }}…</code></td>
-            <td>{{ t.tier }}</td>
-            <td>{{ t.kind }}</td>
-            <td class="dim">{{ t.entity_id.slice(0, 8) }}…</td>
-            <td class="ops">
-              <button class="btn btn-danger" @click="revokeToken(t.token)">吊销</button>
-            </td>
-          </tr>
-          <tr v-if="!detailsTokens.length">
-            <td colspan="5" class="dim center">无未吊销凭据</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>token</th>
+              <th>档位</th>
+              <th>类型</th>
+              <th>实体</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="t in detailsTokens" :key="t.token">
+              <td><code class="token" :title="t.token">{{ t.token.slice(0, 12) }}…</code></td>
+              <td>{{ t.tier }}</td>
+              <td>{{ t.kind }}</td>
+              <td class="dim">{{ t.entity_id.slice(0, 8) }}…</td>
+              <td class="ops">
+                <button class="btn btn-danger" @click="revokeToken(t.token)">吊销</button>
+              </td>
+            </tr>
+            <tr v-if="!detailsTokens.length">
+              <td colspan="5" class="dim center">无未吊销凭据</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </section>
 </template>

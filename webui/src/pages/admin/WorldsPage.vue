@@ -30,8 +30,8 @@
 
       <!-- 组织树 -->
       <div class="folders">
-        <details v-if="childFolders(w).length || mapsOf(w, null).length">
-          <summary>根目录（{{ mapsOf(w, null).length }} 张地图）</summary>
+        <div class="folder-root">
+          <div class="folder-title">根目录（{{ mapsOf(w, null).length }} 张地图）</div>
           <div class="folder-body">
             <div v-for="m in mapsOf(w, null)" :key="m.id" class="map-row">
               <button class="link" @click="openMap(m.id)">🗺 {{ m.id }}</button>
@@ -47,11 +47,14 @@
                 </option>
               </select>
             </div>
+            <p v-if="!mapsOf(w, null).length" class="dim">
+              尚无地图——先在管理端创建，或经玩法包 API 生成
+            </p>
           </div>
-        </details>
+        </div>
 
         <div v-for="f in childFolders(w)" :key="f.id" class="folder">
-          <details>
+          <details open>
             <summary>
               📁 {{ f.name }}
               <button class="mini-btn" @click.prevent="renameFolder(f)">重命名</button>
@@ -76,7 +79,7 @@
           </details>
           <!-- 递归子文件夹（一层展示即可；更深层以树形缩进递归） -->
           <div v-for="sub in childFolders(w, f.id)" :key="sub.id" class="folder sub">
-            <details>
+            <details open>
               <summary>
                 📁 {{ sub.name }}
                 <button class="mini-btn" @click.prevent="renameFolder(sub)">重命名</button>
@@ -299,6 +302,14 @@ onMounted(async () => {
 .folders {
   margin-top: 8px;
   font-size: 14px;
+}
+.folder-root {
+  margin-bottom: 6px;
+}
+.folder-title {
+  color: var(--text-dim);
+  font-size: 13px;
+  padding: 4px 0;
 }
 .folder {
   margin-left: 10px;

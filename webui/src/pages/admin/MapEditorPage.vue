@@ -768,4 +768,19 @@ onMounted(async () => {
   color: var(--text-dim);
   font-size: 13px;
 }
+
+/* 窄屏：编辑器纵向堆叠，侧栏全宽 */
+@media (max-width: 900px) {
+  .editor {
+    flex-direction: column;
+  }
+  .side {
+    width: 100%;
+    border-left: none;
+    padding-left: 0;
+  }
+  .grid-wrap {
+    overflow-x: auto;
+  }
+}
 </style>

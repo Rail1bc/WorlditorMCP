@@ -484,4 +484,22 @@ onMounted(load);
   text-align: center;
   padding: 24px 0;
 }
+
+/* 窄屏：列表横排滚动，详情在下 */
+@media (max-width: 900px) {
+  .play-body {
+    flex-direction: column;
+  }
+  .play-list {
+    width: 100%;
+    max-height: none;
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .play-item {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+}
 </style>

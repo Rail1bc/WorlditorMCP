@@ -20,3 +20,6 @@ data/
 
 # WebUI 前端（依赖不提交；构建产物 webui/dist 提交——服务内置托管需要随发行）
 node_modules/
+
+# ������֤���ߣ�playwright �ȣ�
+.uitools/
