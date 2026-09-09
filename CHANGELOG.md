@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.11（2026-09-10）
+
+- fix: **玩家壳零部件引用彻底化**——world_profile 移除对 items 包的
+  探测与调用（`ITEMS_PLAY`/`_has_service`/`bag_get`/返回 `bag` 键全部删除）：
+  背包文本信息归 items 包 `world_bag` 工具，背包面板仍由 ui_hook 注入——
+  player 包 main.py 零部件引用（新增静态契约测试 test_player_shell_zero_part_reference）
+- docs: DESIGN §4.5 / PLAY_DEV §11 软依赖表述更新（玩家壳零引用；
+  `list_services` 探测方式不再作为消费方推荐模式）
+- ⚠️ 工具返回结构变化：`world_profile` 不再返回 `bag` 键、text 不含背包摘要
+  （agent 查背包请用 `world_bag`——行为零损失）；内核零改动
+
 ## v0.1.10（2026-09-09）
 
 - feat: **背包追加到玩家界面（玩家聚合视图）**——player 包 world_profile 生成

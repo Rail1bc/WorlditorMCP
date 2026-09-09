@@ -306,8 +306,11 @@ SSE 推送；`log=True` 才写 world_log（高频事件勿写，5000 条上限�
   部件包 hook 追加自己的面板（items 背包面板 = list 子块，provider 内调服务
   读取数据）。**软依赖天然**：部件包未装 → hook 不存在 → 玩家视图无该面板，
   无需任何探测代码
-- **软依赖**：消费方先 `api.list_services()` 探测，**存在才用**（示范：
-  player 包 world_profile 的背包摘要——items 不在时仅显示属性）
+- **软依赖（玩家壳零部件引用）**：部件信息通道归部件包——文本 = 部件包自己
+  的工具（背包 = `world_bag`）；面板 = `ui_hook` 注入。**玩家壳不 import、
+  不探测、不调用部件包**（内置示范：worlditor_play_player 的 main.py 无任何
+  部件 play_id，有测试强制此契约）；`requires.plays` 只用于原子能力硬依赖
+  （如 starter 发货必须 items 服务）
 - **不写硬依赖**：`requires.plays` 仅用于"没有它部件无法工作"（如 starter 发货
   必须 items）；纯展示/可选功能一律软依赖
 - 参考实现：`worlditor_play_starter`（出生礼包）与 `worlditor_play_items`（背包）

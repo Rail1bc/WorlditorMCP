@@ -4,12 +4,14 @@
 - **角色视图（玩家聚合界面）**：world_profile 工具返回角色卡 UiBlock——
   其他包经 ui_hook 向 character 块注入部件面板（items 包注入背包面板 =
   「背包追加到玩家界面」），视图组件用 UiBlockRenderer 通用渲染。
-- **world_profile 工具**：我的角色信息（attrs + 可选背包摘要文本 + 聚合 ui）。
+- **world_profile 工具**：我的角色信息（attrs + 聚合 ui）。
 
 设计：玩家 = 内核身份实体（player/agent kind，身份红线在内核）+ **可追加
-部件**——出生礼包 = worlditor_play_starter、背包 = worlditor_play_items…
-本包是「玩家壳」，**零包间硬依赖**：背包摘要文本为软依赖（list_services
-探测 bag_get），背包面板 UI 由 items 包 hook 注入（hook 注册与否天然软依赖）。
+部件**——出生礼包、背包、技能树等各为独立部件包（本包只以通用概念描述，
+不引用任何具体部件包）：
+- 部件信息文本由部件包自己的工具提供（背包 = world_bag）；
+- 部件面板 UI 由部件包 ui_hook 注入（hook 注册与否 = 天然软依赖）；
+- 本包只描述"我是谁、我的属性"，从不搬运部件数据。
 """
 
 from __future__ import annotations
@@ -17,7 +19,6 @@ from __future__ import annotations
 from worlditor_mcp.world import UiBlock, WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
-ITEMS_PLAY = "worlditor_play_items"
 _VIEW_KEY = "player"
 
 
@@ -26,7 +27,8 @@ def setup(api: WorlditorPlayAPI, context) -> None:
     api.register_tool(
         "world_profile",
         _world_profile,
-        description="查看你的角色信息：属性与（可选）背包摘要。",
+        description="查看你的角色信息：名称/类型与属性（部件信息见各部件工具，"
+        "如背包 world_bag）。",
     )
     api.register_view(
         _VIEW_KEY,
@@ -49,31 +51,16 @@ def _me(api: WorlditorPlayAPI):
     return entity
 
 
-def _has_service(api: WorlditorPlayAPI, play_id: str, name: str) -> bool:
-    """部件软依赖探测：服务提供方已加载（本体包未装时玩家壳仍可用）。"""
-    return any(
-        s["play_id"] == play_id and s["name"] == name for s in api.list_services()
-    )
-
-
 async def _world_profile(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
-    """我的角色卡：attrs + （可选）背包摘要——背包为软依赖部件。
+    """我的角色卡：attrs + 聚合 ui（角色卡 + 各包 hook 注入的部件面板）。
 
-    ui = 角色卡 UiBlock（character）——其他包经 ui_hook 注入部件面板
-    （items 包在 character 块后追加背包面板 = 「背包追加到玩家界面」）。
+    玩家壳零部件引用：背包面板由 items 包 ui_hook 注入（本包无感知）；
+    背包文本信息用 items 包的 world_bag 工具（职责归部件包）。
     """
     me = _me(api)
     text = f"{me.name}（{me.kind}）：" + "、".join(
         f"{k}={v}" for k, v in me.attrs.items()
     )
-    bag = None
-    if _has_service(api, ITEMS_PLAY, "bag_get"):
-        bag = await api.call_service(ITEMS_PLAY, "bag_get", entity_id=me.id)
-        lines = [f"{s['name']}×{s['count']}" for s in bag["slots"]]
-        text += "；背包：" + ("、".join(lines) if lines else "空的")
-    else:
-        text += "；背包：未启用（安装 worlditor_play_items 后可见）"
-    # UI：角色卡（部件注入点——apply_ui_hooks 服务端展开各包 ui_hook）
     card = UiBlock(
         kind="character",
         data={
@@ -87,7 +74,6 @@ async def _world_profile(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
         "name": me.name,
         "kind": me.kind,
         "attrs": dict(me.attrs),
-        "bag": bag,
         "ui": card.to_dict() if card else None,
     }
 

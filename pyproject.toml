@@ -1,5 +1,5 @@
-# worlditor-mcp：一行命令部署的世界服务（MCP 为第一公民协议）。
-# 自包含配置：任何环境下在本仓库内直接运行 ruff/pytest 口径一致。
+﻿# worlditor-mcp锛氫竴琛屽懡浠ら儴缃茬殑涓栫晫鏈嶅姟锛圡CP 涓虹涓€鍏皯鍗忚锛夈€?
+# 鑷寘鍚厤缃細浠讳綍鐜涓嬪湪鏈粨搴撳唴鐩存帴杩愯 ruff/pytest 鍙ｅ緞涓€鑷淬€?
 
 [build-system]
 requires = ["hatchling"]
@@ -7,8 +7,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "worlditor-mcp"
-version = "0.1.10"
-description = "一行命令部署的世界服务：MCP 世界（任意 agent 框架可接入）+ 自带 WebUI（登录/游玩/管理）"
+version = "0.1.11"
+description = "涓€琛屽懡浠ら儴缃茬殑涓栫晫鏈嶅姟锛歁CP 涓栫晫锛堜换鎰?agent 妗嗘灦鍙帴鍏ワ級+ 鑷甫 WebUI锛堢櫥褰?娓哥帺/绠＄悊锛?
 readme = "README.md"
 license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.10"
@@ -16,10 +16,10 @@ authors = [{ name = "Rail1bc" }]
 keywords = ["mcp", "world", "agent", "game"]
 dependencies = [
     "aiosqlite",
-    "mcp>=1.28,<2",  # 2.x 重构删除了 mcp.server.fastmcp，锁定 1.x 线
+    "mcp>=1.28,<2",  # 2.x 閲嶆瀯鍒犻櫎浜?mcp.server.fastmcp锛岄攣瀹?1.x 绾?
     "pyyaml",
     "starlette",
-    "tzdata",  # zoneinfo 时区数据：Windows 必装；slim 容器同样缺系统时区
+    "tzdata",  # zoneinfo 鏃跺尯鏁版嵁锛歐indows 蹇呰锛泂lim 瀹瑰櫒鍚屾牱缂虹郴缁熸椂鍖?
     "uvicorn",
 ]
 
@@ -28,7 +28,7 @@ worlditor = "worlditor_mcp.cli:main"
 
 [project.optional-dependencies]
 dev = [
-    "httpx",  # starlette TestClient（CI 同款）
+    "httpx",  # starlette TestClient锛圕I 鍚屾锛?
     "pytest",
     "pytest-asyncio",
     "ruff",
@@ -36,7 +36,7 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["worlditor_mcp"]
-# WebUI 构建产物打进 wheel（pip 安装场景也有界面；整体 ~150KB）
+# WebUI 鏋勫缓浜х墿鎵撹繘 wheel锛坧ip 瀹夎鍦烘櫙涔熸湁鐣岄潰锛涙暣浣?~150KB锛?
 [tool.hatch.build.targets.wheel.force-include]
 "webui/dist" = "worlditor_mcp/webui_dist"
 
@@ -45,7 +45,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py310"  # 与 requires-python >=3.10 对齐
+target-version = "py310"  # 涓?requires-python >=3.10 瀵归綈
 
 [tool.ruff.lint]
 select = ["F", "W", "E", "ASYNC", "C4", "Q", "I", "UP"]

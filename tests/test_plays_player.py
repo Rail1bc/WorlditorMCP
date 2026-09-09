@@ -79,30 +79,6 @@ def test_player_loads_without_items(tmp_path):
     _run(_scenario(tmp_path / "world.db", fn))
 
 
-def test_world_profile_soft_dependency(tmp_path):
-    """软依赖：items 未装时 world_profile 无背包摘要（仅 attrs）。"""
-
-    async def fn(engine, loader):
-        _copy_only(loader, tmp_path, PLAYER_ID)
-        await loader.load_all()
-        player_pkg = next(
-            p
-            for p in loader.plays.values()
-            if p.play_id == PLAYER_ID  # noqa: SLF001
-        )
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
-
-        async def call():
-            return await player_pkg.module._world_profile(player_pkg.api, None)  # noqa: SLF001
-
-        result = await _call_as(player.id, call)
-        assert result["name"] == "小明"
-        assert result["bag"] is None
-        assert "未启用" in result["text"]
-
-    _run(_scenario(tmp_path / "world.db", fn))
-
-
 def test_world_profile_ui_aggregates_bag_panel(tmp_path):
     """部件 UI 注入：玩家视图 ui = 角色卡 + items 包 hook 追加的背包面板。"""
 
@@ -120,16 +96,15 @@ def test_world_profile_ui_aggregates_bag_panel(tmp_path):
         assert len(bags) == 1
         assert "背包" in bags[0]["title"]
         assert any("苹果×3" == item["label"] for item in bags[0]["items"])
-        # text/bag 兼容通道仍在（agent 摘要）
-        assert any(
-            s["item_id"] == "apple" and s["count"] == 3 for s in result["bag"]["slots"]
-        )
+        # 文本通道不含背包摘要——背包信息归 items 包 world_bag 工具（玩家壳零知情）
+        assert "背包" not in result["text"]
+        assert "bag" not in result
 
     _run(_scenario(tmp_path / "world.db", fn))
 
 
 def test_world_profile_ui_without_items(tmp_path):
-    """软依赖：items 未装载时玩家视图 ui 仅角色卡（无背包面板）。"""
+    """零软依赖：items 未装载时玩家视图 ui 仅角色卡（无背包面板），外壳正常。"""
 
     async def fn(engine, loader):
         _copy_only(loader, tmp_path, PLAYER_ID)
@@ -147,7 +122,19 @@ def test_world_profile_ui_without_items(tmp_path):
         result = await _call_as(player.id, call)
         assert result["ui"]["kind"] == "character"
         assert result["ui"]["blocks"] == []
-        assert result["bag"] is None
+        assert "bag" not in result
+        assert result["text"].startswith("小明（player）")
+
+    _run(_scenario(tmp_path / "world.db", fn))
+
+
+def test_player_shell_zero_part_reference(tmp_path):
+    """玩家壳零部件引用契约：main.py 中不得出现任何部件 play_id（静态约束）。"""
+
+    async def fn(engine, loader):
+        source = (BUILTIN_DIR / PLAYER_ID / "main.py").read_text(encoding="utf-8")
+        for other in ("worlditor_play_items", "worlditor_play_starter"):
+            assert other not in source, f"玩家壳不得引用 {other}"
 
     _run(_scenario(tmp_path / "world.db", fn))
 
@@ -156,7 +143,7 @@ def test_world_profile_ui_without_items(tmp_path):
 
 
 def test_world_profile_tool(tmp_path):
-    """world_profile：角色信息（attrs + 背包摘要，跨包读 items 服务）。"""
+    """world_profile：角色信息（attrs + 聚合 ui；背包数据不搬运——归 world_bag）。"""
 
     async def fn(engine, loader):
         plays = await loader.load_all()
@@ -169,9 +156,8 @@ def test_world_profile_tool(tmp_path):
         result = await _call_as(player.id, call)
         assert result["name"] == "小明"
         assert result["attrs"]["gold"] == 100  # 礼包由 starter 包发放
-        assert any(
-            s["item_id"] == "apple" and s["count"] == 3 for s in result["bag"]["slots"]
-        )
+        assert result["ui"]["kind"] == "character"
+        assert "bag" not in result  # 玩家壳不搬运部件数据
 
     _run(_scenario(tmp_path / "world.db", fn))
 
