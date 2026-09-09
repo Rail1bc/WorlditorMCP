@@ -22,7 +22,8 @@ from starlette.staticfiles import StaticFiles
 
 from .world import WorldError
 from .world.identity import IdentityError
-from .world.mcp.http import AuthMiddleware, _identity_of
+from .world.mcp.http import AuthMiddleware, _identity_of, _play_web
+from .world.model import location_to_dict
 
 
 def _require_admin(request: Request) -> None:
@@ -139,7 +140,10 @@ async def _worlds_list(request: Request) -> Response:
     worlds = []
     for w in engine.list_worlds():
         d = w.to_dict()
-        d["maps"] = engine.list_world_maps(w.id)
+        d["maps"] = [
+            {"id": map_id, "folder_id": engine.store.map_folder.get(map_id)}
+            for map_id in engine.list_world_maps(w.id)
+        ]
         d["folders"] = [f.to_dict() for f in engine.list_folders(w.id)]
         worlds.append(d)
     return JSONResponse({"worlds": worlds})
@@ -257,19 +261,41 @@ async def _folder_delete(request: Request) -> Response:
 
 
 async def _accounts(request: Request) -> Response:
+    """账户检索（q 用户名子串 / role 过滤 / 分页 / 排序）+ 凭据与邀请码概览。
+
+    账户行附带：创建时间、关联玩家实体（名称/位置/最近活跃）、未吊销
+    凭据数——对应管理端「账户管理」页的复杂检索与管理（v0.1.12）。
+    """
     _require_admin(request)
+    params = request.query_params
+    result = _identity(request).search_accounts(
+        q=params.get("q", ""),
+        role=params.get("role", ""),
+        page=int(params.get("page") or 1),
+        page_size=int(params.get("page_size") or 200),
+        sort=params.get("sort", "created_desc"),
+    )
     store = _engine(request).store
     return JSONResponse(
         {
-            "accounts": [
-                {"id": a.id, "username": a.username, "role": a.role}
-                for a in store.accounts.values()
-            ],
+            **result,
             "tokens": [
                 {"token": t.token[:8] + "...", "tier": t.tier, "kind": t.kind}
                 for t in store.tokens.values()
             ],
             "invite_codes": _identity(request).list_invite_codes(),
+        }
+    )
+
+
+async def _account_tokens(request: Request) -> Response:
+    """账户未吊销凭据明细（完整 token 供吊销；管理端详情用）。"""
+    _require_admin(request)
+    return JSONResponse(
+        {
+            "tokens": _identity(request).list_account_tokens(
+                request.path_params["account_id"]
+            )
         }
     )
 
@@ -324,6 +350,101 @@ async def _token_revoke(request: Request) -> Response:
     return _ok()
 
 
+# ---------- 地图读（v0.1.12：管理端地图编辑器数据面） ----------
+
+
+async def _maps_list(request: Request) -> Response:
+    """地图列表（含世界归属 / 地块数 / 实体数）。"""
+    _require_admin(request)
+    engine = _engine(request)
+    maps = []
+    for m in engine.list_maps():
+        locations = [loc for loc in engine.list_locations() if loc.map_id == m.id]
+        maps.append(
+            {
+                "id": m.id,
+                "name": m.name,
+                "description": m.description.to_dict() if m.description else None,
+                "timezone": m.timezone,
+                "spawn_row": m.spawn_row,
+                "spawn_col": m.spawn_col,
+                "visible": m.visible,
+                "world_id": engine.map_world(m.id),
+                "location_count": len(locations),
+                "entity_count": len(engine.list_entities(map_id=m.id)),
+            }
+        )
+    return JSONResponse({"maps": maps})
+
+
+async def _map_detail(request: Request) -> Response:
+    """地图详情：元数据 + 全部地块（connections slot 全量）+ 实体 + 归属。"""
+    _require_admin(request)
+    engine = _engine(request)
+    map_id = request.path_params["map_id"]
+    m = engine.get_map(map_id)
+    if m is None:
+        return _err(WorldError(f"地图不存在：{map_id}"))
+    locations = [
+        location_to_dict(loc) for loc in engine.list_locations() if loc.map_id == map_id
+    ]
+    entities = [e.to_dict() for e in engine.list_entities(map_id=map_id)]
+    return JSONResponse(
+        {
+            "map": {
+                "id": m.id,
+                "name": m.name,
+                "description": m.description.to_dict() if m.description else None,
+                "timezone": m.timezone,
+                "spawn_row": m.spawn_row,
+                "spawn_col": m.spawn_col,
+                "visible": m.visible,
+                "world_id": engine.map_world(map_id),
+            },
+            "locations": locations,
+            "entities": entities,
+        }
+    )
+
+
+async def _templates_list(request: Request) -> Response:
+    """模板列表（GET /admin/templates：复制预设）。"""
+    _require_admin(request)
+    return JSONResponse(
+        {
+            "templates": [
+                {"id": t.id, "name": t.name, "data": t.data}
+                for t in _engine(request).store.templates.values()
+            ]
+        }
+    )
+
+
+# ---------- 玩法包管理页（v0.1.12：注册协议代理） ----------
+
+
+async def _play_pages(request: Request) -> Response:
+    """管理页清单（管理端导航：玩法包注册的管理页入口）。"""
+    _require_admin(request)
+    return JSONResponse({"pages": _engine(request).list_admin_pages()})
+
+
+async def _play_page_action(request: Request) -> Response:
+    """管理页动作代理：锁内调用玩法包 handler（数据语义归玩法包）。"""
+    _require_admin(request)
+    data = await _json_body(request)
+    try:
+        result = await _engine(request).call_admin_page_action(
+            request.path_params["play_id"],
+            request.path_params["page_key"],
+            request.path_params["action"],
+            **data,
+        )
+    except WorldError as e:
+        return _err(e)
+    return _ok(result)
+
+
 # ---------- 地图编辑（D14 管理人类入口） ----------
 
 
@@ -345,6 +466,24 @@ async def _map_create(request: Request) -> Response:
     return _ok({"id": m.id, "name": m.name})
 
 
+async def _map_update(request: Request) -> Response:
+    """地图属性编辑（PATCH；body 未提供的字段不变；description=null 清空）。"""
+    _require_admin(request)
+    data = await _json_body(request)
+    want: dict[str, Any] = {}
+    for key in ("name", "description", "timezone", "visible"):
+        if key in data:
+            want[key] = data[key]
+    if data.get("spawn_row") is not None or data.get("spawn_col") is not None:
+        want["spawn_row"] = int(data.get("spawn_row") or 0)
+        want["spawn_col"] = int(data.get("spawn_col") or 0)
+    try:
+        m = await _engine(request).update_map(request.path_params["map_id"], **want)
+    except WorldError as e:
+        return _err(e)
+    return _ok({"id": m.id, "name": m.name})
+
+
 async def _map_delete(request: Request) -> Response:
     _require_admin(request)
     try:
@@ -354,17 +493,33 @@ async def _map_delete(request: Request) -> Response:
     return _ok()
 
 
-async def _location_update(request: Request) -> Response:
+async def _location_upsert(request: Request) -> Response:
+    """地块 upsert（地图编辑器）：不存在 = 创建（name 必填），存在 = 更新。
+
+    坐标只读；description = None 显式清空；纯字符串/分时段 dict 均接受。
+    """
     _require_admin(request)
     data = await _json_body(request)
+    engine = _engine(request)
+    map_id = str(data.get("map_id") or "")
+    row, col = int(data.get("row") or 0), int(data.get("col") or 0)
     try:
-        loc = await _engine(request).update_location(
-            str(data.get("map_id") or ""),
-            int(data.get("row") or 0),
-            int(data.get("col") or 0),
-            name=data.get("name"),
-            description=data.get("description"),
-        )
+        if engine.get_location(map_id, row, col) is None:
+            loc = await engine.create_location(
+                map_id,
+                row,
+                col,
+                name=str(data.get("name") or ""),
+                description=data.get("description"),
+            )
+        else:
+            loc = await engine.update_location(
+                map_id,
+                row,
+                col,
+                name=str(data.get("name") or ""),
+                description=data.get("description"),
+            )
     except WorldError as e:
         return _err(e)
     return _ok({"map_id": loc.map_id, "row": loc.row, "col": loc.col})
@@ -446,6 +601,23 @@ async def _entity_create(request: Request) -> Response:
     return _ok({"id": entity.id})
 
 
+async def _entity_update(request: Request) -> Response:
+    """实体编辑（PATCH；body 未提供的字段不变；attrs/state 整体替换）。"""
+    _require_admin(request)
+    data = await _json_body(request)
+    want: dict[str, Any] = {}
+    for key in ("name", "desc", "attrs", "state"):
+        if key in data:
+            want[key] = data[key]
+    try:
+        entity = await _engine(request).update_entity(
+            request.path_params["entity_id"], **want
+        )
+    except WorldError as e:
+        return _err(e)
+    return _ok({"id": entity.id})
+
+
 async def _entity_delete(request: Request) -> Response:
     _require_admin(request)
     try:
@@ -508,26 +680,40 @@ def build_admin_app(
         Route("/admin/accounts", _accounts),
         Route("/admin/accounts/{account_id}", _account_delete, methods=["DELETE"]),
         Route("/admin/accounts/{account_id}", _account_update, methods=["PATCH"]),
+        Route("/admin/accounts/{account_id}/tokens", _account_tokens),
         Route("/admin/invite-codes", _invite_create, methods=["POST"]),
         Route("/admin/invite-codes/{code}", _invite_revoke, methods=["DELETE"]),
         Route("/admin/tokens/{token}", _token_revoke, methods=["DELETE"]),
         Route("/admin/maps", _map_create, methods=["POST"]),
+        Route("/admin/maps", _maps_list),
+        Route("/admin/maps/{map_id}", _map_detail),
+        Route("/admin/maps/{map_id}", _map_update, methods=["PATCH"]),
         Route("/admin/maps/{map_id}", _map_delete, methods=["DELETE"]),
-        Route("/admin/locations", _location_update, methods=["POST"]),
+        Route("/admin/locations", _location_upsert, methods=["POST"]),
         Route("/admin/locations", _location_delete, methods=["DELETE"]),
         Route("/admin/connections", _connection_update, methods=["POST"]),
         Route("/admin/templates", _template_create, methods=["POST"]),
+        Route("/admin/templates", _templates_list),
         Route(
             "/admin/templates/{template_id}",
             _template_delete,
             methods=["DELETE"],
         ),
         Route("/admin/entities", _entity_create, methods=["POST"]),
+        Route("/admin/entities/{entity_id}", _entity_update, methods=["PATCH"]),
         Route(
             "/admin/entities/{entity_id}",
             _entity_delete,
             methods=["DELETE"],
         ),
+        Route("/admin/play-pages", _play_pages),
+        Route(
+            "/admin/play-pages/{play_id}/{page_key}/{action}",
+            _play_page_action,
+            methods=["POST"],
+        ),
+        # 玩法包 web 资源（管理页组件加载；认证后访问，同玩家端口语义）
+        Route("/plays/{play_id}/web/{path:path}", _play_web, methods=["GET"]),
     ]
     public_exact: tuple[str, ...] = ()
     if static_dir is not None:

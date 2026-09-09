@@ -297,3 +297,107 @@ def test_world_use_unknown_item(tmp_path):
             await _call_as(player.id, lambda: call("megaphone"))
 
     _run(_scenario(tmp_path / "world.db", fn))
+
+
+# ---------- 物品管理页（v0.1.12 管理页协议） ----------
+
+
+def test_items_admin_page_actions(tmp_path):
+    """物品管理页：注册清单 + list/create/update/delete + 落库。"""
+
+    async def fn(engine, loader):
+        plays = await loader.load_all()
+        assert any(p.play_id == ITEMS_ID for p in plays)
+        # 注册清单：items 包注册了「物品管理」页
+        pages = [p for p in engine.list_admin_pages() if p["play_id"] == ITEMS_ID]
+        assert pages and pages[0]["key"] == "items"
+        assert set(pages[0]["actions"]) == {"list", "create", "update", "delete"}
+        assert pages[0]["component_url"] == f"/plays/{ITEMS_ID}/web/admin-items.js"
+        # create
+        created = await engine.call_admin_page_action(
+            ITEMS_ID,
+            "items",
+            "create",
+            id="knife",
+            name="小刀",
+            desc="锋利的小刀",
+            stackable=False,
+        )
+        assert created["id"] == "knife"
+        assert engine.store.items["knife"].stackable is False
+        # update（部分字段）
+        await engine.call_admin_page_action(
+            ITEMS_ID,
+            "items",
+            "update",
+            id="knife",
+            name="匕首",
+            use_action="slash",
+            attrs={"dmg": 3},
+        )
+        it = engine.store.items["knife"]
+        assert it.name == "匕首"
+        assert it.use_action == "slash"
+        assert it.attrs == {"dmg": 3}
+        assert it.desc == "锋利的小刀"  # 未提供字段不变
+        # list
+        data = await engine.call_admin_page_action(ITEMS_ID, "items", "list")
+        assert any(i["id"] == "knife" for i in data["items"])
+        # delete
+        await engine.call_admin_page_action(ITEMS_ID, "items", "delete", id="knife")
+        assert "knife" not in engine.store.items
+        # 校验错误：创建已有 / 删除不存在
+        with pytest.raises(WorldError, match="已存在"):
+            await engine.call_admin_page_action(
+                ITEMS_ID, "items", "create", id="apple", name="苹果2"
+            )
+        with pytest.raises(WorldError, match="不存在"):
+            await engine.call_admin_page_action(ITEMS_ID, "items", "delete", id="ghost")
+
+    _run(_scenario(tmp_path / "world.db", fn))
+
+
+def test_items_admin_create_persisted(tmp_path):
+    """物品管理页创建的定义落库（flush_item_defs 生效；重启后仍在）。"""
+
+    async def fn(engine, loader):
+        await loader.load_all()
+        await engine.call_admin_page_action(
+            ITEMS_ID,
+            "items",
+            "create",
+            id="elixir",
+            name="回血药水",
+            desc="瞬间恢复",
+            attrs={"heal": 50},
+        )
+        # WAL 模式下另一连接可直接验证落库
+        import sqlite3
+
+        conn = sqlite3.connect(tmp_path / "world.db")
+        try:
+            row = conn.execute(
+                "SELECT name, attrs_json FROM items WHERE id='elixir'"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None
+        assert row[0] == "回血药水"
+        assert "heal" in row[1]
+
+    async def main():
+        engine = WorldEngine(WorldStore(tmp_path / "world.db"))
+        loader = PlayLoader(
+            engine,
+            plays_dir=tmp_path / "plays",
+            builtin_dir=BUILTIN_DIR,
+            worlditor_version="0.1.0",
+        )
+        await engine.initialize()
+        try:
+            return await fn(engine, loader)
+        except Exception:
+            await engine.terminate()
+            raise
+
+    _run(main())

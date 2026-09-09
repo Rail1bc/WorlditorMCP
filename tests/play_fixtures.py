@@ -91,6 +91,45 @@ def setup(api: WorlditorPlayAPI, context) -> None:
         _whoami,
         description="查看你的当前身份",
     )
+    # 管理页（v0.1.12 协议）：货单管理——actions 演示玩法包自管数据语义
+    api.register_admin_page(
+        "shop",
+        title="货单管理",
+        icon="🧺",
+        component_url="/plays/worlditor_play_demo/web/admin-shop.js",
+        actions={
+            "list": _admin_shop_list,
+            "set_price": _admin_shop_set_price,
+        },
+    )
+
+
+async def _admin_shop_list(api: WorlditorPlayAPI, **params) -> dict:
+    """管理页动作：货单（kv 覆盖层 {item_id: price}，默认 = data/shop.json）。"""
+    raw = api.kv_get("shop_prices", {})
+    prices = raw if isinstance(raw, dict) else {}
+    merged = {item_id: dict(info) for item_id, info in _SHOP.items()}
+    for item_id, price in prices.items():
+        if item_id in merged:
+            merged[item_id]["price"] = price
+        else:
+            merged[item_id] = {"price": price, "label": item_id}
+    return {"prices": merged}
+
+
+async def _admin_shop_set_price(api: WorlditorPlayAPI, **params) -> dict:
+    """管理页动作：改价（写入 play_data，命名空间 = 本包 id）。"""
+    item_id = str(params.get("item_id") or "")
+    price = params.get("price")
+    if item_id not in _SHOP:
+        raise ValueError(f"商品不存在：{item_id}")
+    if not isinstance(price, int) or isinstance(price, bool) or price < 0:
+        raise ValueError("价格必须是非负整数")
+    raw = api.kv_get("shop_prices", {})
+    prices = raw if isinstance(raw, dict) else {}
+    prices[item_id] = price
+    await api.kv_set("shop_prices", prices)
+    return {"item_id": item_id, "price": price}
 
 
 async def _whoami(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
@@ -271,4 +310,10 @@ def install_demo_play(plays_root: Path) -> Path:
     data_dir = play_dir / "data"
     data_dir.mkdir(exist_ok=True)
     (data_dir / "shop.json").write_text(_SHOP_JSON, encoding="utf-8")
+    web_dir = play_dir / "web"
+    web_dir.mkdir(exist_ok=True)
+    (web_dir / "admin-shop.js").write_text(
+        "// 测试夹具管理页组件（真实组件协议见 DESIGN §4.4 视图注入）\n",
+        encoding="utf-8",
+    )
     return play_dir

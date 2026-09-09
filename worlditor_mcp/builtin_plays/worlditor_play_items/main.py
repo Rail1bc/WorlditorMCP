@@ -79,6 +79,97 @@ def setup(api: WorlditorPlayAPI, context) -> None:
     # 部件 UI 注入：角色卡（character 块）后追加背包面板——
     # 「背包追加到玩家界面」（player 视图 = 角色卡 + 各包 hook 注入的面板）
     api.register_ui_hook("character", "after", _profile_bag_panel)
+    # 管理页（v0.1.12 协议）：物品定义管理（id/name/desc/icon/stackable/use_action/attrs）
+    api.register_admin_page(
+        "items",
+        title="物品管理",
+        icon="⚗️",
+        component_url=f"/plays/{api.play_id}/web/admin-items.js",
+        actions={
+            "list": _admin_items_list,
+            "create": _admin_item_create,
+            "update": _admin_item_update,
+            "delete": _admin_item_delete,
+        },
+    )
+
+
+# ---------- 物品定义管理（管理页 actions；语义与校验由本包负责） ----------
+
+
+def _admin_items_list(api: WorlditorPlayAPI, **params) -> dict:
+    """管理页动作：物品定义全量列表。"""
+    return {"items": api.list_item_defs()}
+
+
+def _check_item_payload(raw: dict) -> tuple[str, str]:
+    """校验物品 id / 名称（管理页共用）。"""
+    item_id = str(raw.get("id") or "").strip()
+    name = str(raw.get("name") or "").strip()
+    if not item_id:
+        raise WorldError("物品 id 不能为空")
+    if not name:
+        raise WorldError("物品名称不能为空")
+    return item_id, name
+
+
+async def _admin_item_create(api: WorlditorPlayAPI, **params) -> dict:
+    """管理页动作：新建物品定义（attrs 可选 dict；创建即落库）。"""
+    item_id, name = _check_item_payload(params)
+    if api.get_item_def(item_id) is not None:
+        raise WorldError(f"物品已存在：{item_id}")
+    attrs = params.get("attrs") or {}
+    if not isinstance(attrs, dict):
+        raise WorldError("attrs 必须是对象")
+    api.register_item_def(
+        ItemDef(
+            id=item_id,
+            name=name,
+            desc=str(params.get("desc") or ""),
+            icon=str(params.get("icon") or ""),
+            stackable=bool(params.get("stackable", True)),
+            use_action=(
+                str(params["use_action"]) if params.get("use_action") else None
+            ),
+            attrs=attrs,
+        )
+    )
+    await api.flush_item_defs()
+    return {"id": item_id}
+
+
+async def _admin_item_update(api: WorlditorPlayAPI, **params) -> dict:
+    """管理页动作：更新物品定义（未提供的字段不变；更新即落库）。"""
+    item_id, _ = _check_item_payload(params)
+    item = api.get_item_def(item_id)
+    if item is None:
+        raise WorldError(f"物品不存在：{item_id}")
+    if "name" in params:
+        item.name = str(params["name"]).strip() or item.name
+    if "desc" in params:
+        item.desc = str(params["desc"] or "")
+    if "icon" in params:
+        item.icon = str(params["icon"] or "")
+    if "stackable" in params:
+        item.stackable = bool(params["stackable"])
+    if "use_action" in params:
+        item.use_action = str(params["use_action"]) if params["use_action"] else None
+    if "attrs" in params:
+        if not isinstance(params["attrs"], dict):
+            raise WorldError("attrs 必须是对象")
+        item.attrs = params["attrs"]
+    api.register_item_def(item)
+    await api.flush_item_defs()
+    return {"id": item_id}
+
+
+async def _admin_item_delete(api: WorlditorPlayAPI, **params) -> dict:
+    """管理页动作：删除物品定义（背包数据语义归持有方，不校验引用）。"""
+    item_id = str(params.get("id") or "").strip()
+    if not item_id:
+        raise WorldError("物品 id 不能为空")
+    await api.delete_item_def(item_id)
+    return {"id": item_id}
 
 
 # ---------- 背包内核（服务 handler，引擎锁内调用，读改写原子） ----------

@@ -982,6 +982,13 @@ class WorldStore:
         )
         await self._conn.commit()
 
+    async def delete_item(self, item_id: str) -> None:
+        """删除物品定义行。"""
+        assert self._conn is not None
+        await self._conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        await self._conn.commit()
+        self.items.pop(item_id, None)
+
     # ---------- 玩法数据 KV（namespace 隔离） ----------
 
     async def set_play_kv(self, namespace: str, key: str, value: Any) -> None:

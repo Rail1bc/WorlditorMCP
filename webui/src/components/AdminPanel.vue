@@ -1,270 +1,158 @@
 <template>
-  <div class="admin-panel">
+  <div class="admin-shell">
     <header class="app-header">
       <span class="brand">🛠 worlditor 管理台</span>
       <button class="logout-btn" title="退出登录" @click="doLogout">⎋</button>
     </header>
 
-    <main class="admin-main">
-      <!-- 账户管理 -->
-      <section class="admin-card">
-        <h3>账户管理</h3>
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>用户名</th>
-              <th>角色</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="a in accounts" :key="a.id">
-              <td>{{ a.username }}</td>
-              <td>{{ a.role }}</td>
-              <td class="admin-actions">
-                <button class="btn" @click="toggleRole(a)">{{ a.role === "admin" ? "降级" : "升为管理员" }}</button>
-                <button class="btn btn-danger" @click="removeAccount(a)">删除</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
+    <div class="admin-body">
+      <nav class="admin-nav">
+        <button
+          v-for="item in NAV"
+          :key="item.key"
+          class="nav-item"
+          :class="{ on: route === item.key }"
+          @click="goto(item.key)"
+        >
+          <span class="nav-icon">{{ item.icon }}</span>
+          <span>{{ item.title }}</span>
+        </button>
+      </nav>
 
-      <!-- 玩法包 -->
-      <section class="admin-card">
-        <h3>玩法包</h3>
-        <table class="admin-table">
-          <tbody>
-            <tr v-for="p in plays" :key="p.play_id">
-              <td>{{ p.name || p.play_id }}</td>
-              <td>{{ p.version }}</td>
-              <td>{{ p.status }}</td>
-              <td class="admin-actions">
-                <button v-if="p.status === 'disabled'" class="btn" @click="enablePlay(p.play_id)">启用</button>
-                <button v-else-if="p.status === 'loaded'" class="btn" @click="disablePlay(p.play_id)">停用</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <!-- 邀请码（邀请模式） -->
-      <section class="admin-card">
-        <h3>邀请码</h3>
-        <div class="admin-actions">
-          <button class="btn" @click="makeCodes(1)">生成 1 个</button>
-          <button class="btn" @click="makeCodes(5)">生成 5 个</button>
-        </div>
-        <ul class="admin-codes">
-          <li v-for="c in inviteCodes" :key="c.code">
-            <code>{{ c.code }}</code>
-            <span>{{ c.used ? "已失效" : "未使用" }}</span>
-            <button v-if="!c.used" class="btn" @click="revokeCode(c.code)">吊销</button>
-          </li>
-        </ul>
-      </section>
-
-      <p v-if="error" class="error-text">{{ error }}</p>
-    </main>
+      <main class="admin-main">
+        <component :is="current.comp" :key="current.key" />
+      </main>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { getToken, setToken } from "../api";
 import { store } from "../store";
+import AccountsPage from "../pages/admin/AccountsPage.vue";
+import PlaysPage from "../pages/admin/PlaysPage.vue";
+import InvitesPage from "../pages/admin/InvitesPage.vue";
+import WorldsPage from "../pages/admin/WorldsPage.vue";
+import MapEditorPage from "../pages/admin/MapEditorPage.vue";
 
-const accounts = ref([]);
-const plays = ref([]);
-const inviteCodes = ref([]);
-const error = ref("");
-const busy = ref(false);
+const NAV = [
+  { key: "accounts", title: "账户管理", icon: "👤" },
+  { key: "plays", title: "玩法包", icon: "🧩" },
+  { key: "invites", title: "邀请码", icon: "🎫" },
+  { key: "worlds", title: "世界与地图", icon: "🌍" },
+];
 
-async function authFetch(path, opts = {}) {
-  const resp = await fetch(path, {
-    ...opts,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${getToken()}`,
-      ...(opts.headers || {}),
-    },
-  });
-  if (resp.status === 401) {
-    setToken("");
-    store.token = "";
-    error.value = "凭据已失效，请重新登录";
-    throw new Error(error.value);
-  }
-  if (!resp.ok) {
-    let message = `请求失败（${resp.status}）`;
-    try {
-      const data = await resp.json();
-      if (data.error) message = data.error;
-    } catch {
-      /* ignore */
-    }
-    error.value = message;
-    throw new Error(message);
-  }
-  return resp.json();
+const PAGES = {
+  accounts: AccountsPage,
+  plays: PlaysPage,
+  invites: InvitesPage,
+  worlds: WorldsPage,
+  maps: MapEditorPage, // 地图编辑器入口（经 worlds 页面进入）
+};
+
+const route = ref("");
+
+const current = computed(() => {
+  // hash 形如 "#/admin/accounts" 或 "#/admin/maps/default"
+  const hash = location.hash.replace(/^#/, "");
+  const parts = hash.split("/").filter(Boolean); // ["admin","maps","default"]
+  const key = parts[1] || "accounts";
+  return { key, comp: PAGES[key] || PAGES.accounts };
+});
+
+function goto(key) {
+  location.hash = `#/admin/${key}`;
+  route.value = key;
 }
 
-async function refresh() {
-  if (busy.value) return;
-  busy.value = true;
-  error.value = "";
-  // 各区块独立加载：一个失败不影响其他面板（避免整表空白）
-  const [acc, pl] = await Promise.allSettled([
-    authFetch("/admin/accounts"),
-    authFetch("/admin/plays"),
-  ]);
-  if (acc.status === "rejected") {
-    error.value = acc.reason.message.includes("403")
-      ? "当前账号无管理员权限，请用管理员账号登录管理端"
-      : acc.reason.message;
-  } else {
-    accounts.value = acc.value.accounts || [];
-    inviteCodes.value = acc.value.invite_codes || [];
-  }
-  if (pl.status === "rejected") {
-    error.value = error.value || pl.reason.message;
-  } else {
-    plays.value = pl.value.plays || [];
-  }
-  busy.value = false;
-}
-
-async function toggleRole(a) {
-  try {
-    await authFetch(`/admin/accounts/${a.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ role: a.role === "admin" ? "user" : "admin" }),
-    });
-    await refresh();
-  } catch {
-    /* ignore */
-  }
-}
-
-async function removeAccount(a) {
-  if (!confirm(`永久删除用户「${a.username}」（不可恢复）？`)) return;
-  try {
-    await authFetch(`/admin/accounts/${a.id}`, { method: "DELETE" });
-    await refresh();
-  } catch {
-    /* ignore */
-  }
-}
-
-async function enablePlay(id) {
-  try {
-    await authFetch(`/admin/plays/${id}/enable`, { method: "POST" });
-    await refresh();
-  } catch {
-    /* ignore */
-  }
-}
-
-async function disablePlay(id) {
-  try {
-    await authFetch(`/admin/plays/${id}/disable`, { method: "POST" });
-    await refresh();
-  } catch {
-    /* ignore */
-  }
-}
-
-async function makeCodes(count) {
-  try {
-    await authFetch("/admin/invite-codes", {
-      method: "POST",
-      body: JSON.stringify({ count }),
-    });
-    await refresh();
-  } catch {
-    /* ignore */
-  }
-}
-
-async function revokeCode(code) {
-  try {
-    await authFetch(`/admin/invite-codes/${code}`, { method: "DELETE" });
-    await refresh();
-  } catch {
-    /* ignore */
-  }
+function syncRoute() {
+  const hash = location.hash.replace(/^#/, "");
+  const parts = hash.split("/").filter(Boolean);
+  route.value = parts[1] || "accounts";
 }
 
 function doLogout() {
   setToken("");
   store.token = "";
+  store.error = "";
   location.hash = "#/auth";
 }
 
-onMounted(refresh);
+onMounted(() => {
+  syncRoute();
+  window.addEventListener("hashchange", syncRoute);
+  if (!location.hash) goto("accounts");
+});
 </script>
 
 <style scoped>
-.admin-panel {
+.admin-shell {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-}
-.admin-main {
-  max-width: 760px;
-  width: 100%;
+  max-width: 960px;
   margin: 0 auto;
-  padding: 16px;
+}
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+}
+.brand {
+  font-weight: 700;
+}
+.admin-body {
+  display: flex;
+  flex: 1;
+  gap: 12px;
+  padding: 0 12px 16px;
+}
+.admin-nav {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 4px;
+  width: 132px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 8px;
+  align-self: flex-start;
 }
-.admin-card {
-  border: 1px solid var(--bg-3);
-  border-radius: 10px;
-  padding: 14px 16px;
-  background: var(--bg-2);
-  color: var(--text);
-}
-.admin-card h3 {
-  margin: 0 0 10px;
-  font-size: 15px;
-}
-.admin-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-.admin-table th,
-.admin-table td {
-  text-align: left;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--bg-3);
-}
-.admin-actions {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
-}
-.btn-danger {
-  color: var(--danger);
-}
-.admin-codes {
-  list-style: none;
-  padding: 0;
-  margin: 8px 0 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-}
-.admin-codes li {
+.nav-item {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
 }
-.error-text {
-  color: var(--danger);
-  font-size: 13px;
+.nav-item.on {
+  background: var(--bg-3);
+  color: var(--text);
+}
+.nav-icon {
+  font-size: 17px;
+}
+.admin-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.logout-btn {
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  background: var(--bg-3);
+  color: var(--text-dim);
+  cursor: pointer;
 }
 </style>

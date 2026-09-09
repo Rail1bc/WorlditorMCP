@@ -251,6 +251,75 @@ class IdentityService:
         async with self._engine._lock:
             return await self._engine.store.set_token_revoked(token, True)
 
+    # ---------- 账户检索（v0.1.12：管理端复杂管理） ----------
+
+    def search_accounts(
+        self,
+        *,
+        q: str = "",
+        role: str = "",
+        page: int = 1,
+        page_size: int = 50,
+        sort: str = "created_desc",
+    ) -> dict:
+        """账户检索（管理端）：q 用户名子串匹配 / role 精确 / 分页 / 排序。
+
+        每行附带：创建时间、关联玩家实体（名称/位置/最近活跃）、未吊销
+        凭据数。排序选项：created_desc（默认）/ created_asc / username。
+        """
+        accounts = list(self._engine.store.accounts.values())
+        needle = (q or "").strip().lower()
+        if needle:
+            accounts = [a for a in accounts if needle in a.username.lower()]
+        if role:
+            accounts = [a for a in accounts if a.role == role]
+        if sort == "username":
+            accounts.sort(key=lambda a: a.username.lower())
+        elif sort == "created_asc":
+            accounts.sort(key=lambda a: a.created_ts)
+        else:
+            accounts.sort(key=lambda a: a.created_ts, reverse=True)
+        total = len(accounts)
+        per = min(max(1, int(page_size or 50)), 200)
+        current = max(1, int(page or 1))
+        start = (current - 1) * per
+        rows = []
+        for a in accounts[start : start + per]:
+            entity = self._find_entity_of_account(a.id)
+            token_count = sum(
+                1 for t in self._engine.store.tokens.values() if t.account_id == a.id
+            )
+            rows.append(
+                {
+                    "id": a.id,
+                    "username": a.username,
+                    "role": a.role,
+                    "created_ts": a.created_ts,
+                    "entity": entity.to_dict() if entity is not None else None,
+                    "token_count": token_count,
+                }
+            )
+        return {
+            "accounts": rows,
+            "total": total,
+            "page": current,
+            "page_size": per,
+        }
+
+    def list_account_tokens(self, account_id: str) -> list[dict]:
+        """账户未吊销凭据明细（管理端；token 完整返回供吊销/复制）。"""
+        return [
+            {
+                "token": t.token,
+                "tier": t.tier,
+                "kind": t.kind,
+                "entity_id": t.entity_id,
+                "username": t.username,
+            }
+            for t in self._engine.store.tokens.values()
+            if t.account_id == account_id
+        ]
+
     # ---------- 账户生命周期（永久注销 / 角色管理） ----------
 
     async def delete_own_account(self, token: str) -> None:

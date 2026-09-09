@@ -2,6 +2,8 @@
 // 无 CORS 问题）；独立部署时经 VITE_WORLD_API 指向世界服务绝对地址。
 export const WORLD_API = (import.meta.env.VITE_WORLD_API || "").replace(/\/+$/, "");
 
+import { store } from "./store";
+
 // ---------- token（localStorage 持久化，独立域与 dashboard 会话隔离） ----------
 
 const TOKEN_KEY = "worlditor_token";
@@ -28,6 +30,7 @@ async function http(path, opts = {}) {
   const resp = await fetch(`${WORLD_API}${path}`, { ...opts, headers });
   if (resp.status === 401 && !path.startsWith("/auth/")) {
     setToken("");
+    store.token = "";
     throw new AuthError("凭据已失效，请重新登录");
   }
   if (!resp.ok) {
@@ -59,6 +62,24 @@ export async function apiPost(path, body) {
     body: JSON.stringify(body || {}),
   });
   return resp.json();
+}
+
+export async function apiPatch(path, body) {
+  const resp = await http(path, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  return resp.json();
+}
+
+export async function apiDelete(path, body) {
+  const opts = { method: "DELETE" };
+  if (body) {
+    opts.headers = { "Content-Type": "application/json" };
+    opts.body = JSON.stringify(body);
+  }
+  return http(path, opts);
 }
 
 // 身份

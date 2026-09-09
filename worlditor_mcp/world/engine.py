@@ -206,6 +206,22 @@ class _ServiceBinding:
     handler: Callable
 
 
+@dataclass
+class _AdminPageBinding:
+    """玩法包管理页登记（管理端注册协议，v0.1.12）。
+
+    管理页 = 管理端导航入口（title/icon/组件）+ 玩法包自管的数据动作
+    （component_url 必须为本包资源；action 由管理端点锁内代理调用）。
+    """
+
+    play_id: str
+    key: str
+    title: str
+    icon: str = ""
+    component_url: str = ""
+    actions: dict[str, Callable] = field(default_factory=dict)
+
+
 # 可被玩法包覆盖/禁用的行为原语（D11；place/remove 不可覆盖，D14）
 OVERRIDABLE_PRIMITIVES = frozenset(
     {"move", "move_entity", "set_data", "get_data", "interact"}
@@ -334,6 +350,8 @@ class WorldEngine:
         self._views: dict[str, _ViewBinding] = {}
         # M3 跨包服务注册表：play_id -> name -> binding（玩法包间同步调用）
         self._services: dict[str, dict[str, _ServiceBinding]] = {}
+        # 管理页注册表：play_id -> key -> binding（管理端导航 + actions 代理）
+        self._admin_pages: dict[str, dict[str, _AdminPageBinding]] = {}
         # 玩法包 API 实例（PlayLoader attach；handler 调用时按 play_id 取）
         self._play_apis: dict[str, Any] = {}
         # 事件流订阅者（SSE 出口，B11：事件总线序列化推送；队列满丢最旧）
@@ -413,6 +431,17 @@ class WorldEngine:
         async with self._lock:
             for item in list(self.store.items.values()):
                 await self.store.save_item(item)
+
+    async def delete_item_def(self, item_id: str) -> None:
+        """删除物品定义（管理页；背包数据语义归持有方，此处不校验背包引用）。"""
+        async with self._lock:
+            item_id = _clean_required(item_id, "物品 id")
+            if item_id not in self.store.items:
+                raise WorldError(f"物品定义不存在：{item_id}")
+            await self.store.delete_item(item_id)
+            await self._emit(
+                "on_world_edited", {"op": "delete_item_def", "item_id": item_id}
+            )
 
     def register_entity_kind(
         self,
@@ -639,6 +668,117 @@ class WorldEngine:
             }
             for key, v in sorted(self._views.items())
         ]
+
+    # ---------- 玩法包管理页（v0.1.12：管理端注册协议） ----------
+
+    def register_admin_page(
+        self,
+        key: str,
+        *,
+        title: str,
+        icon: str = "",
+        component_url: str,
+        actions: dict[str, Callable],
+        play_id: str = "",
+    ) -> None:
+        """注册玩法包管理页（管理端可多页；actions = 玩法包自管的数据动作）。
+
+        管理页协议（与 register_view 同源的安全模型）：
+        - component_url 必须指向本站本包资源（``/plays/<play_id>/web/…``）——
+          管理端加载组件时附带 Bearer，跨站 URL 会外泄凭据；
+        - actions 为玩法包定义的管理动作，handler 签名 ``async (api, **params)``
+          （api 为提供者自己的 API 实例），由管理端点锁内代理调用——数据
+          语义（背包 slots、物品定义字段等）只有玩法包自己懂，内核不裸露
+          play_data 编辑。
+        - 同包 key 冲突报错（同 D2 风格）；生命周期随玩法包卸载清理。
+
+        Raises:
+            WorldError: key/title 非法、component_url 非本包资源、无 action、
+                action 不可调用、同包 key 冲突。
+        """
+        key = _clean_required(key, "管理页 key")
+        title = _clean_required(title, "管理页标题")
+        if not isinstance(actions, dict) or not actions:
+            raise WorldError("管理页需要至少一个 action")
+        cleaned: dict[str, Callable] = {}
+        for name, handler in actions.items():
+            aname = _clean_required(name, "action 名")
+            if not callable(handler):
+                raise WorldError(f"action「{aname}」必须是可调用对象")
+            cleaned[aname] = handler
+        url = str(component_url or "")
+        url_prefix = f"/plays/{play_id}/web/"
+        if not url.startswith(url_prefix):
+            raise WorldError(
+                f"管理页 component_url 必须指向本站本包资源（{url_prefix}…）"
+            )
+        pages = self._admin_pages.setdefault(play_id, {})
+        if key in pages:
+            prev = pages[key]
+            raise WorldError(
+                f"管理页 key 冲突：{play_id}.{key}（已注册「{prev.title}」）"
+            )
+        pages[key] = _AdminPageBinding(
+            play_id=play_id,
+            key=key,
+            title=title,
+            icon=str(icon or ""),
+            component_url=url,
+            actions=cleaned,
+        )
+
+    def list_admin_pages(self) -> list[dict]:
+        """管理页清单（GET /admin/play-pages：管理端导航，按 (play_id, key) 排序）。"""
+        return [
+            {
+                "play_id": pid,
+                "key": binding.key,
+                "title": binding.title,
+                "icon": binding.icon,
+                "component_url": binding.component_url,
+                "actions": sorted(binding.actions),
+            }
+            for pid in sorted(self._admin_pages)
+            for binding in sorted(self._admin_pages[pid].values(), key=lambda b: b.key)
+        ]
+
+    async def call_admin_page_action(
+        self, play_id: str, page_key: str, action: str, **params: Any
+    ) -> Any:
+        """管理端点代理：锁内调用玩法包管理动作（异常隔离，同 call_service）。
+
+        handler 收到的是**提供者自己的 API 实例**（play_id 已绑定，kv/工具/
+        服务等均以其身份），数据校验与语义完全由玩法包负责；内核不做裸
+        play_data 编辑。
+
+        Raises:
+            WorldError: 管理页/action 不存在、提供方未加载、执行异常。
+        """
+        pages = self._admin_pages.get(play_id) or {}
+        binding = pages.get(page_key)
+        if binding is None:
+            raise WorldError(f"管理页不存在：{play_id}.{page_key}")
+        handler = binding.actions.get(action)
+        if handler is None:
+            raise WorldError(f"管理页 action 不存在：{play_id}.{page_key}.{action}")
+        api = self._play_apis.get(play_id)
+        if api is None:
+            raise WorldError(f"玩法包未加载：{play_id}")
+        async with self._lock:
+            try:
+                return await self._invoke(handler, api, **params)
+            except asyncio.CancelledError:
+                raise
+            except WorldError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "[worlditor] 管理页 action 异常：%s.%s.%s",
+                    play_id,
+                    page_key,
+                    action,
+                )
+                raise WorldError("管理页操作执行出错，请稍后再试") from None
 
     # ---------- 跨包服务（M3：玩法包间同步调用通道） ----------
 
@@ -969,6 +1109,7 @@ class WorldEngine:
             self._sync_tool_remove(name)
         self._views = {k: v for k, v in self._views.items() if v.play_id != play_id}
         self._services.pop(play_id, None)
+        self._admin_pages.pop(play_id, None)
 
     # ---------- 界面扩展（B9：ui_hook before/after/replace 递归展开） ----------
 

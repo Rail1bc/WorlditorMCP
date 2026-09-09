@@ -354,6 +354,28 @@ class ItemDef:
 视图挂载点（G4 插槽 / ui_hook 接线，G18）+ 按需内核级部件注册表
 （register_player_part：声明/冲突仲裁/管理页挂载清单——等真实多部件需求）。
 
+## 4.6 玩法包管理页（管理端注册协议，v0.1.12）
+
+**管理端不是内核的终端——玩法包可注册自己的管理页**（可多页），管理端以
+导航入口 + actions 代理承载"玩法包内容治理"（物品定义、商店配置等）：
+
+- **注册**：`api.register_admin_page(key, title, icon, component_url, actions)`。
+  - `component_url` 校验同视图：必须指向本站本包资源（`/plays/<play_id>/web/…`）
+    ——管理端加载组件时附带 Bearer，跨站 URL 会外泄凭据；
+  - `actions` 为玩法包自管的数据动作（`action 名 -> handler`），handler 签名
+    `async (api, **params) -> Any`，api 为提供者自己的 API 实例；
+  - 同包 key 冲突报错；生命周期随玩法包卸载清理。
+- **运行**：`GET /admin/play-pages`（管理端导航清单，按 (play_id, key) 排序）；
+  `POST /admin/play-pages/{play_id}/{page_key}/{action}` 锁内代理调用（异常隔离，
+  同 call_service）；全部端点强制 tier=admin（双保险）。
+- **数据语义归玩法包**：内核**不**裸露 play_data/edit 类读写——背包 slots、
+  物品定义字段等只有玩法包懂；管理动作 = 玩法包在锁内以自己的 API 读写
+  （kv/服务/工具/注册表），校验与不变量由玩法包负责。
+- **组件协议**：与视图组件一致（`new Function("Vue", "UiBlock", code)`）；
+  组件内 fetch 代理端点（同源 + Bearer），可构建任意管理界面。
+- **落地示例**：items 包注册「物品管理」页（物品定义 list/create/update/delete，
+  创建/更新即 `flush_item_defs` 落库）；管理端玩法包详情页展示入口并动态加载。
+
 ## 5. 行为归属（谁提供什么）
 
 | 行为 | 提供者 |
@@ -371,12 +393,14 @@ class ItemDef:
 | 登录/注册/身份 | 内核 |
 | 世界/组织树管理（CRUD/激活配置） | 内核（admin，管理端口，D15） |
 | 地图编辑 / 玩法包管理 UI | 内核（admin 人类入口；玩法包经 API 程序化编辑，D14） |
+| 账户管理（检索/凭据/角色） | 内核（admin，管理端口；v0.1.12 检索分页） |
+| 玩法包内容治理（物品定义等） | 玩法包管理页（§4.6：actions 自管，内核代理） |
 
 ## 6. 内置领域包（6 个，默认启用，D5）
 
 | 玩法包 | 领域 | 贡献 |
 |---|---|---|
-| `worlditor_play_items` | 背包与物品使用（持有下沉，D8） | 背包模型自定（有限格子/单物品多格/堆叠/整理）、物品 use 规则、背包视图、world_bag/world_use 工具；注册基础物品定义（苹果等）并声明字段 |
+| `worlditor_play_items` | 背包与物品使用（持有下沉，D8） | 背包模型自定（有限格子/单物品多格/堆叠/整理）、物品 use 规则、背包视图、world_bag/world_use 工具；注册基础物品定义（苹果等）并声明字段；**物品管理页**（管理端注册协议，§4.6） |
 | `worlditor_play_starter` | 出生礼包（部件，§4.5） | 新玩家/agent 出生礼包（金币 + 物品，attrs 标记只发一次）；可停用/可替换 |
 | `worlditor_play_player` | 玩家 | 玩家壳（零依赖）：角色视图、world_profile 工具（背包摘要为软依赖）；出生礼包见 starter |
 | `worlditor_play_movement` | 移动与视野 | 默认移动 = 内核 move；视野视图（3×3）、world_look/world_move/world_who 工具；可按需 override move |

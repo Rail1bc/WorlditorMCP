@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.1.12（2026-09-10）
+
+- feat: **管理端重构（多页面）**——侧边栏导航拆分：账户管理（搜索/角色筛选/
+  分页/排序 + 玩家实体与凭据概览 + 凭据明细吊销）、玩法包（产品库 + 详情
+  tabs：管理页/工具/服务/视图/原语覆盖与过滤器）、邀请码（独立页平移）、
+  世界与地图（世界 CRUD + 组织树 + 地图归属）
+- feat: **玩法包管理页注册协议（DESIGN §4.6 / PLAY_DEV §13）**——
+  `api.register_admin_page(key, title, icon, component_url, actions)`；
+  `GET /admin/play-pages` 清单 + `POST /admin/play-pages/{play_id}/{page_key}/{action}`
+  锁内代理（异常隔离，tier=admin）；组件协议同视图（new Function 动态加载）；
+  **数据语义归玩法包**（内核不裸露 play_data 编辑）
+- feat: **items 包「物品管理」页**——物品定义 CRUD（id/name/desc/icon/stackable/
+  use_action/attrs），创建/更新即落库（flush_item_defs）；web/admin-items.js 组件
+- feat: **地图编辑器**——网格视图（地块卡片/四向连接标记/实体徽标）+ 地块
+  新建/编辑/删除 + 连接（多路径/目标/文案）+ 实体列表/放置/定位/编辑 +
+  模板管理 + 地图元信息编辑（名称/可见性/出生点/时区）
+- feat: 后端新端点——账户检索（q/role/page/page_size/sort）、账户凭据明细
+  （/admin/accounts/{id}/tokens）、地图列表/详情（/admin/maps GET）、模板列表、
+  地块 upsert（/admin/locations POST 创建或更新）、地图 PATCH、实体 PATCH、
+  物品定义删除（engine.delete_item_def + api.delete_item_def）
+- feat: 玩法包 API 新方法——`register_admin_page`/`list_admin_pages`、
+  `delete_item_def`
+- docs: DESIGN §4.6 管理页注册协议；§5 行为归属表（账户管理/玩法包内容治理）；
+  §6 items 包行更新；PLAY_DEV §13 玩法包管理页规范
+- ⚠️ 兼容注意：`GET /admin/worlds` 的 maps 字段由 id 列表改为
+  `[{id, folder_id}]` 对象（管理端组织树需要）；`/admin/accounts` 保留
+  `accounts` 键（新增 total/page/page_size 与行扩展字段）
+
 ## v0.1.11（2026-09-10）
 
 - fix: **玩家壳零部件引用彻底化**——world_profile 移除对 items 包的

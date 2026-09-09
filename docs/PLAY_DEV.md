@@ -358,11 +358,47 @@ interaction 包商贩交易 = 金币 attrs + items 服务，无内核强制。
 
 | 包 | 能力 | 关键机制 |
 |---|---|---|
-| `worlditor_play_items` | 背包（20 格/堆叠 99）+ world_bag/use + 苹果/面包 | **服务** bag_add/take/count/get；持有下沉（D8）；**ui_hook 注入玩家聚合视图**（character after → 背包面板） |
+| `worlditor_play_items` | 背包（20 格/堆叠 99）+ world_bag/use + 苹果/面包 | **服务** bag_add/take/count/get；持有下沉（D8）；**ui_hook 注入玩家聚合视图**（character after → 背包面板）；**物品管理页**（管理员可维护物品定义，§13） |
 | `worlditor_play_starter` | 出生礼包（金币+物品，只发一次） | 部件模式（§11）：事件 on_world_edited + 跨包服务；可停用/替换 |
-| `worlditor_play_player` | 角色视图 + world_profile | 玩家壳零依赖：背包摘要**软依赖**（list_services 探测）；**玩家聚合界面**——角色卡 + items hook 注入的背包面板（world_profile 返回 ui，视图通用渲染）；出生礼包见 starter |
+| `worlditor_play_player` | 角色视图 + world_profile | 玩家壳**零引用**：背包信息由 items 包工具/hook 单向提供（§11）；**玩家聚合界面**——角色卡 + items hook 注入的背包面板（world_profile 返回 ui，视图通用渲染）；出生礼包见 starter |
 | `worlditor_play_movement` | 朝向移动 + 3×3 视野 + world_look/move/turn/who | move 过滤器（相对方向换算）+ register_view |
 | `worlditor_play_interaction` | 种子实体 kind/交互 + world_interact | 商贩交易跨包；door block_move |
 | `worlditor_play_social` | cell 说话 + world 广播（喇叭+冷却）+ 日志视图 | 自定义事件 + kv 冷却自管 |
 
 > 想看真实代码？`worlditor_mcp/builtin_plays/` 每个包就是一个完整示例。
+
+## 13. 玩法包管理页（管理端注册协议，DESIGN §4.6）
+
+玩法包可注册**管理页**（可多个），让管理员经管理端治理本包内容（物品定义、
+商店配置等），无需改内核。
+
+### 注册
+
+```python
+api.register_admin_page(
+    key="items",              # 本包内唯一 key
+    title="物品管理",          # 管理端导航显示名
+    icon="⚗️",
+    component_url=f"/plays/{api.play_id}/web/admin-items.js",  # 必须本包资源
+    actions={
+        "list": _admin_list,     # async def handler(api, **params) -> JSON 可序列化
+        "create": _admin_create,
+        "update": _admin_update,
+        "delete": _admin_delete,
+    },
+)
+```
+
+### 约定
+
+- **数据语义归玩法包**：action handler 收到**本包自己的 API 实例**（play_id
+  已绑定），在引擎锁内执行；数据校验、不变量、持久化全由玩法包负责
+  （示例：物品管理 create/update 后 `await api.flush_item_defs()` 落库）。
+- **错误透出**：`WorldError` 的消息会原样返回（400 + `{"error": msg}`）；
+  其他异常被隔离为通用错误文案（管理端可见）。
+- **组件**：与视图组件同一动态加载协议（`(function(Vue, UiBlock) {...})()`，
+  render 函数，运行时无模板编译器）；数据通道 = `fetch` 管理端代理端点
+  `/admin/play-pages/{play_id}/{page_key}/{action}`（同源 + Bearer，
+  仅 tier=admin）。
+- **管理面不扩展内核**：不要用管理页绕过玩法包语义去裸写其他包的 play_data。
+- 参考实现：`worlditor_play_items/web/admin-items.js`（物品定义 CRUD）。

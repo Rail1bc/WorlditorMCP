@@ -42,6 +42,10 @@ class WorlditorPlayAPI:
         """全部物品定义（dict 列表，UI/工具展示用）。"""
         return [d.to_dict() for d in self._engine.store.items.values()]
 
+    async def delete_item_def(self, item_id: str) -> None:
+        """删除物品定义（管理页；锁内 + on_world_edited 广播）。"""
+        await self._engine.delete_item_def(item_id)
+
     def register_entity_kind(
         self,
         kind: str,
@@ -282,6 +286,39 @@ class WorlditorPlayAPI:
 
     def list_views(self) -> list[dict]:
         return self._engine.list_views()
+
+    # ---------- 玩法包管理页（v0.1.12：管理端注册协议） ----------
+
+    def register_admin_page(
+        self,
+        key: str,
+        *,
+        title: str,
+        icon: str = "",
+        component_url: str,
+        actions: dict,
+    ) -> None:
+        """注册玩法包管理页（可注册多个；管理端导航 + actions 代理）。
+
+        - ``component_url``：管理页组件入口（协议同视图组件：
+          ``new Function("Vue","UiBlock", code)``；必须为本包 web/ 资源）
+        - ``actions``：玩法包自管的数据动作 dict（动作名 -> handler），
+          handler 签名 ``async (api, **params) -> Any``（api 为本包实例）；
+          管理端经 ``POST /admin/play-pages/{play_id}/{page_key}/{action}``
+          锁内代理调用——数据语义（背包 slots、物品定义字段等）由本包
+          定义与校验，内核不裸露 play_data 裸编辑
+        """
+        self._engine.register_admin_page(
+            key,
+            title=title,
+            icon=icon,
+            component_url=component_url,
+            actions=actions,
+            play_id=self.play_id,
+        )
+
+    def list_admin_pages(self) -> list[dict]:
+        return self._engine.list_admin_pages()
 
     # ---------- 跨包服务（M3：玩法包间同步调用） ----------
 

@@ -137,7 +137,7 @@ def test_admin_worlds_and_map_edit(tmp_path):
         assert resp.status_code == 200, resp.text
         worlds = (await admin_client.get("/admin/worlds", headers=h)).json()["worlds"]
         pvp = next(w for w in worlds if w["id"] == "pvp")
-        assert "arena" in pvp["maps"]
+        assert any(m["id"] == "arena" for m in pvp["maps"])
         # 建实体（地图编辑）
         resp = await admin_client.post(
             "/admin/entities",
