@@ -1,18 +1,20 @@
 """worlditor_play_player：玩家档（玩家部件模式，DESIGN §4.5）。
 
 职责（阶段 1 拆分后）：
-- **角色视图**：显示我的 attrs 角色卡（数据来自 /scene，组件自行 fetch）。
-- **world_profile 工具**：我的角色信息（attrs + 可选背包摘要）。
+- **角色视图（玩家聚合界面）**：world_profile 工具返回角色卡 UiBlock——
+  其他包经 ui_hook 向 character 块注入部件面板（items 包注入背包面板 =
+  「背包追加到玩家界面」），视图组件用 UiBlockRenderer 通用渲染。
+- **world_profile 工具**：我的角色信息（attrs + 可选背包摘要文本 + 聚合 ui）。
 
 设计：玩家 = 内核身份实体（player/agent kind，身份红线在内核）+ **可追加
 部件**——出生礼包 = worlditor_play_starter、背包 = worlditor_play_items…
-本包是「玩家壳」，**零包间硬依赖**：背包摘要为软依赖（list_services 探测
-bag_get，items 服务存在才附带，否则仅显示属性）。
+本包是「玩家壳」，**零包间硬依赖**：背包摘要文本为软依赖（list_services
+探测 bag_get），背包面板 UI 由 items 包 hook 注入（hook 注册与否天然软依赖）。
 """
 
 from __future__ import annotations
 
-from worlditor_mcp.world import WorldError
+from worlditor_mcp.world import UiBlock, WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
 ITEMS_PLAY = "worlditor_play_items"
@@ -55,7 +57,11 @@ def _has_service(api: WorlditorPlayAPI, play_id: str, name: str) -> bool:
 
 
 async def _world_profile(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
-    """我的角色卡：attrs + （可选）背包摘要——背包为软依赖部件。"""
+    """我的角色卡：attrs + （可选）背包摘要——背包为软依赖部件。
+
+    ui = 角色卡 UiBlock（character）——其他包经 ui_hook 注入部件面板
+    （items 包在 character 块后追加背包面板 = 「背包追加到玩家界面」）。
+    """
     me = _me(api)
     text = f"{me.name}（{me.kind}）：" + "、".join(
         f"{k}={v}" for k, v in me.attrs.items()
@@ -67,12 +73,22 @@ async def _world_profile(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
         text += "；背包：" + ("、".join(lines) if lines else "空的")
     else:
         text += "；背包：未启用（安装 worlditor_play_items 后可见）"
+    # UI：角色卡（部件注入点——apply_ui_hooks 服务端展开各包 ui_hook）
+    card = UiBlock(
+        kind="character",
+        data={
+            "avatar": "🧍",
+            "attrs": [{"label": k, "value": str(v)} for k, v in me.attrs.items()],
+        },
+    )
+    card = await api.apply_ui_hooks(card)
     return {
         "text": text,
         "name": me.name,
         "kind": me.kind,
         "attrs": dict(me.attrs),
         "bag": bag,
+        "ui": card.to_dict() if card else None,
     }
 
 

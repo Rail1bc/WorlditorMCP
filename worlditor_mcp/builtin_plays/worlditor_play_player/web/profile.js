@@ -1,35 +1,61 @@
-// worlditor_play_player 角色视图。
+// worlditor_play_player 角色视图——玩家聚合界面。
 // 视图组件协议（G3/D7）：new Function("Vue", "UiBlock", code) 动态加载。
-// 数据通道：/scene 只读快照（entity.attrs），无需动作通道。
+// 数据通道：MCP tools/call（world_profile）——返回 {text, ui}：
+//   ui = 角色卡（character）+ 其他包 ui_hook 注入的部件面板（如 items 背包面板）。
+// 软依赖：背包面板由 items 包 hook 注入——items 未装时 ui 仅角色卡。
 
 (function (Vue, UiBlock) {
   "use strict";
   const { ref, onMounted, h } = Vue;
 
   const TOKEN_KEY = "worlditor_token";
-  const KIND_EMOJI = { player: "🧍", agent: "🤖" };
 
-  async function fetchScene() {
-    const resp = await fetch("/scene", {
+  async function callTool(name, args) {
+    const resp = await fetch("/world/mcp", {
+      method: "POST",
       headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2025-06-18",
         Authorization: "Bearer " + (localStorage.getItem(TOKEN_KEY) || ""),
       },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: name, arguments: args || {} },
+      }),
     });
     if (!resp.ok) throw new Error("HTTP " + resp.status);
-    return resp.json();
+    const text = await resp.text();
+    let data = null;
+    if (text.trimStart().startsWith("event:")) {
+      const m = text.match(/data: (.*)/s);
+      data = m ? JSON.parse(m[1]) : null;
+    } else {
+      data = text ? JSON.parse(text) : null;
+    }
+    if (data && data.error) throw new Error(data.error.message || "MCP 调用失败");
+    const content = data && data.result && data.result.content && data.result.content[0];
+    if (!content || !content.text) return {};
+    try {
+      return JSON.parse(content.text);
+    } catch (e) {
+      return { text: content.text };
+    }
   }
 
   return {
     name: "PlayerView",
     props: { view: { type: Object, required: true } },
     setup() {
-      const entity = ref(null);
+      const ui = ref(null);
       const error = ref("");
 
       async function refresh() {
         try {
-          const data = await fetchScene();
-          entity.value = data.entity || null;
+          const profile = await callTool("world_profile", {});
+          ui.value = profile.ui || null;
           error.value = "";
         } catch (e) {
           error.value = e.message;
@@ -39,40 +65,19 @@
       onMounted(refresh);
 
       return () => {
-        const e = entity.value;
-        if (!e) {
+        if (!ui.value) {
           return h(
             "div",
-            { style: { fontFamily: "system-ui, sans-serif", color: "#888" } },
+            { style: { fontFamily: "system-ui, sans-serif", color: "var(--text-dim)" } },
             error.value ? "⚠ " + error.value : "加载中……"
           );
         }
-        const rows = Object.entries(e.attrs || {}).map(([k, v]) =>
-          h(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "space-between",
-                padding: "4px 0",
-                borderBottom: "1px solid #eee",
-              },
-            },
-            [h("span", {}, k), h("span", { style: { fontWeight: 600 } }, String(v))]
-          )
-        );
+        // 聚合渲染：角色卡 + 注入的部件面板（背包等），UiBlockRenderer 递归
         return h(
           "div",
-          { style: { fontFamily: "system-ui, sans-serif", maxWidth: 360 } },
+          { style: { fontFamily: "system-ui, sans-serif", maxWidth: 560 } },
           [
-            h(
-              "div",
-              { style: { fontSize: 18, fontWeight: 700, marginBottom: 4 } },
-              (KIND_EMOJI[e.kind] || "🧍") + " " + e.name
-            ),
-            h("div", { style: { color: "#666", marginBottom: 8 } }, "「" + e.desc + "」"),
-            h("div", { style: { fontWeight: 600, margin: "8px 0 4px" } }, "属性"),
-            rows,
+            h(UiBlock, { block: ui.value, onAction: () => refresh() }),
             h(
               "button",
               { onClick: () => refresh(), style: { marginTop: 12 } },

@@ -103,6 +103,55 @@ def test_world_profile_soft_dependency(tmp_path):
     _run(_scenario(tmp_path / "world.db", fn))
 
 
+def test_world_profile_ui_aggregates_bag_panel(tmp_path):
+    """部件 UI 注入：玩家视图 ui = 角色卡 + items 包 hook 追加的背包面板。"""
+
+    async def fn(engine, loader):
+        plays = await loader.load_all()
+        player_pkg = next(p for p in plays if p.play_id == PLAYER_ID)
+        player = await engine.place_entity("player", "default", 0, 0, name="小明")
+
+        async def call():
+            return await player_pkg.module._world_profile(player_pkg.api, None)  # noqa: SLF001
+
+        result = await _call_as(player.id, call)
+        assert result["ui"]["kind"] == "character"
+        bags = [b for b in result["ui"]["blocks"] if b["kind"] == "list"]
+        assert len(bags) == 1
+        assert "背包" in bags[0]["title"]
+        assert any("苹果×3" == item["label"] for item in bags[0]["items"])
+        # text/bag 兼容通道仍在（agent 摘要）
+        assert any(
+            s["item_id"] == "apple" and s["count"] == 3 for s in result["bag"]["slots"]
+        )
+
+    _run(_scenario(tmp_path / "world.db", fn))
+
+
+def test_world_profile_ui_without_items(tmp_path):
+    """软依赖：items 未装载时玩家视图 ui 仅角色卡（无背包面板）。"""
+
+    async def fn(engine, loader):
+        _copy_only(loader, tmp_path, PLAYER_ID)
+        await loader.load_all()
+        player_pkg = next(
+            p
+            for p in loader.plays.values()
+            if p.play_id == PLAYER_ID  # noqa: SLF001
+        )
+        player = await engine.place_entity("player", "default", 0, 0, name="小明")
+
+        async def call():
+            return await player_pkg.module._world_profile(player_pkg.api, None)  # noqa: SLF001
+
+        result = await _call_as(player.id, call)
+        assert result["ui"]["kind"] == "character"
+        assert result["ui"]["blocks"] == []
+        assert result["bag"] is None
+
+    _run(_scenario(tmp_path / "world.db", fn))
+
+
 # ---------- 工具与视图 ----------
 
 

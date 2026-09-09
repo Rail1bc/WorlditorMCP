@@ -107,6 +107,14 @@ class WorlditorPlayAPI:
             block_kind, position, provider, play_id=self.play_id
         )
 
+    async def apply_ui_hooks(self, block) -> Any:
+        """应用全部已注册 ui_hook（服务端展开，锁内）。
+
+        玩法包生成自己的界面数据后调用——其他包注入的部件 UI（如背包面板
+        注入角色卡）在此展开；返回注入后的 UiBlock（或 None）。
+        """
+        return await self._engine.apply_ui_hooks(block)
+
     # ---------- 只读 ----------
 
     def get_entity(self, entity_id: str):

@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from worlditor_mcp.world import ItemDef, WorldError
+from worlditor_mcp.world import ItemDef, UiBlock, WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
 BAG_SLOTS = 20
@@ -76,6 +76,9 @@ def setup(api: WorlditorPlayAPI, context) -> None:
             "url": f"/plays/{api.play_id}/web/bag.js",
         },
     )
+    # 部件 UI 注入：角色卡（character 块）后追加背包面板——
+    # 「背包追加到玩家界面」（player 视图 = 角色卡 + 各包 hook 注入的面板）
+    api.register_ui_hook("character", "after", _profile_bag_panel)
 
 
 # ---------- 背包内核（服务 handler，引擎锁内调用，读改写原子） ----------
@@ -180,6 +183,29 @@ async def _bag_get(api: WorlditorPlayAPI, **params) -> dict:
             }
         )
     return {"slots": slots, "capacity": BAG_SLOTS, "used": len(slots)}
+
+
+async def _profile_bag_panel(api: WorlditorPlayAPI, block) -> list:
+    """角色卡部件注入：背包面板（list 子块；经服务通道读，锁内原子）。
+
+    provider 在 api.apply_ui_hooks 内被调用（同任务 contextvar 生效，
+    api.caller() 可用）；items 未加载则本 hook 不存在——玩家视图自然不含
+    背包面板（软依赖：由 hook 注册与否决定，而非由 player 包探测）。
+    """
+    entity_id = api.caller()
+    if not entity_id:
+        return []
+    bag = await api.call_service(api.play_id, "bag_get", entity_id=entity_id)
+    slots = bag.get("slots", [])
+    if not slots:
+        return [UiBlock(kind="text", text="背包：空的")]
+    return [
+        UiBlock(
+            kind="list",
+            title=f"背包（{bag.get('used', 0)}/{bag.get('capacity', 0)}）",
+            items=[{"label": f"{s['name']}×{s['count']}"} for s in slots],
+        )
+    ]
 
 
 # ---------- MCP 工具 ----------

@@ -340,7 +340,7 @@ class ItemDef:
 |---|---|
 | 数据 | `play_data` KV，namespace = 部件包 play_id、key 含 entity_id（如 `bag:<eid>`）；**默认玩家级（跨世界跟人走，不传 world_id）**，世界级隔离为可选（传 world_id，D15 双层隔离） |
 | 服务 | 部件能力出口（bag_add/take/count/get…），供消费方软探测/调用（`list_services` + `call_service`） |
-| 工具/视图 | 部件自带 MCP 工具与视图（独立 tab）；注入玩家聚合视图属阶段 3（视图挂载点） |
+| 工具/视图 | 部件自带 MCP 工具与视图（独立 tab）；**注入玩家聚合视图**：items 包向玩家壳的 character 角色卡注册 `ui_hook`（after）追加部件面板（背包面板 = list 子块，服务端展开）——玩家视图 = 角色卡 + 各包 hook 追加的面板，无需修改 player 包 |
 | 生命周期 | 随包启停/卸载——停用即从玩家身上"卸下"该部件；数据保留（disable 不清 KV） |
 
 **依赖规则**：

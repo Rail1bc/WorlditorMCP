@@ -301,6 +301,11 @@ SSE 推送；`log=True` 才写 world_log（高频事件勿写，5000 条上限�
 - **数据**：`play_data` KV，key 含 entity_id（如 `bag:<eid>`）；默认**玩家级**
   （跨世界跟人走，kv 不传 world_id）；世界级隔离为可选（传 world_id）
 - **服务**：部件能力出口（bag_add/take/…），供其他包软探测/调用
+- **UI 注入（追加到玩家界面）**：注册 `ui_hook("character", "after", provider)`——
+  玩家壳的 world_profile 生成角色卡并经 `api.apply_ui_hooks` 服务端展开；
+  部件包 hook 追加自己的面板（items 背包面板 = list 子块，provider 内调服务
+  读取数据）。**软依赖天然**：部件包未装 → hook 不存在 → 玩家视图无该面板，
+  无需任何探测代码
 - **软依赖**：消费方先 `api.list_services()` 探测，**存在才用**（示范：
   player 包 world_profile 的背包摘要——items 不在时仅显示属性）
 - **不写硬依赖**：`requires.plays` 仅用于"没有它部件无法工作"（如 starter 发货
@@ -350,9 +355,9 @@ interaction 包商贩交易 = 金币 attrs + items 服务，无内核强制。
 
 | 包 | 能力 | 关键机制 |
 |---|---|---|
-| `worlditor_play_items` | 背包（20 格/堆叠 99）+ world_bag/use + 苹果/面包 | **服务** bag_add/take/count/get；持有下沉（D8） |
+| `worlditor_play_items` | 背包（20 格/堆叠 99）+ world_bag/use + 苹果/面包 | **服务** bag_add/take/count/get；持有下沉（D8）；**ui_hook 注入玩家聚合视图**（character after → 背包面板） |
 | `worlditor_play_starter` | 出生礼包（金币+物品，只发一次） | 部件模式（§11）：事件 on_world_edited + 跨包服务；可停用/替换 |
-| `worlditor_play_player` | 角色视图 + world_profile | 玩家壳零依赖：背包摘要**软依赖**（list_services 探测）；出生礼包见 starter |
+| `worlditor_play_player` | 角色视图 + world_profile | 玩家壳零依赖：背包摘要**软依赖**（list_services 探测）；**玩家聚合界面**——角色卡 + items hook 注入的背包面板（world_profile 返回 ui，视图通用渲染）；出生礼包见 starter |
 | `worlditor_play_movement` | 朝向移动 + 3×3 视野 + world_look/move/turn/who | move 过滤器（相对方向换算）+ register_view |
 | `worlditor_play_interaction` | 种子实体 kind/交互 + world_interact | 商贩交易跨包；door block_move |
 | `worlditor_play_social` | cell 说话 + world 广播（喇叭+冷却）+ 日志视图 | 自定义事件 + kv 冷却自管 |

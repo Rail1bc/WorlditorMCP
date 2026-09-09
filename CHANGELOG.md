@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.10（2026-09-09）
+
+- feat: **背包追加到玩家界面（玩家聚合视图）**——player 包 world_profile 生成
+  角色卡 UiBlock 并经 `api.apply_ui_hooks` 服务端展开；items 包注册
+  `ui_hook("character", "after")` 追加背包面板（list 子块，经 bag_get 服务读取）
+  ——玩家视图 = 角色卡 + 各包 hook 追加的面板，**player 包零依赖不变**
+- feat: 玩法包 API 新增 `WorlditorPlayAPI.apply_ui_hooks(block)` 透传
+  （服务端展开注入；软依赖天然：部件包未装 → hook 不存在 → 无该面板）
+- refactor: profile.js 重写——视图组件改经 MCP 工具 `world_profile` 取
+  `{text, ui}` 并用 UiBlockRenderer 通用渲染（替换手写属性表 + /scene 依赖）；
+  视图配色对齐暗色主题（var(--text-dim)）
+- test: 新增「world_profile ui 聚合背包面板（items 在）」「无 items 时仅角色卡」
+  两个用例；36 受影响测试 + 全量通过
+- docs: DESIGN §4.5 部件「工具/视图」行更新（hook 注入玩家聚合视图）；
+  PLAY_DEV §11 玩家部件加「UI 注入」约定 + §12 表注记；GAPS 记 G20
+- ⚠️ 玩法包 API 兼容（新增方法）；内核零改动
+
 ## v0.1.9（2026-09-09）
 
 - refactor: **玩家部件模式落地（阶段 1+2，DESIGN §4.5）**——`worlditor_play_player`
