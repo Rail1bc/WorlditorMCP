@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.1.9（2026-09-09）
+
+- refactor: **玩家部件模式落地（阶段 1+2，DESIGN §4.5）**——`worlditor_play_player`
+  拆分为「玩家壳」（角色视图 + world_profile，**零包间依赖**）+ 新包
+  `worlditor_play_starter`（出生礼包，requires items）；world_profile 背包摘要
+  改为**软依赖**（list_services 探测 bag_get，items 未装时仅显示属性）
+- feat: 新内置包 `worlditor_play_starter`——出生礼包独立可停用/可替换（社区
+  同 play_id 覆盖即自定义礼包）
+- docs: DESIGN §4.5「玩家部件模式」定稿（部件 = 数据/服务/工具/视图 + 生命周期；
+  数据默认玩家级跟人走、世界级可选）；DESIGN §5/§6、PLAY_DEV §11/§12、README
+  同步（5 个 → 6 个领域包）；GAPS 记 G19（包裹覆机制未背书，观察）
+- test: 测试迁移与新增——礼包用例移至 test_plays_starter.py；新增
+  「player 无 items 仍可加载」「world_profile 软依赖」价值主张测试
+  （42 受影响用例 + 全量通过，见验证）
+- ⚠️ 内核零改动；玩法包 API 不变（player 包去掉 requires = 纯增益）
+- fix: **阶段 3 视图注入落地（G18 解决）**——ui_hook 接线到 interact 结果
+  （`_interact_default` 返回前 `apply_ui_hooks`，服务端展开、WebUI 零改动），
+  端到端测试 test_interact_result_applies_ui_hooks
+- fix/feat: **视图安全硬化**——`register_view` 校验 provider.url 必须站内本包
+  （`/plays/<play_id>/web/…`；WebUI fetch 附 Bearer，防跨站凭据外泄）；
+  相对/跨站/跨包地址一律拒绝（WorldError）
+- docs: 视图注入双通道定稿（DESIGN §4.4 表：ui_hook=已接线 / 挂载点 slot=
+  设计稿；PLAY_DEV §8 url 校验 + 注入说明）；GAPS G4 更新（UiBlock 路径闭环、
+  slot 待实现）、G18 标记已解决
+- ⚠️ 内核小改（_interact_default 接线 + register_view url 校验）；玩法包 API
+  兼容（仅 provider.url 新增校验——现有内置包均站内前缀，无影响）
+
 ## v0.1.8（2026-09-09）
 
 - fix: **管理端前端暗色主题配色修复**——AdminPanel 卡片/表格/危险色硬编码

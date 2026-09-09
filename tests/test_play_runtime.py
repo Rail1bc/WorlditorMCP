@@ -247,7 +247,7 @@ def test_world_activation_filter(tmp_path):
 
 
 def test_register_view_via_api(tmp_path):
-    """register_view（G3）：注册 + 冲突拒绝 + 清理恢复 + /views 暴露。"""
+    """register_view（G3）：注册 + 冲突拒绝 + url 站内校验 + 清理恢复。"""
 
     async def fn():
         engine, _ = await _make(tmp_path)
@@ -258,16 +258,32 @@ def test_register_view_via_api(tmp_path):
                 "bag",
                 title="背包",
                 icon="🎒",
-                provider={"type": "component", "url": "web/bag.js"},
+                provider={
+                    "type": "component",
+                    "url": "/plays/pkg_a/web/bag.js",
+                },
             )
             views = engine.list_views()
             assert views[0]["key"] == "bag"
-            assert views[0]["provider"]["url"] == "web/bag.js"
+            assert views[0]["provider"]["url"] == "/plays/pkg_a/web/bag.js"
             # 冲突拒绝（同 D2 风格）
             api2 = WorlditorPlayAPI(engine, "pkg_b")
             engine.attach_play_api("pkg_b", api2)
             with pytest.raises(WorldError, match="冲突"):
                 api2.register_view("bag", title="背包2")
+            # url 站内校验（阶段 3 视图安全：防 Bearer 外泄）：
+            # 相对路径 / 跨站绝对地址 / 跨包前缀 全部拒绝
+            for bad in (
+                "web/bag.js",
+                "http://evil.example/x.js",
+                "/plays/other_play/web/x.js",
+            ):
+                with pytest.raises(WorldError, match="provider.url"):
+                    api.register_view(
+                        "bad" + str(len(bad)),
+                        title="坏",
+                        provider={"type": "component", "url": bad},
+                    )
             # 清理恢复
             engine.clear_play_registrations("pkg_a")
             assert engine.list_views() == []

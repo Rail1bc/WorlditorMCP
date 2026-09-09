@@ -26,6 +26,7 @@ BUILTIN_IDS = (
     "worlditor_play_player",
     "worlditor_play_interaction",
     "worlditor_play_social",
+    "worlditor_play_starter",
 )
 
 _WARP_MAIN = '''"""测试替代玩法包：override move = 传送（无视连接，M4 可替换性验证）。"""
@@ -167,6 +168,7 @@ async def _disable_all(loader) -> None:
         "worlditor_play_social",
         "worlditor_play_player",
         "worlditor_play_interaction",
+        "worlditor_play_starter",
         "worlditor_play_items",
         "worlditor_play_movement",
     ):

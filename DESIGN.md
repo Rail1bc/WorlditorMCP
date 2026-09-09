@@ -18,7 +18,7 @@
 ## 1. 架构总览
 
 ```
-玩法包 worlditor_play_*（内置领域包 ×5 + 社区包）
+玩法包 worlditor_play_*（内置领域包 ×6 + 社区包）
   ├─ 行为：on_tick 状态机 / 事件订阅 / 交互 handler / 自定义事件
   ├─ 规则：视野 / 广播 / 行为编排 —— 读数据 → 调内核原语
   │        （移动默认由内核提供，玩法包可 override/disable，D11）
@@ -274,7 +274,7 @@ class ItemDef:
   （同 D2 风格：显式错误，不做静默级联）
 
 **物理位置（G4）**：
-- 内置包：服务包内 `worlditor_mcp/builtin_plays/`（5 个领域包），随服务版本分发；
+- 内置包：服务包内 `worlditor_mcp/builtin_plays/`（6 个领域包），随服务版本分发；
   管理视为只读——可停用、不可 uninstall
 - 社区包：`<数据目录>/plays/`，完整管理能力；PlayLoader 扫描两条路径，
   加载管线共用
@@ -299,8 +299,9 @@ class ItemDef:
 
 **视图协议（G3）**：
 - **provider 形态**：`provider = {type: "component", url: "web/xxx.js"}`——WebUI
-  按需动态加载组件入口（玩法包自有资源 `web/`）；视图生命周期（mount/unmount/
-  params）由内核经 WebUI 路由下发
+  按需动态加载组件入口（玩法包自有资源 `web/`）；**url 必须为站内本包资源**
+  （`/plays/<play_id>/web/…`，内核校验——WebUI fetch 时附 Bearer，跨站地址
+  会外泄凭据）；视图生命周期（mount/unmount/params）由内核经 WebUI 路由下发
 - **视图数据**：玩法包自注册 MCP 工具 + 内核 REST 非动作端点（场景/状态/编辑），
   不新增数据通道（D7）
 - **跳转**：`goto_view(key, params)` 内核导航（注册表 API + WebUI 路由联动）；
@@ -309,6 +310,48 @@ class ItemDef:
   前端路由初始化共用
 - **兜底**：无任何视图注册时，WebUI 显示内核"无视图"提示（D7）
 - 不想写组件的玩法包可退化为"数据 + UiBlock 通用渲染"（内核渲染器兜底）
+
+**视图注入（两种通道，阶段 3 定稿）**：
+| 通道 | 适用 | 机制 | 状态 |
+|---|---|---|---|
+| `ui_hook` | UiBlock 渲染树（交互弹窗等） | 服务端展开：`apply_ui_hooks` 在 interact 结果返回前注入（before/after/replace，递归） | ✅ 已接线（G18 解决；WebUI 零改动） |
+| 挂载点 slot | 自定义 Vue 组件视图（movement view.js 等） | `register_view_slot(view_key, slot_name, provider)` + 视图组件 `<slot name>`；WebUI 渲染时挂载 provider 组件 | 📐 设计稿（G4：表达力不足时再实现——快捷栏/手持按钮类注入） |
+
+### 4.5 玩家部件模式（Player Part，阶段 2 定稿）
+
+**问题**：背包、技能树、装备栏等概念"属于玩家"（拥有关系），但玩家对象不能
+预先包含它们——后续追加新部件不得要求重新设计玩家对象（组合优于基础依赖）。
+
+**结论**：**玩家 = 内核身份实体 + 可追加部件**——玩家*包含*部件（拥有关系），
+但*不依赖*部件（无包间硬依赖；部件从玩家身上"追加/卸下"）。
+
+```
+内核 Entity（kind=player/agent：id/位置/name/desc/attrs/state/user_id）——玩家"存在"
+   ├─ worlditor_play_player     玩家壳：角色视图 + world_profile（零包间依赖）
+   └─ 部件（可追加，按 entity_id 键控）：
+        ├─ worlditor_play_starter   出生礼包（阶段 1 拆分，硬依赖 items——发货需要）
+        ├─ worlditor_play_items     背包（数据 = 玩家级 KV，跨世界跟人走）
+        ├─ worlditor_play_skills    技能树（未来，同模式）
+        └─ worlditor_play_equipment 装备栏（未来，同模式）
+```
+
+**部件 = 玩法包 + 四项声明**：
+| 维度 | 约定 |
+|---|---|
+| 数据 | `play_data` KV，namespace = 部件包 play_id、key 含 entity_id（如 `bag:<eid>`）；**默认玩家级（跨世界跟人走，不传 world_id）**，世界级隔离为可选（传 world_id，D15 双层隔离） |
+| 服务 | 部件能力出口（bag_add/take/count/get…），供消费方软探测/调用（`list_services` + `call_service`） |
+| 工具/视图 | 部件自带 MCP 工具与视图（独立 tab）；注入玩家聚合视图属阶段 3（视图挂载点） |
+| 生命周期 | 随包启停/卸载——停用即从玩家身上"卸下"该部件；数据保留（disable 不清 KV） |
+
+**依赖规则**：
+- **追加不产生依赖**：消费方用 `api.list_services()` 探测部件服务——存在才用
+  （软依赖示范：player 包 world_profile 的背包摘要）；`requires.plays` 只用于
+  "需要其原子能力才能工作"的硬依赖（如 starter 发货必须 items 服务）
+- **身份与位置永不依赖部件**：实体存在/移动/身份永远可用（层面归属内核）
+
+**落地状态**：阶段 1 = starter 拆分 + player 零依赖壳（✅ 已落地）；阶段 3 =
+视图挂载点（G4 插槽 / ui_hook 接线，G18）+ 按需内核级部件注册表
+（register_player_part：声明/冲突仲裁/管理页挂载清单——等真实多部件需求）。
 
 ## 5. 行为归属（谁提供什么）
 
@@ -319,7 +362,8 @@ class ItemDef:
 | 说话：cell 规则 / world 广播（喇叭+冷却） | social 包（D1：内核无 say；喇叭 = 内核物品定义 + 本包持有） |
 | 背包模型 / 整理 / 物品 use 规则 | items 包（D8：持有全下沉） |
 | 视野视图（3×3 或任意形态） | movement 包（register_view） |
-| 玩家出生礼包 / 角色视图 | player 包 |
+| 玩家出生礼包 | starter 包（阶段 1 从 player 拆分；可停用=无礼包，可替换=自定义礼包） |
+| 角色视图 / world_profile | player 包（零依赖壳；背包摘要软依赖，§4.5） |
 | 交互弹窗编排 / 动作菜单 | interaction 包 |
 | 种子演示实体（商贩/告示牌/木门）的 kind 与交互 | interaction 包（实体本身由内核播种，D13） |
 | 日志视图 | social 包 |
@@ -327,12 +371,13 @@ class ItemDef:
 | 世界/组织树管理（CRUD/激活配置） | 内核（admin，管理端口，D15） |
 | 地图编辑 / 玩法包管理 UI | 内核（admin 人类入口；玩法包经 API 程序化编辑，D14） |
 
-## 6. 内置领域包（5 个，默认启用，D5）
+## 6. 内置领域包（6 个，默认启用，D5）
 
 | 玩法包 | 领域 | 贡献 |
 |---|---|---|
 | `worlditor_play_items` | 背包与物品使用（持有下沉，D8） | 背包模型自定（有限格子/单物品多格/堆叠/整理）、物品 use 规则、背包视图、world_bag/world_use 工具；注册基础物品定义（苹果等）并声明字段 |
-| `worlditor_play_player` | 玩家 | 玩家实体行为、出生礼包、角色视图 |
+| `worlditor_play_starter` | 出生礼包（部件，§4.5） | 新玩家/agent 出生礼包（金币 + 物品，attrs 标记只发一次）；可停用/可替换 |
+| `worlditor_play_player` | 玩家 | 玩家壳（零依赖）：角色视图、world_profile 工具（背包摘要为软依赖）；出生礼包见 starter |
 | `worlditor_play_movement` | 移动与视野 | 默认移动 = 内核 move；视野视图（3×3）、world_look/world_move/world_who 工具；可按需 override move |
 | `worlditor_play_interaction` | 交互 | 交互弹窗编排、动作菜单、world_interact 工具；注册种子演示实体的 kind 与交互（merchant/sign/door：talk/trade/read/open） |
 | `worlditor_play_social` | 说话与广播 | cell 说话 / world 广播（喇叭 = 内核物品定义，本包持有 + 冷却自管，D1）、world_say 工具、日志视图 |

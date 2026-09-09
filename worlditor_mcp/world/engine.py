@@ -614,11 +614,17 @@ class WorldEngine:
         ptype = provider.get("type")
         if ptype is not None and ptype != "component":
             raise WorldError("视图 provider.type 仅支持 component")
+        # 视图安全（阶段 3）：url 必须指向本站本包资源（/plays/<play_id>/web/…）
+        # —— WebUI 对 provider.url fetch 时附带 Bearer，跨站 URL 会外泄凭据
+        url = str(provider.get("url") or "")
+        url_prefix = f"/plays/{play_id}/web/"
+        if not url.startswith(url_prefix):
+            raise WorldError(f"视图 provider.url 必须指向本站本包资源（{url_prefix}…）")
         self._views[key] = _ViewBinding(
             play_id=play_id,
             title=title,
             icon=str(icon or ""),
-            provider={"type": "component", "url": str(provider.get("url") or "")},
+            provider={"type": "component", "url": url},
         )
 
     def list_views(self) -> list[dict]:
@@ -1841,6 +1847,10 @@ class WorldEngine:
                 raise WorldError("交互执行出错，请稍后再试") from None
             if not isinstance(result, InteractionResult):
                 raise WorldError("交互返回结果格式错误")
+            # G18：ui_hook 注入——交互弹窗渲染前服务端展开（WebUI 零改动；
+            # 注入块随 on_interact 事件同步进 SSE payload）
+            if result.ui is not None:
+                result.ui = await self.apply_ui_hooks(result.ui)
             await self._emit("on_interact", req, result)
             if item_id is not None:
                 await self._emit("on_item_used", entity, item_id, req.args, result)

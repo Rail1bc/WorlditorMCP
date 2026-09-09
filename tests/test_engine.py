@@ -591,6 +591,36 @@ def test_apply_ui_hooks_positions(tmp_path):
     _run(_scenario(tmp_path, fn))
 
 
+def test_interact_result_applies_ui_hooks(tmp_path):
+    """G18 接线：interact 结果在返回前应用 ui_hook（交互弹窗注入，端到端）。"""
+
+    from worlditor_mcp.world.model import InteractionResult, UiBlock
+    from worlditor_mcp.world.play.api import WorlditorPlayAPI
+
+    async def fn(engine: WorldEngine, clock=None):
+        api = WorlditorPlayAPI(engine, "pkg_a")
+        engine.attach_play_api("pkg_a", api)
+
+        async def say_hi(api, req):
+            return InteractionResult(text="你好", ui=UiBlock(kind="text", text="你好"))
+
+        api.register_interaction("hi", say_hi, label="打招呼")
+        engine.register_ui_hook(
+            "text",
+            "before",
+            _hook_provider([UiBlock(kind="text", text="[注入]")]),
+            play_id="p1",
+        )
+        player = await engine.place_entity("player", "default", 0, 0, name="小明")
+        npc = await engine.place_entity("npc", "default", 0, 1, name="NPC")
+        result = await engine.interact(player.id, npc.id, "hi")
+        assert result.text == "你好"
+        assert [b.text for b in result.ui.blocks] == ["[注入]"]
+        assert result.ui.text == "你好"  # 主块未被替换
+
+    _run(_scenario(tmp_path, fn))
+
+
 def _hook_provider(blocks: list | None, *, boom: bool = False):
     async def provider(api, block):
         if boom:

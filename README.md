@@ -95,7 +95,7 @@ disable/过滤器链，D11/G14）、跨包服务（M3）、spawn/编辑实体与
 - `docs/PLAY_DEV.md`：玩法包开发指南（API 全量 + 约定 + 示例）
 - `DESIGN.md`：设计/协议/路线（唯一权威）
 - `GAPS.md`：平台缺口清单（历史与观察项）
-- 内置 5 个领域包（`worlditor_mcp/builtin_plays/`）即参考实现
+- 内置 6 个领域包（`worlditor_mcp/builtin_plays/`）即参考实现
 
 ## 开发
 

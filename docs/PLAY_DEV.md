@@ -1,7 +1,7 @@
 # 玩法包开发指南（PLAY_DEV）
 
 > worlditor 的所有**行为**都由玩法包承载：内核只有数据 + 原语 + 注册表。
-> 内置 5 个领域包（`worlditor_mcp/builtin_plays/`）即参考实现；社区包
+> 内置 6 个领域包（`worlditor_mcp/builtin_plays/`）即参考实现；社区包
 > 放 `<数据目录>/plays/worlditor_play_*/`。本文档 = 玩法包唯一权威开发说明
 > （与 DESIGN.md 一致；GAPS.md 记录平台缺口历史）。
 >
@@ -196,7 +196,8 @@ total = await api.call_service("worlditor_play_items", "bag_add",
 - 信任边界：玩法包间互信（社区包都是管理员装的）；跨包权限约定见 §11
 
 > 内置参考：items 包提供 `bag_add/bag_take/bag_count/bag_get` 四个服务；
-> player 包出生礼包、interaction 包商贩交易、social 包喇叭消耗都经服务调用。
+> starter 包出生礼包（阶段 1 拆分自 player）、interaction 包商贩交易、
+> social 包喇叭消耗都经服务调用。
 
 ## 7. MCP 工具
 
@@ -244,8 +245,17 @@ api.register_view(
   callTool，见内置包 `web/*.js` 参考）或只读 REST（/scene 等），不新增数据通道（D7）
 - **请求需带 Bearer**：`/plays/<id>/web/*`、`/scene` 等要求认证——视图内部
   fetch 一律带 `Authorization: Bearer <localStorage 的 worlditor_token>`（内置包示例）
+- **provider.url 必须站内本包**：`/plays/<play_id>/web/…`（内核校验，阶段 3）——
+  WebUI 对该 url fetch 时附 Bearer，因此拒绝相对/跨站/跨包地址
 - `UiBlock` 参数 = 内核 UiBlockRenderer 组件（用 UiBlock 树渲染列表/表单/文本
   免写组件；复杂界面直接写 Vue）
+- **视图注入两种通道**（DESIGN §4.4）：
+  - `ui_hook`（UiBlock 树，**服务端展开**）：注册 `register_ui_hook(block_kind,
+    position, provider)`——交互弹窗等 UiBlock 渲染前注入（已接线，G18 解决）；
+    玩法包无需知道 UI 细节
+  - **挂载点 slot**（自定义组件视图，**设计稿**）：`register_view_slot(view_key,
+    slot_name, provider)` + 视图组件 `<slot name>`——快捷栏/手持按钮等需要
+    注入到自定义 Vue 组件时再实现（G4）
 - 兜底：无任何视图时 WebUI 显示内核"无视图"提示（D7）
 - `/meta` 返回 `{mode: "play"|"admin"}`：同一前端按端口切换界面（玩家视图宿主
   vs 管理面板）——视图只在玩家模式加载（D16 界面分离）
@@ -282,6 +292,20 @@ SSE 推送；`log=True` 才写 world_log（高频事件勿写，5000 条上限�
 - 物品定义同构（ItemDef + 字段）
 
 ## 11. 约定与规范
+
+### 玩家部件（Player Part，DESIGN §4.5）
+
+背包、技能树、装备栏等概念"属于玩家"（拥有关系）但**不依赖**玩家对象——
+新部件是**追加**，不得要求重设计玩家。做一个玩家部件：
+
+- **数据**：`play_data` KV，key 含 entity_id（如 `bag:<eid>`）；默认**玩家级**
+  （跨世界跟人走，kv 不传 world_id）；世界级隔离为可选（传 world_id）
+- **服务**：部件能力出口（bag_add/take/…），供其他包软探测/调用
+- **软依赖**：消费方先 `api.list_services()` 探测，**存在才用**（示范：
+  player 包 world_profile 的背包摘要——items 不在时仅显示属性）
+- **不写硬依赖**：`requires.plays` 仅用于"没有它部件无法工作"（如 starter 发货
+  必须 items）；纯展示/可选功能一律软依赖
+- 参考实现：`worlditor_play_starter`（出生礼包）与 `worlditor_play_items`（背包）
 
 ### 命名契约（G6，社区共同遵守）
 
@@ -326,9 +350,10 @@ interaction 包商贩交易 = 金币 attrs + items 服务，无内核强制。
 
 | 包 | 能力 | 关键机制 |
 |---|---|---|
-| `worlditor_play_movement` | 朝向移动 + 3×3 视野 + world_look/move/turn/who | move 过滤器（相对方向换算）+ register_view |
 | `worlditor_play_items` | 背包（20 格/堆叠 99）+ world_bag/use + 苹果/面包 | **服务** bag_add/take/count/get；持有下沉（D8） |
-| `worlditor_play_player` | 出生礼包 + 角色视图 + world_profile | 事件 on_world_edited + 跨包服务 |
+| `worlditor_play_starter` | 出生礼包（金币+物品，只发一次） | 部件模式（§11）：事件 on_world_edited + 跨包服务；可停用/替换 |
+| `worlditor_play_player` | 角色视图 + world_profile | 玩家壳零依赖：背包摘要**软依赖**（list_services 探测）；出生礼包见 starter |
+| `worlditor_play_movement` | 朝向移动 + 3×3 视野 + world_look/move/turn/who | move 过滤器（相对方向换算）+ register_view |
 | `worlditor_play_interaction` | 种子实体 kind/交互 + world_interact | 商贩交易跨包；door block_move |
 | `worlditor_play_social` | cell 说话 + world 广播（喇叭+冷却）+ 日志视图 | 自定义事件 + kv 冷却自管 |
 

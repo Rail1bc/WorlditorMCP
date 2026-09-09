@@ -56,8 +56,9 @@
 - **方案**：视图插槽机制——`register_view_slot(view_key, slot_name, provider)`，
   视图组件声明 `<slot name="...">`，WebUI 渲染时挂载插槽组件（纯增量协议）
 - **成本**：内核注册表 + WebUI 渲染器，中等
-- **状态**：UiBlock 路径先行（世界视图 = UiBlock + ui_hook 注入）；表达力
-  不足时再上插槽机制
+- **状态**：UiBlock 路径已闭环（**G18 已解决**：ui_hook 已接线到 interact 结果，
+  服务端展开）；组件视图注入 = **挂载点 slot 设计稿**（DESIGN §4.4 视图注入表，
+  表达力不足时再实现）
 - **当前绕道**：世界视图用 UiBlock 构建；或各包独立视图 + goto_view 跳转
 
 ### G5 玩法包后台任务生命周期约定
@@ -169,15 +170,28 @@
   检查；各补 HTTP 级测试
 - **状态**：⏸ 暂缓（记录于 2026-09 审查，见审查报告 P0-3）
 
-### G18 ui_hook 未接线（观察）
+### G18 ui_hook 未接线（已解决）
 - **触发**：P0-1 修复期间核查——`apply_ui_hooks` 在生产路径无调用者
   （仅 tests/test_engine.py 直调）；`register_ui_hook` 注册表完整，
-  但 `_build_scene` / 交互结果渲染未应用钩子，ui_hook 实际不生效
+  但交互结果渲染未应用钩子，ui_hook 实际不生效
 - **影响**：G4「UiBlock 路径先行（视图 = UiBlock + ui_hook 注入）」的
   注入环节空转；玩法包注册 ui_hook 静默无效
-- **方案**：`_build_scene` 与 InteractionResult.ui 序列化前应用
-  `apply_ui_hooks`（已锁内化，直接接线即可，另补端到端测试）
-- **状态**：待决策（随 G4 插槽机制的时机一起定）
+- **方案**：interact 结果返回前应用 `apply_ui_hooks`（服务端展开、WebUI
+  零改动；注入块随 on_interact 事件同步进 SSE）
+- **状态**：✅ 已解决（阶段 3：engine._interact_default 接线 + 端到端测试
+  test_interact_result_applies_ui_hooks；注：SceneView 为纯数据无 UiBlock，
+  ui_hook 适用面 = 交互弹窗等 UiBlock 渲染树）
+
+### G19 包裹覆（play_id 覆盖）机制未背书（观察）
+- **触发**：阶段 1 拆分核查——`discover()` 先扫内置再扫社区目录，
+  `load_all` 以 play_id 为键（play/__init__.py:74-85, 112）：社区包同
+  play_id 会**静默覆盖**内置包（如世界 http 自定义 `worlditor_play_items`）
+- **影响**：这是「替换内置包」的唯一正式路径（M4 验证的是 override 机制，
+  非包裹覆），但无告警、管理页无提示、无测试——意外覆盖时难以察觉
+- **方案**：正式化——加载时若社区覆盖内置：管理页 list 标注（builtin 标志
+  改为来源+被覆盖提示）；`_load_errors`/日志告警；补覆盖场景测试
+- **状态**：观察（等真实"替换背包/礼包"需求；阶段 1 的 starter 可替换性
+  已实际依赖此机制）
 
 ---
 

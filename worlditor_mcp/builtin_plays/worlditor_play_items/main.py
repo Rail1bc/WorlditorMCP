@@ -7,8 +7,9 @@
   由引擎在锁内调用（读改写原子）；工具与视图也经服务读写——单一入口。
 - **物品定义**（D13）：苹果/面包归本包注册（内核仅喇叭）；use_action 指向
   interaction 包注册的交互动作（eat）。
-- **跨包用例**：player 包发出生礼包（bag_add）、interaction 包商贩交易
-  （bag_take 收款 / bag_add 交货）、social 包喇叭持有（bag_count/take）。
+- **跨包用例**：starter 包发出生礼包（bag_add，阶段 1 拆分自 player）、
+  interaction 包商贩交易（bag_take 收款 / bag_add 交货）、social 包喇叭持有
+  （bag_count/take）。
 """
 
 from __future__ import annotations

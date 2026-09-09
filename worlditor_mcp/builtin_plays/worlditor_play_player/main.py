@@ -1,12 +1,13 @@
-"""worlditor_play_player：玩家（M3 领域包）。
+"""worlditor_play_player：玩家档（玩家部件模式，DESIGN §4.5）。
 
-职责（DESIGN §6）：
-- **出生礼包**：新玩家/agent 实体出生 → 发初始物品（调 items 包 bag_add 服务，
-  跨包真实用例）+ 初始金币（attrs 玩法数据）；只发一次（attrs 标记）。
+职责（阶段 1 拆分后）：
 - **角色视图**：显示我的 attrs 角色卡（数据来自 /scene，组件自行 fetch）。
-- **world_profile 工具**：我的角色信息（attrs + 背包摘要，背包经 items 服务读）。
+- **world_profile 工具**：我的角色信息（attrs + 可选背包摘要）。
 
-依赖：worlditor_play_items（play.yaml requires.plays，加载器拓扑保证先加载）。
+设计：玩家 = 内核身份实体（player/agent kind，身份红线在内核）+ **可追加
+部件**——出生礼包 = worlditor_play_starter、背包 = worlditor_play_items…
+本包是「玩家壳」，**零包间硬依赖**：背包摘要为软依赖（list_services 探测
+bag_get，items 服务存在才附带，否则仅显示属性）。
 """
 
 from __future__ import annotations
@@ -15,23 +16,15 @@ from worlditor_mcp.world import WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
 ITEMS_PLAY = "worlditor_play_items"
-_GOLD_ATTR = "gold"
-_STARTER_ATTR = "starter_granted"
-
-# 出生礼包：金币 + 苹果×3 + 面包×2
-STARTER_GOLD = 100
-STARTER_ITEMS = {"apple": 3, "bread": 2}
-
 _VIEW_KEY = "player"
 
 
 def setup(api: WorlditorPlayAPI, context) -> None:
     """玩法包入口（由内核 PlayLoader 调用）。"""
-    api.register_world_event("on_world_edited", _on_edited)
     api.register_tool(
         "world_profile",
         _world_profile,
-        description="查看你的角色信息：属性与背包摘要。",
+        description="查看你的角色信息：属性与（可选）背包摘要。",
     )
     api.register_view(
         _VIEW_KEY,
@@ -44,24 +37,6 @@ def setup(api: WorlditorPlayAPI, context) -> None:
     )
 
 
-async def _on_edited(api: WorlditorPlayAPI, what) -> None:
-    """新玩家/agent 出生 → 发礼包（幂等：attrs 标记只发一次）。"""
-    if not isinstance(what, dict) or what.get("op") != "place_entity":
-        return
-    entity = api.get_entity(what.get("entity_id", ""))
-    if entity is None or entity.kind not in ("player", "agent"):
-        return
-    if entity.attrs.get(_STARTER_ATTR):
-        return
-    # 初始金币（attrs 玩法数据）
-    await api.set_attrs(entity.id, {_GOLD_ATTR: STARTER_GOLD, _STARTER_ATTR: True})
-    # 初始物品（items 包背包服务；依赖缺失时服务调用报错由加载拓扑拦截）
-    for item_id, count in STARTER_ITEMS.items():
-        await api.call_service(
-            ITEMS_PLAY, "bag_add", entity_id=entity.id, item_id=item_id, count=count
-        )
-
-
 def _me(api: WorlditorPlayAPI):
     entity_id = api.caller()
     if entity_id is None:
@@ -72,18 +47,28 @@ def _me(api: WorlditorPlayAPI):
     return entity
 
 
+def _has_service(api: WorlditorPlayAPI, play_id: str, name: str) -> bool:
+    """部件软依赖探测：服务提供方已加载（本体包未装时玩家壳仍可用）。"""
+    return any(
+        s["play_id"] == play_id and s["name"] == name for s in api.list_services()
+    )
+
+
 async def _world_profile(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
-    """我的角色卡：attrs + 背包摘要（items 服务）。"""
+    """我的角色卡：attrs + （可选）背包摘要——背包为软依赖部件。"""
     me = _me(api)
-    bag = await api.call_service(ITEMS_PLAY, "bag_get", entity_id=me.id)
-    lines = [f"{s['name']}×{s['count']}" for s in bag["slots"]]
+    text = f"{me.name}（{me.kind}）：" + "、".join(
+        f"{k}={v}" for k, v in me.attrs.items()
+    )
+    bag = None
+    if _has_service(api, ITEMS_PLAY, "bag_get"):
+        bag = await api.call_service(ITEMS_PLAY, "bag_get", entity_id=me.id)
+        lines = [f"{s['name']}×{s['count']}" for s in bag["slots"]]
+        text += "；背包：" + ("、".join(lines) if lines else "空的")
+    else:
+        text += "；背包：未启用（安装 worlditor_play_items 后可见）"
     return {
-        "text": (
-            f"{me.name}（{me.kind}）："
-            + "、".join(f"{k}={v}" for k, v in me.attrs.items())
-            + "；背包："
-            + ("、".join(lines) if lines else "空的")
-        ),
+        "text": text,
         "name": me.name,
         "kind": me.kind,
         "attrs": dict(me.attrs),
