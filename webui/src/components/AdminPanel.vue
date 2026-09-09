@@ -11,7 +11,7 @@
           v-for="item in NAV"
           :key="item.key"
           class="nav-item"
-          :class="{ on: route === item.key }"
+          :class="{ on: navOn(item) }"
           @click="goto(item.key)"
         >
           <span class="nav-icon">{{ item.icon }}</span>
@@ -36,6 +36,7 @@ import PlaysPage from "../pages/admin/PlaysPage.vue";
 import InvitesPage from "../pages/admin/InvitesPage.vue";
 import WorldsPage from "../pages/admin/WorldsPage.vue";
 import MapEditorPage from "../pages/admin/MapEditorPage.vue";
+import PlayPageHost from "../pages/admin/PlayPageHost.vue";
 
 const NAV = [
   { key: "accounts", title: "账户管理", icon: "👤" },
@@ -50,6 +51,7 @@ const PAGES = {
   invites: InvitesPage,
   worlds: WorldsPage,
   maps: MapEditorPage, // 地图编辑器（从世界页进入，无一级导航）
+  pages: PlayPageHost, // 玩法包管理页（独立路由：#/admin/pages/{play_id}/{key}）
 };
 
 const route = ref("");
@@ -58,6 +60,12 @@ const current = computed(() => ({
   key: route.value,
   comp: PAGES[route.value] || PAGES.accounts,
 }));
+
+function navOn(item) {
+  // 管理页子路由（pages/xxx）归属「玩法包」导航项高亮
+  if (item.key === "plays") return route.value === "plays" || route.value === "pages";
+  return route.value === item.key;
+}
 
 function parseRoute(hash) {
   // "#/admin/accounts" / "#/admin/maps/default" → "accounts" / "maps"

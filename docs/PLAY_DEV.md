@@ -400,6 +400,9 @@ api.register_admin_page(
 
 ### 约定
 
+- **管理页是独立页面**（管理端路由 `#/admin/pages/{play_id}/{page_key}`，
+  非弹窗）：复杂配置玩法包可在页面内自建二级面板/分栏；组件可读取
+  `page` prop（{play_id, key, title, actions}）
 - **数据语义归玩法包**：action handler 收到**本包自己的 API 实例**（play_id
   已绑定），在引擎锁内执行；数据校验、不变量、持久化全由玩法包负责
   （示例：物品管理 create/update 后 `await api.flush_item_defs()` 落库）。

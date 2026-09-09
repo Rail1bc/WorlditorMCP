@@ -375,6 +375,9 @@ class ItemDef:
 - **运行**：`GET /admin/play-pages`（管理端导航清单，按 (play_id, key) 排序）；
   `POST /admin/play-pages/{play_id}/{page_key}/{action}` 锁内代理调用（异常隔离，
   同 call_service）；全部端点强制 tier=admin（双保险）。
+- **管理页 = 管理端独立路由页面**（`#/admin/pages/{play_id}/{key}`，非弹窗）——
+  复杂配置玩法包可在页面内自建二级面板/分栏，避免弹窗套弹窗；管理端玩法包
+  详情页「管理页」tab 一键进入，返回按钮回玩法包页。
 - **数据语义归玩法包**：内核**不**裸露 play_data/edit 类读写——背包 slots、
   物品定义字段等只有玩法包懂；管理动作 = 玩法包在锁内以自己的 API 读写
   （kv/服务/工具/注册表），校验与不变量由玩法包负责。

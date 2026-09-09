@@ -162,31 +162,11 @@
       <div v-else class="play-detail dim center">← 选择一个玩法包查看详情</div>
     </div>
   </section>
-
-  <!-- 管理页宿主弹层 -->
-  <div v-if="hostPage" class="modal-mask" @click.self="hostPage = null">
-    <div class="modal">
-      <header class="modal-head">
-        <h3>{{ hostPage.icon }} {{ hostPage.title }}</h3>
-        <button class="btn btn-ghost" @click="hostPage = null">关闭</button>
-      </header>
-      <component
-        v-if="hostComp"
-        :is="hostComp"
-        :page="hostPage"
-        :key="hostPage.play_id + '/' + hostPage.key"
-      />
-      <p v-else-if="hostError" class="error-text">{{ hostError }}</p>
-      <p v-else class="dim">加载管理页组件…</p>
-    </div>
-  </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from "vue";
-import * as Vue from "vue";
-import { apiGet, apiPost, getToken } from "../../api";
-import UiBlockRenderer from "../../components/UiBlockRenderer.vue";
+import { apiGet, apiPost } from "../../api";
 
 const plays = ref([]);
 const pages = ref([]);
@@ -199,9 +179,6 @@ const selected = ref("");
 const tab = ref("pages");
 const busy = ref(false);
 const error = ref("");
-const hostPage = ref(null);
-const hostComp = ref(null);
-const hostError = ref("");
 
 const tabs = [
   { key: "pages", title: "管理页" },
@@ -303,29 +280,10 @@ async function uninstall(playId) {
   }
 }
 
-async function openPlayPage(pg) {
-  hostPage.value = pg;
-  hostComp.value = null;
-  hostError.value = "";
-  try {
-    const headers = {};
-    const token = getToken();
-    if (token) headers["Authorization"] = `Bearer ${token}`;
-    const res = await fetch(pg.component_url, { headers });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const code = await res.text();
-    // 管理页组件协议（DESIGN §4.6）：与视图组件一致——文件 = IIFE，
-    // (function(Vue, UiBlock) 形参由加载器注入并执行，返回组件选项
-    // eslint-disable-next-line no-new-func
-    const factory = new Function(
-      "Vue",
-      "UiBlock",
-      "return (" + code.trim().replace(/;+\s*$/, "") + ")(Vue, UiBlock);"
-    );
-    hostComp.value = factory(Vue, UiBlockRenderer);
-  } catch (e) {
-    hostError.value = "管理页组件加载失败：" + e.message;
-  }
+function openPlayPage(pg) {
+  // 管理页为独立路由页面（#/admin/pages/{play_id}/{key}）——复杂配置的
+  // 管理页可自建二级面板，避免弹窗套弹窗
+  location.hash = `#/admin/pages/${encodeURIComponent(pg.play_id)}/${encodeURIComponent(pg.key)}`;
 }
 
 onMounted(load);
@@ -452,34 +410,6 @@ onMounted(load);
 }
 .page-entry:hover {
   border-color: var(--accent-dim);
-}
-.modal-mask {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  padding: 16px;
-}
-.modal {
-  width: 100%;
-  max-width: 760px;
-  max-height: 86vh;
-  overflow: auto;
-  background: var(--bg-2);
-  border-radius: 14px;
-  padding: 16px;
-}
-.modal-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-}
-.modal-head h3 {
-  margin: 0;
 }
 .dim {
   color: var(--text-dim);
