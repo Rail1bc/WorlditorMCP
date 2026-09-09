@@ -220,10 +220,11 @@ onMounted(refresh);
   gap: 16px;
 }
 .admin-card {
-  border: 1px solid #e2e2e2;
+  border: 1px solid var(--bg-3);
   border-radius: 10px;
   padding: 14px 16px;
-  background: #fff;
+  background: var(--bg-2);
+  color: var(--text);
 }
 .admin-card h3 {
   margin: 0 0 10px;
@@ -238,7 +239,7 @@ onMounted(refresh);
 .admin-table td {
   text-align: left;
   padding: 6px 8px;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--bg-3);
 }
 .admin-actions {
   display: flex;
@@ -246,7 +247,7 @@ onMounted(refresh);
   justify-content: flex-end;
 }
 .btn-danger {
-  color: #b00020;
+  color: var(--danger);
 }
 .admin-codes {
   list-style: none;
@@ -263,7 +264,7 @@ onMounted(refresh);
   gap: 8px;
 }
 .error-text {
-  color: #b00020;
+  color: var(--danger);
   font-size: 13px;
 }
 </style>
