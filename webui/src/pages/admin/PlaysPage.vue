@@ -314,9 +314,14 @@ async function openPlayPage(pg) {
     const res = await fetch(pg.component_url, { headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const code = await res.text();
-    // 管理页组件协议：与视图组件一致 (function(Vue, UiBlock) { return {...} })()
+    // 管理页组件协议（DESIGN §4.6）：与视图组件一致——文件 = IIFE，
+    // (function(Vue, UiBlock) 形参由加载器注入并执行，返回组件选项
     // eslint-disable-next-line no-new-func
-    const factory = new Function("Vue", "UiBlock", code);
+    const factory = new Function(
+      "Vue",
+      "UiBlock",
+      "return (" + code.trim().replace(/;+\s*$/, "") + ")(Vue, UiBlock);"
+    );
     hostComp.value = factory(Vue, UiBlockRenderer);
   } catch (e) {
     hostError.value = "管理页组件加载失败：" + e.message;

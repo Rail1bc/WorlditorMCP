@@ -298,6 +298,13 @@ class ItemDef:
 | 数据字段设施 | 三层次字段 + 分类（§3.1） |
 
 **视图协议（G3）**：
+- **组件文件形态**：`web/xxx.js` = IIFE `(function (Vue, UiBlock) { … });`——
+  WebUI 以 `new Function("Vue", "UiBlock", code)` 加载，body =
+  `return (<code>)(Vue, UiBlock);`（形参由加载器注入并执行，返回组件选项）；
+  以 `(function (Vue, UiBlock) {` 开头、`});` 收尾
+- **视图内 MCP 调用必须管理会话**：streamable HTTP 先 `initialize` 取
+  `Mcp-Session-Id` 头，后续 `tools/call` 带上（否则 400 Missing session ID）；
+  实现见内置包 `web/*.js` 的 `ensureSession()`
 - **provider 形态**：`provider = {type: "component", url: "web/xxx.js"}`——WebUI
   按需动态加载组件入口（玩法包自有资源 `web/`）；**url 必须为站内本包资源**
   （`/plays/<play_id>/web/…`，内核校验——WebUI fetch 时附 Bearer，跨站地址

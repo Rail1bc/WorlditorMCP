@@ -231,18 +231,27 @@ api.register_view(
 ```
 
 `web/view.js` 是**视图组件协议**文件——`new Function("Vue", "UiBlock", code)`
-动态加载，文件体即函数体：
+动态加载，**文件 = IIFE**（形参 `Vue`/`UiBlock` 由加载器注入并执行，返回
+Vue 组件选项）：
 
 ```js
 (function (Vue, UiBlock) {
+  "use strict";
   const { ref, onMounted, h } = Vue;
   // ...组件实现（Vue 组件选项：props {view}, setup, render）
   return { name: "XxxView", props: { view: Object }, setup() { ... } };
-})
+});
 ```
 
+- **协议约定**：文件必须以 `(function (Vue, UiBlock) {` 开头、`});` 收尾
+  （加载器 body = `return (<code>)(Vue, UiBlock);`）；加载失败前端显示
+  「视图加载失败」
 - 组件 props 收到 `view`（注册元数据）；**数据通道 = MCP 工具**（视图内嵌轻量
   callTool，见内置包 `web/*.js` 参考）或只读 REST（/scene 等），不新增数据通道（D7）
+- **MCP 会话必须管理**（视图内 callTool 实现）：streamable HTTP 要求先
+  `initialize` 拿响应头 `Mcp-Session-Id`，后续 `tools/call` 请求头带上——
+  否则返回 400 `Missing session ID`（内置包参考实现：`ensureSession()` +
+  模块级 `_sessionId` 缓存）
 - **请求需带 Bearer**：`/plays/<id>/web/*`、`/scene` 等要求认证——视图内部
   fetch 一律带 `Authorization: Bearer <localStorage 的 worlditor_token>`（内置包示例）
 - **provider.url 必须站内本包**：`/plays/<play_id>/web/…`（内核校验，阶段 3）——
@@ -396,8 +405,9 @@ api.register_admin_page(
   （示例：物品管理 create/update 后 `await api.flush_item_defs()` 落库）。
 - **错误透出**：`WorldError` 的消息会原样返回（400 + `{"error": msg}`）；
   其他异常被隔离为通用错误文案（管理端可见）。
-- **组件**：与视图组件同一动态加载协议（`(function(Vue, UiBlock) {...})()`，
-  render 函数，运行时无模板编译器）；数据通道 = `fetch` 管理端代理端点
+- **组件**：与视图组件同一动态加载协议（`(function(Vue, UiBlock) {…})`，
+  IIFE 形参由加载器注入执行，见 §8；render 函数，运行时无模板编译器；
+  数据通道 = `fetch` 管理端代理端点
   `/admin/play-pages/{play_id}/{page_key}/{action}`（同源 + Bearer，
   仅 tier=admin）。
 - **管理面不扩展内核**：不要用管理页绕过玩法包语义去裸写其他包的 play_data。

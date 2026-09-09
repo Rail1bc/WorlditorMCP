@@ -21,8 +21,11 @@
   };
   const FACING_ARROW = { up: "▲", right: "▶", down: "▼", left: "◀" };
 
-  // 轻量 MCP 调用（组件无法 import，内嵌实现；协议见 PLAY_DEV §8）
-  async function callTool(name, args) {
+  // MCP streamable HTTP 会话（视图组件无法 import SDK，内嵌轻量实现）
+  let _sessionId = "";
+
+  async function ensureSession() {
+    if (_sessionId) return;
     const resp = await fetch("/world/mcp", {
       method: "POST",
       headers: {
@@ -30,6 +33,34 @@
         Accept: "application/json, text/event-stream",
         "MCP-Protocol-Version": "2025-06-18",
         Authorization: "Bearer " + (localStorage.getItem(TOKEN_KEY) || ""),
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 0,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "worlditor-webui", version: "0.1.0" },
+        },
+      }),
+    });
+    if (!resp.ok) throw new Error("MCP 初始化失败：HTTP " + resp.status);
+    _sessionId = resp.headers.get("Mcp-Session-Id") || "";
+    if (!_sessionId) throw new Error("MCP 初始化失败：未取得会话");
+  }
+
+  // 轻量 MCP 调用（组件无法 import，内嵌实现；协议见 PLAY_DEV §8）
+  async function callTool(name, args) {
+    await ensureSession();
+    const resp = await fetch("/world/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2025-06-18",
+        Authorization: "Bearer " + (localStorage.getItem(TOKEN_KEY) || ""),
+        "Mcp-Session-Id": _sessionId,
       },
       body: JSON.stringify({
         jsonrpc: "2.0",

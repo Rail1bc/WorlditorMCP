@@ -401,3 +401,35 @@ def test_items_admin_create_persisted(tmp_path):
             raise
 
     _run(main())
+
+
+# ---------- 视图/管理页组件协议（防回归，v0.1.14） ----------
+
+
+def test_web_component_protocol_guarded():
+    """内置包 web 组件协议（防回归）：IIFE 形态 + MCP 会话管理。
+
+    组件经 new Function("Vue","UiBlock", code) 加载（body = return (code)(Vue,
+    UiBlock)）——文件必须 IIFE 形参风格；内嵌 MCP 调用必须实现 streamable
+    HTTP 会话（initialize → Mcp-Session-Id），否则浏览器端 400。
+    """
+    web_files = sorted(BUILTIN_DIR.glob("*/web/*.js"))
+    assert web_files, "应存在玩法包 web 组件文件"
+
+    for path in web_files:
+        text = path.read_text(encoding="utf-8").strip()
+        # 先剥掉文件顶部注释行再校验形态
+        core = "\n".join(
+            ln for ln in text.splitlines() if not ln.strip().startswith("//")
+        ).strip()
+        assert core.startswith("(function (Vue, UiBlock) {"), (
+            f"{path}: 必须以 (function (Vue, UiBlock) {{ 开头（IIFE 形参由加载器注入）"
+        )
+        assert text.endswith("});"), f"{path}: 必须以 }}); 收尾"
+        if "function callTool" in text:
+            assert "Mcp-Session-Id" in text, (
+                f"{path}: callTool 缺少 Mcp-Session-Id 会话管理"
+            )
+            assert "ensureSession" in text, (
+                f"{path}: 缺少 ensureSession（initialize → session）"
+            )

@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.1.14（2026-09-10）
+
+- fix: **视图/管理页组件协议失效（G3 遗留重症）**——组件文件为 IIFE
+  `(function (Vue, UiBlock) {…});`，但加载器 `new Function("Vue","UiBlock",code)`
+  的函数体无 return、也不调用该表达式 → 工厂返回 undefined：**玩家端视图
+  一直显示"无视图"、管理页一直"加载管理页组件"**。加载器改为
+  `return (<code>)(Vue, UiBlock);`（App.vue / PlaysPage.openPlayPage 两处）
+- fix: **视图内 MCP 调用全部 400（Missing session ID）**——streamable HTTP
+  要求先 initialize 拿 `Mcp-Session-Id` 头；4 个视图组件
+  （bag/view/log/profile.js）的 callTool 补 `ensureSession()` 懒初始化 +
+  请求头带会话
+- fix: 管理端「物品管理」页实测打开（物品定义 3 项 CRUD + 新建表单）；
+  玩家端背包视图实测渲染**出生礼包真数据**（背包 2/20：苹果×3、面包×2）
+- test: 防回归 `test_web_component_protocol_guarded`（内置包 web 组件 IIFE 形态
+  + MCP 会话管理静态校验）
+- docs: DESIGN §4.4 视图协议 / PLAY_DEV §8 组件协议表述修正（IIFE 形参注入 +
+  MCP 会话约定）；§13 管理页组件协议同步
+
 ## v0.1.13（2026-09-10）
 
 - fix: **管理端布局改 PC 优先**——管理台脱离玩家端 720px 容器（App.vue 重构，

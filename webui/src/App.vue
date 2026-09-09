@@ -92,9 +92,14 @@ async function goto(key) {
     const res = await fetch(meta.provider.url, { headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const code = await res.text();
-    // 视图组件协议（G3）：(function(Vue, UiBlock) { return { ...组件选项... } })
+    // 视图组件协议（G3）：文件 = IIFE（function(Vue, UiBlock) 形参由加载器注入）
+    // ——new Function body = "return (<code>)(Vue, UiBlock);"，执行返回组件选项
     // eslint-disable-next-line no-new-func
-    const factory = new Function("Vue", "UiBlock", code);
+    const factory = new Function(
+      "Vue",
+      "UiBlock",
+      "return (" + code.trim().replace(/;+\s*$/, "") + ")(Vue, UiBlock);"
+    );
     loaded.value[key] = factory(Vue, UiBlockRenderer);
   } catch (e) {
     store.error = "视图加载失败：" + e.message;
