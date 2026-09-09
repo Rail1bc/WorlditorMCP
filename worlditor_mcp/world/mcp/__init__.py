@@ -91,7 +91,8 @@ def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
             return _result({"text": str(e)})
         token = _caller_entity.set(entity_id)
         try:
-            result = await engine._invoke(binding.handler, api, ctx, **kwargs)
+            # 引擎锁内执行（DESIGN §2.4：handler 锁内执行；任务级可重入）
+            result = await engine.invoke_locked(binding.handler, api, ctx, **kwargs)
         except WorldError as e:
             return _result({"text": str(e)})
         except Exception:  # noqa: BLE001

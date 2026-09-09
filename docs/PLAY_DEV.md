@@ -304,8 +304,14 @@ interaction 包商贩交易 = 金币 attrs + items 服务，无内核强制。
 
 ### 性能与并发（G5）
 
-- **handler 在引擎锁内执行**：保持短小（毫秒级）；长耗时任务（LLM 调用、
-  网络、重计算）**自管 asyncio task**，在 `teardown(api)` 中取消
+- **handler 在引擎锁内执行**（AsyncRLock 任务级可重入）：handler 内再调
+  API 原语（move / set_data / emit / kv_set…）为同一任务重入，安全——
+  多段「读-判-写」天然原子，无需自备锁
+- **红线**：handler 内 `asyncio.create_task()` 创建的子任务**不得调用引擎
+  API**（子任务不是当前任务、拿不到锁——await 子任务即死锁）；自管后台
+  任务只做纯计算/IO，并必须在 `teardown(api)` 中取消
+- handler 保持短小（毫秒级）；长耗时任务（LLM 调用、网络、重计算）按上条
+  自管 asyncio task
 - 过滤器必须纯函数（只读）；世界变更只发生在默认实现
 - 事件 handler 异常被隔离（记日志不拖垮内核）；交互 handler 异常转可展示错误
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- fix: **P0-1 锁语义收敛**——原语分派入口（override / 过滤器链 / 默认实现）
+  与 MCP 工具回调改在引擎锁内执行（AsyncRLock 任务级可重入），`emit` /
+  `call_default_primitive` 入口自持锁；DESIGN §2.4「handler 锁内执行」
+  承诺与实现重新对齐，多段「读-判-写」从此原子
+- test: 新增 2 个并发回归测试（override 分派 / MCP 工具两路，修复前可稳定
+  复现丢失自增 n=1 → 修复后 n=2）
+- docs: DESIGN §2.4 并发模型 + PLAY_DEV §11 锁约定（任务级重入红线：
+  子任务禁止调引擎 API）+ GAPS G5 状态更新
+- ⚠️ 玩法包 API 与对外行为不变；handler 并发窗口收紧（锁内执行即设计意图）
+
 ## v0.1.7（2026-09-01）
 
 - refactor: **移除 `mcp-stdio` 入口**——本地/远程 agent 统一走

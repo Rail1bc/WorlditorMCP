@@ -104,6 +104,37 @@ def test_override_replace_and_disable(tmp_path):
     _run(fn())
 
 
+def test_override_handler_serialized_under_lock(tmp_path):
+    """并发一致性（P0-1）：override handler 在引擎锁内执行。
+
+    分派入口不持锁时，两个并发 move 的 handler「读-让出-写」序列交错：
+    双方都读到旧值，自增丢失一次（n=1）；锁内执行则串行（n=2）。
+    """
+
+    async def fn():
+        engine = await _engine(tmp_path)
+        try:
+            api = WorlditorPlayAPI(engine, "pkg_a")
+            engine.attach_play_api("pkg_a", api)
+            player = await _player(engine)
+
+            async def racing_move(api, entity_id, direction, *, path=None):
+                n = api.get_attrs(entity_id).get("n", 0)
+                await asyncio.sleep(0.01)  # 让出点：另一协程在此插入读-写
+                await api.set_attrs(entity_id, {"n": n + 1})
+                return {"ok": direction}
+
+            api.override_primitive("move", racing_move)
+            await asyncio.gather(
+                engine.move(player.id, "up"), engine.move(player.id, "up")
+            )
+            assert engine.get_attrs(player.id)["n"] == 2
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
 def test_set_data_get_data_dispatch(tmp_path):
     """set_data/get_data：默认读写 + disable 报错。"""
 

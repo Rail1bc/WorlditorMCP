@@ -65,7 +65,8 @@
 - **方案**：PLAY_DEV.md 规范：自管 task 必须在 teardown(api) 中取消；
   可选内核提供 `api.spawn_task(coro)` 托管（生命周期随包卸载自动取消）
 - **成本**：文档 0 行；spawn_task ~15 行
-- **状态**：文档先，spawn_task 等需求
+- **状态**：文档已落地（DESIGN §2.4 并发模型 + PLAY_DEV §11——handler
+  锁内执行、任务级重入、子任务禁止调引擎 API）；spawn_task 等真实需求
 
 ---
 
@@ -140,6 +141,43 @@
     label）；生命周期随包卸载清理；管理页可见（谁、顺序）
 - **成本**：~60 行内核 + 测试；DESIGN.md §2.4 修订
 - **状态**：✅ 已采纳（用户拍板），M3 前落地
+
+---
+
+## 待决策（安全审查记录，2026-09——已记录，暂缓）
+
+### G16 认证端点零防护
+- **触发**：全面审查——`/auth/login` / `register` / `agent-register` / `read-token`
+  全公开（http.py 公共路径白名单）且无失败计数/退避/锁定；register 报
+  「用户名已存在」+ login 对不存在账户跳过 PBKDF2（计时侧信道）→ 用户名
+  可枚举；open 模式 `read-token` 无限签发且 token 无 TTL（只查 revoked）
+- **影响**：6288 公网端口可无限制爆破/枚举/膨胀 tokens 表；单次 login 为
+  200k 次 PBKDF2（身份/identity.py:31），并发请求即 CPU 放大 DoS
+- **方案**：按用户名+IP 失败计数指数退避（内存级即可，默认单 worker）；
+  统一 401/403 文案 + 不存在账户跑假 PBKDF2；read-token 配额或 TTL；
+  启动防呆 WARNING（open + 0.0.0.0 + 空 ADMIN_KEY 三连）
+- **状态**：⏸ 暂缓（记录于 2026-09 审查，见审查报告 P0-2）
+
+### G17 G1 可见性只实现了一端（/scene + SSE + 交互缺口）
+- **触发**：全面审查——`/state` 按 `map_visible_to` 过滤（G1 已解决），但
+  `/scene`（http.py:210-245）不检查——read 档持任意 entity_id 可读 private
+  地图场景与动作菜单；SSE `_event_payload`（engine.py:1141-1179）对
+  private 地图事件全量下发实体位置（play 档订阅可跟踪）；`interact` /
+  `list_actions` 亦不做地图可见性检查
+- **方案**：`/scene` 补 `map_visible_to` 过滤（~5 行）；SSE 订阅对象带
+  订阅者身份按可见性过滤（~30 行接口变更，admin 全见）；interact 前置
+  检查；各补 HTTP 级测试
+- **状态**：⏸ 暂缓（记录于 2026-09 审查，见审查报告 P0-3）
+
+### G18 ui_hook 未接线（观察）
+- **触发**：P0-1 修复期间核查——`apply_ui_hooks` 在生产路径无调用者
+  （仅 tests/test_engine.py 直调）；`register_ui_hook` 注册表完整，
+  但 `_build_scene` / 交互结果渲染未应用钩子，ui_hook 实际不生效
+- **影响**：G4「UiBlock 路径先行（视图 = UiBlock + ui_hook 注入）」的
+  注入环节空转；玩法包注册 ui_hook 静默无效
+- **方案**：`_build_scene` 与 InteractionResult.ui 序列化前应用
+  `apply_ui_hooks`（已锁内化，直接接线即可，另补端到端测试）
+- **状态**：待决策（随 G4 插槽机制的时机一起定）
 
 ---
 

@@ -11,8 +11,10 @@
 - **on_tick 调度**（A3）：单循环按 1s 粒度检查，各 handler 各自间隔，
   串行执行 + 异常隔离。
 
-并发模型：实例级**可重入**异步锁（AsyncRLock）——事件/tick handler 由引擎在
-锁内调用，handler 内再调 API 原语必须重入（普通 asyncio.Lock 会自锁死锁）。
+并发模型：实例级**可重入**异步锁（AsyncRLock）——原语分派（override /
+过滤器链 / 默认实现）与玩法包 handler（交互 / 事件 / tick / MCP 工具）均在
+锁内执行；handler 内再调 API 原语必须重入（普通 asyncio.Lock 会自锁死锁），
+多段「读-判-写」原子（DESIGN §2.4 并发模型）。
 时钟与 PRNG 注入（``clock`` / ``rand``），保证时间感知描述与加权抽取可测。
 
 分区地图（按节定位的辅助锚点；行号随演化漂移属正常）：
@@ -779,16 +781,27 @@ class WorldEngine:
         ]
 
     async def call_default_primitive(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        """super 通道：显式调用内核默认实现（绕过分派表；覆盖者前置/后置用）。"""
+        """super 通道：显式调用内核默认实现（绕过分派表；覆盖者前置/后置用）。
+
+        与分派入口同锁（任务级重入）：覆盖者持锁时为重入，锁外调用亦安全。
+        """
         name = _check_primitive_name(name)
-        return await getattr(self, _PRIMITIVE_DEFAULT_NAMES[name])(*args, **kwargs)
+        async with self._lock:
+            return await getattr(self, _PRIMITIVE_DEFAULT_NAMES[name])(*args, **kwargs)
 
     async def _dispatch_primitive(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        """原语统一分派入口（D11/A3/G14）。
+        """原语统一分派入口（D11/A3/G14）——在引擎锁内执行。
 
+        DESIGN §2.4：override / 过滤器链 / 默认实现的 handler 均锁内回调
+        （AsyncRLock 任务级重入，handler 内再调 API 原语安全）。
         优先级：disable → 报错；override → 锁内回调（短路）；过滤器链（按注册序，
         否决/改参/短路）→ 链尾默认实现；无登记 → 默认实现。
         """
+        async with self._lock:
+            return await self._dispatch_locked(name, *args, **kwargs)
+
+    async def _dispatch_locked(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        """分派表主体（调用方持锁；见 _dispatch_primitive）。"""
         ov = self._primitive_overrides.get(name)
         if ov is not None:
             if ov.handler is None:
@@ -958,6 +971,7 @@ class WorldEngine:
 
         before/after：注入子块；replace：整体替换目标块（provider 返回的
         首个子块）。provider 异常被隔离（记日志跳过），不破坏渲染。
+        锁内执行（可重入；provider 为玩法包回调，统一「锁内」不变量）。
 
         Args:
             block: UiBlock 或 None。
@@ -965,6 +979,11 @@ class WorldEngine:
         Returns:
             展开后的 UiBlock；``block`` 为 None 时返回 None。
         """
+        async with self._lock:
+            return await self._apply_ui_hooks_locked(block)
+
+    async def _apply_ui_hooks_locked(self, block: Any | None) -> Any | None:
+        """钩子展开主体（调用方持锁；见 apply_ui_hooks）。"""
         from .model import UiBlock
 
         if block is None:
@@ -1028,6 +1047,19 @@ class WorldEngine:
             result = await result
         return result
 
+    async def invoke_locked(self, fn: Callable, *args: Any, **kwargs: Any) -> Any:
+        """在引擎锁内执行玩法包回调（DESIGN §2.4「handler 锁内执行」）。
+
+        用于锁外入口（MCP 工具回调等）：handler 全程持锁，多段「读-判-写」
+        原子。AsyncRLock 为任务级可重入——handler 内再调 API 原语安全。
+
+        红线：handler 内禁止 ``asyncio.create_task`` 后等待子任务——子任务
+        不属于当前任务，无法获得本节持有的锁（死锁）；后台任务须遵守 G5
+        约定（自管 task 在 ``teardown(api)`` 中取消）。
+        """
+        async with self._lock:
+            return await self._invoke(fn, *args, **kwargs)
+
     async def emit(self, event: str, data: Any = None, *, log: bool = False) -> None:
         """自定义事件（G8：任意事件名，SSE 推送；默认不写 world_log）。
 
@@ -1036,7 +1068,8 @@ class WorldEngine:
             data: 事件数据（dict 或任意 JSON 可序列化值）。
             log: 是否写入 world_log（需回放的事件显式 True）。
         """
-        await self._emit(event, data, log=log)
+        async with self._lock:  # 入口自持锁（可重入）；锁外调用亦安全
+            await self._emit(event, data, log=log)
 
     async def _emit(self, event: str, *args: Any, log: bool = True) -> None:
         """分发事件给订阅者（串行 + 异常隔离），并写入世界日志。

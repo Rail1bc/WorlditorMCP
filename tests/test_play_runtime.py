@@ -132,6 +132,49 @@ def test_dynamic_tool_call_with_identity(tmp_path):
     _run(fn())
 
 
+def test_dynamic_tool_serialized_under_lock(tmp_path):
+    """并发一致性（P0-1）：MCP 工具 handler 在引擎锁内执行（invoke_locked）。
+
+    修复前工具回调无锁：两个并发工具调用的「读-让出-写」序列交错，
+    自增丢失一次（n=1）；锁内执行则串行（n=2）。
+    """
+
+    async def fn():
+        engine, _ = await _make(tmp_path)
+        try:
+            api = WorlditorPlayAPI(engine, "pkg_a")
+            engine.attach_play_api("pkg_a", api)
+
+            async def racing(api, ctx, **kw):
+                eid = api.caller()
+                n = api.get_attrs(eid).get("n", 0)
+                await asyncio.sleep(0.01)  # 让出点：另一协程在此插入读-写
+                await api.set_attrs(eid, {"n": n + 1})
+                return {"text": "ok"}
+
+            api.register_tool("world_race", racing, description="并发读-写")
+            binding = engine._tools["world_race"]  # noqa: SLF001
+            dyn = build_dynamic_tool(engine, binding, "world_race")
+            player = await engine.place_entity("player", "default", 0, 0, name="并发者")
+
+            class FakeMeta:
+                worlditor_entity_id = player.id
+                worlditor_tier = "play"
+
+            class FakeReqCtx:
+                meta = FakeMeta()
+
+            class FakeCtx:
+                request_context = FakeReqCtx()
+
+            await asyncio.gather(dyn(FakeCtx()), dyn(FakeCtx()))
+            assert engine.get_attrs(player.id)["n"] == 2
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
 # ---------- 自定义事件（G8 / D1） ----------
 
 
