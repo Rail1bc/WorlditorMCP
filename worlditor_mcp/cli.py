@@ -49,6 +49,17 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--allowed-origins",
         help="CORS 允许来源（逗号分隔，默认 WORLDITOR_ALLOWED_ORIGINS）",
     )
+    serve.add_argument(
+        "--mcp-allowed-hosts",
+        help=(
+            "MCP Host 白名单（逗号分隔，默认 WORLDITOR_MCP_ALLOWED_HOSTS；"
+            "默认空 = 放行任意 Host，局域网 IP / 域名可直接访问）"
+        ),
+    )
+    serve.add_argument(
+        "--mcp-allowed-origins",
+        help="MCP Origin 白名单（逗号分隔，默认 WORLDITOR_MCP_ALLOWED_ORIGINS；空 = 按 hosts 派生）",
+    )
     serve.add_argument("--static-dir", help="WebUI 构建产物目录（默认自动探测）")
     serve.add_argument("--verbose", action="store_true", help="详细日志")
 
@@ -83,6 +94,14 @@ def _settings_from_args(args: argparse.Namespace) -> Settings:
     if args.allowed_origins:
         settings.allowed_origins = [
             o.strip() for o in args.allowed_origins.split(",") if o.strip()
+        ]
+    if args.mcp_allowed_hosts:
+        settings.mcp_allowed_hosts = [
+            h.strip() for h in args.mcp_allowed_hosts.split(",") if h.strip()
+        ]
+    if args.mcp_allowed_origins:
+        settings.mcp_allowed_origins = [
+            o.strip() for o in args.mcp_allowed_origins.split(",") if o.strip()
         ]
     if args.static_dir:
         settings.static_dir = Path(args.static_dir)

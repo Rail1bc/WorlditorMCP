@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.1.16（2026-09-10）
+
+- fix: **玩家端从局域网 IP / 域名打开时 MCP 初始化 `421 Invalid Host header`**
+  （界面报"mcp 初始化失败 http421"）——MCP SDK 在 `host=127.0.0.1`（FastMCP
+  构造默认值）时会自动开启 DNS rebinding 保护且只放行 `127.0.0.1:*` /
+  `localhost:*` / `[::1]:*`，而世界服务默认监听 `0.0.0.0`（本就是要被局域网 /
+  域名 / 反代访问的）。内核改为**显式构造** `TransportSecuritySettings`：
+  默认关闭 Host 校验；鉴权仍是主要防线（`/world/mcp` 必须 Bearer token）
+- feat: **MCP Host / Origin 白名单可配置**——`WORLDITOR_MCP_ALLOWED_HOSTS`（含
+  CLI `--mcp-allowed-hosts`）收紧到指定 Host（无端口条目自动补 `:*` 变体，
+  浏览器 Host 头带端口；Origin 按 http/https 同源派生，避免浏览器带 Origin 头
+  时 403；`WORLDITOR_MCP_ALLOWED_ORIGINS` 可整体覆盖派生值）
+- test: `tests/test_mcp_transport_security.py`（真实 uvicorn + 非 localhost
+  Host 头端到端：局域网 IP / 域名放行、白名单收紧后名单外仍 421）
+- docs: DESIGN §4.4「MCP 传输安全」、README 配置表、NGINX_DEPLOY 反代说明
+
 ## v0.1.15（2026-09-10）
 
 - feat: **玩法包管理页改为管理端独立路由页面**（`#/admin/pages/{play_id}/{key}`，

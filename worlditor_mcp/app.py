@@ -72,7 +72,11 @@ class WorlditorService:
         await self.engine.initialize()
         loaded = await self.play_loader.load_all()
         # MCP server 在玩法包加载后构建：动态工具（register_tool）随注册表同步
-        self.mcp_server = build_mcp_server(self.engine)
+        self.mcp_server = build_mcp_server(
+            self.engine,
+            allowed_hosts=self.settings.mcp_allowed_hosts,
+            allowed_origins=self.settings.mcp_allowed_origins,
+        )
         self.engine.attach_mcp(self.mcp_server)
         logger.info(
             "worlditor %s 已就绪：实体 %d 个，玩法包 %d 个，工具 %d 个",

@@ -318,6 +318,22 @@ class ItemDef:
 - **兜底**：无任何视图注册时，WebUI 显示内核"无视图"提示（D7）
 - 不想写组件的玩法包可退化为"数据 + UiBlock 通用渲染"（内核渲染器兜底）
 
+**MCP 传输安全（Host / Origin 校验，v0.1.16）**：
+- 内核**显式**构造 `TransportSecuritySettings` 传给 FastMCP——**默认关闭 Host
+  校验**（放行任意 Host）。原因：worlditor 是自托管世界服务（默认监听
+  `0.0.0.0`，经局域网 IP / 域名 / 反向代理访问），而 MCP SDK 在
+  `host=127.0.0.1`（构造默认值）时会自动开启 DNS rebinding 保护并只放行
+  `127.0.0.1:*` / `localhost:*` / `[::1]:*` → 用户从局域网 IP 或域名打开
+  玩家端时，视图内 MCP 初始化 **`421 Invalid Host header`**（界面报
+  "mcp 初始化失败 http421"）
+- 鉴权仍是主要防线（`/world/mcp` 不在公共路径，必须 Bearer token；已登录玩家
+  才能触达 SDK 层，故 421 出现在认证之后）；Host 校验属纵深防御，需要收紧时设
+  `WORLDITOR_MCP_ALLOWED_HOSTS`（无端口条目自动补 `:*` 变体——浏览器 Host 头
+  带端口；Origin 按 http/https 同源派生，覆盖 403 分支；`WORLDITOR_MCP_ALLOWED_ORIGINS`
+  可整体覆盖派生值）
+- 回归防线：`tests/test_mcp_transport_security.py`（真实 uvicorn + 非 localhost
+  Host 头端到端 + 白名单收紧生效）
+
 **视图注入（两种通道，阶段 3 定稿）**：
 | 通道 | 适用 | 机制 | 状态 |
 |---|---|---|---|

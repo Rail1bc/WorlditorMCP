@@ -72,6 +72,8 @@ docker compose pull && docker compose up -d
 | `WORLDITOR_ADMIN_KEY` | 空 | 管理员注册密钥（空 = 首个注册者为 admin） |
 | `WORLDITOR_ALLOW_AGENT_REGISTER` | `1` | 是否允许 agent 自助注册 |
 | `WORLDITOR_ALLOWED_ORIGINS` | 空 | CORS 允许来源（逗号分隔） |
+| `WORLDITOR_MCP_ALLOWED_HOSTS` | 空 | MCP Host 白名单（逗号分隔；空 = 任意 Host，局域网 IP / 域名直接可用） |
+| `WORLDITOR_MCP_ALLOWED_ORIGINS` | 空 | MCP Origin 白名单（空 = 按 hosts 派生） |
 | `WORLDITOR_STATIC_DIR` | 自动探测 | WebUI 构建产物目录 |
 
 CLI 参数（`worlditor serve --port 6288 --admin-port 6289 --admin-key xxx`）

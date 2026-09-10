@@ -37,6 +37,10 @@ class Settings:
         admin_key: 管理员注册密钥（空 = 开放注册为 admin）。
         allow_agent_register: 是否允许 agent 自助注册。
         allowed_origins: CORS 允许来源（逗号分隔；空 = 不限制来源）。
+        mcp_allowed_hosts: MCP Host 白名单（逗号分隔；空 = 放行任意 Host ——
+            自托管默认，局域网 IP / 域名可直接访问；设置后开启 DNS rebinding
+            保护，只放行名单内 Host）。
+        mcp_allowed_origins: MCP Origin 白名单（逗号分隔；空 = 按 hosts 派生）。
         static_dir: WebUI 构建产物目录（默认自动探测仓库 webui/dist）。
     """
 
@@ -51,6 +55,8 @@ class Settings:
         default_factory=lambda: _env_bool("ALLOW_AGENT_REGISTER", True)
     )
     allowed_origins: list[str] = field(default_factory=list)
+    mcp_allowed_hosts: list[str] = field(default_factory=list)
+    mcp_allowed_origins: list[str] = field(default_factory=list)
     static_dir: Path | None = field(
         default_factory=lambda: Path(_env("STATIC_DIR")) if _env("STATIC_DIR") else None
     )
@@ -59,6 +65,16 @@ class Settings:
         raw = _env("ALLOWED_ORIGINS")
         if raw:
             self.allowed_origins = [o.strip() for o in raw.split(",") if o.strip()]
+        raw_hosts = _env("MCP_ALLOWED_HOSTS")
+        if raw_hosts:
+            self.mcp_allowed_hosts = [
+                h.strip() for h in raw_hosts.split(",") if h.strip()
+            ]
+        raw_mcp_origins = _env("MCP_ALLOWED_ORIGINS")
+        if raw_mcp_origins:
+            self.mcp_allowed_origins = [
+                o.strip() for o in raw_mcp_origins.split(",") if o.strip()
+            ]
 
     @property
     def db_path(self) -> Path:

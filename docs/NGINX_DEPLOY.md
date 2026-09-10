@@ -133,5 +133,9 @@ curl -s -X POST https://worlditor.raila.cn/world/mcp \
 - **同源部署**，WebUI/API/静态资源都在 `worlditor.raila.cn` 的 443 下，
   无 CORS 配置需求（`WORLDITOR_ALLOWED_ORIGINS` 保持空）
 - MCP client 地址：`https://worlditor.raila.cn/world/mcp`
+- **MCP Host 校验**：默认放行任意 Host（局域网 IP / 域名 / 反代均可直接访问，
+  v0.1.16 起），本样例无需额外配置。若要收紧，设
+  `WORLDITOR_MCP_ALLOWED_HOSTS=worlditor.raila.cn`——反代必须传原始 Host
+  （本样例已含 `proxy_set_header Host $host;`），否则白名单匹配不上
 - 代理日志关注：`proxy_buffering off` 是 SSE（/events 与 MCP 流式响应）的必要条件，
   缺了会出现"事件延迟/一次性收不到"

@@ -18,10 +18,12 @@ from __future__ import annotations
 import contextvars
 import inspect
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from ..engine import WorldError
 
@@ -131,7 +133,79 @@ def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
     return _dynamic
 
 
-def build_mcp_server(engine: Any) -> FastMCP:
+# ---------- 传输安全（Host / Origin 校验；421 回归防线） ----------
+
+# 白名单条目形态：域名 / IPv4（可带端口）与 [IPv6]（可带端口）
+_IPV6_HOST_RE = re.compile(r"^\[[^\]]+\](?::(?P<port>\d+|\*))?$")
+_PLAIN_HOST_RE = re.compile(r"^[^:]+(?::(?P<port>\d+|\*))?$")
+
+
+def _port_variants(item: str) -> list[str]:
+    """Host 白名单条目补端口变体（浏览器 Host 头带端口：``example.com:6288``）。"""
+    if item.endswith(":*"):
+        return [item]
+    for pattern in (_IPV6_HOST_RE, _PLAIN_HOST_RE):
+        match = pattern.match(item)
+        if match:
+            return [item] if match.group("port") else [item, f"{item}:*"]
+    return [item]
+
+
+def build_transport_security(
+    allowed_hosts: list[str] | None = None,
+    allowed_origins: list[str] | None = None,
+) -> TransportSecuritySettings:
+    """构造 MCP 传输安全设置（DNS rebinding 保护）。
+
+    **默认关闭 Host 校验**：worlditor 是自托管世界服务（默认监听 ``0.0.0.0``，
+    经局域网 IP / 域名 / 反向代理访问），而 MCP SDK 在 ``host=127.0.0.1`` 时
+    会自动开启保护且只放行 localhost 变体 —— 从局域网 IP 打开玩家端会
+    ``421 Invalid Host header``（玩家端视图 MCP 初始化失败）。鉴权仍是主要
+    防线（``/world/mcp`` 不在公共路径，必须 Bearer token）；Host 校验属纵深
+    防御，需要时用 ``WORLDITOR_MCP_ALLOWED_HOSTS`` 显式收紧。
+
+    Args:
+        allowed_hosts: Host 白名单（空 = 放行任意 Host）。条目可写
+            ``example.com`` / ``192.168.1.5:6288`` / ``[::1]``，无端口时自动
+            补 ``:*`` 变体（浏览器 Host 头通常带端口）。
+        allowed_origins: Origin 白名单（空 = 按 hosts 派生 http/https 同源项，
+            避免浏览器带 Origin 头时 403）。
+
+    Returns:
+        TransportSecuritySettings 实例（显式传入即可覆盖 SDK 的 localhost 自动保护）。
+    """
+    hosts: list[str] = []
+    for raw in allowed_hosts or []:
+        item = raw.strip()
+        if item:
+            hosts.extend(_port_variants(item))
+    hosts = list(dict.fromkeys(hosts))
+    origins = [o.strip() for o in (allowed_origins or []) if o.strip()]
+    if not hosts:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    if not origins:
+        # 派生同源 Origin（浏览器同源请求也带 Origin 头，不放行则 403）
+        origins = list(
+            dict.fromkeys(
+                f"{scheme}://{host[:-2] if host.endswith(':*') else host}{suffix}"
+                for host in hosts
+                for scheme in ("http", "https")
+                for suffix in ("", ":*")
+            )
+        )
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=origins,
+    )
+
+
+def build_mcp_server(
+    engine: Any,
+    *,
+    allowed_hosts: list[str] | None = None,
+    allowed_origins: list[str] | None = None,
+) -> FastMCP:
     """构建 worlditor MCP server（M2：无内置工具，工具全部由玩法包注册）。
 
     工具 = 玩法包 register_tool 动态注册（build_dynamic_tool）；M3 领域包
@@ -139,6 +213,9 @@ def build_mcp_server(engine: Any) -> FastMCP:
 
     Args:
         engine: WorldEngine 实例。
+        allowed_hosts: MCP Host 白名单（空 = 放行任意 Host，见
+            build_transport_security）。
+        allowed_origins: MCP Origin 白名单（空 = 按 hosts 派生）。
 
     Returns:
         空工具集 FastMCP 实例（engine.attach_mcp 后动态工具同步注册）。
@@ -151,5 +228,7 @@ def build_mcp_server(engine: Any) -> FastMCP:
             "所有工具返回 JSON：text 字段是给 LLM 的文本，ui 字段是界面结构（忽略即可）。"
         ),
         streamable_http_path="/world/mcp",
+        # 显式传入：SDK 在 host=127.0.0.1（默认）时会自动只放行 localhost → 421
+        transport_security=build_transport_security(allowed_hosts, allowed_origins),
     )
     return mcp
