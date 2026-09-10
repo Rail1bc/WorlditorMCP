@@ -149,7 +149,5 @@ def test_mcp_whitelist_enforced_when_configured(tmp_path):
     """显式白名单：放行名单内 Host，名单外仍 421（收紧能力有效）。"""
     allowed = _run(_probe(tmp_path, f"{_LAN_IP}:{{port}}", allowed_hosts=[_LAN_IP]))
     assert allowed.status_code == 200, allowed.text
-    denied = _run(
-        _probe(tmp_path, "evil.example.com:{port}", allowed_hosts=[_LAN_IP])
-    )
+    denied = _run(_probe(tmp_path, "evil.example.com:{port}", allowed_hosts=[_LAN_IP]))
     assert denied.status_code == 421, denied.text
