@@ -190,7 +190,7 @@ class Entity:
     col: int
     name: str        # 显示主元素
     desc: str = ""
-    attrs: dict = {}  # 玩法数据（hp/exp/gold/facing...，内核不解释；set_attrs/set_data 写）
+    attrs: dict = {}  # 玩法数据（hp/exp/gold...，内核不解释；set_attrs/set_data 写）
     state: dict = {}  # 动态状态（门开/关、block_move 动态覆盖...；set_state 写，不经分派）
     user_id: str | None = None   # 身份化实体绑定
     last_active_ts: float = 0.0
@@ -413,7 +413,7 @@ class ItemDef:
 | 行为 | 提供者 |
 |---|---|
 | 路径移动（默认） | 内核 `move`（可被玩法包覆盖，D11） |
-| 方向/朝向移动（前进/后退） | 玩法包 `override_primitive("move")` |
+| 朝向/相对方向移动（第一人称、前进后退…） | 玩法包自定（`override_primitive("move")` 或过滤器链改参 G14）——**内核与内置包均无朝向概念**（v0.1.18：内置 movement 只做绝对方向移动 + 方向别名归一） |
 | 说话：cell 规则 / world 广播（喇叭+冷却） | social 包（D1：内核无 say；喇叭 = 内核物品定义 + 本包持有） |
 | 背包模型 / 整理 / 物品 use 规则 | items 包（D8：持有全下沉） |
 | 视野视图（3×3 或任意形态） | movement 包（register_view） |

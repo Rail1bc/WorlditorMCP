@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.1.18（2026-09-15）
+
+- refactor: **内置 movement 包移除「朝向」概念**（设计决策：内置包不钦定具体
+  玩法机制）——"朝向/视角"是玩法包的发挥空间，不该由内置包强加：
+  - 删除 `world_turn` 工具、`attrs["facing"]` 约定、相对方向（forward/back/
+    left/right）换算；`world_move` 直接用内核地块连接槽的绝对方向
+  （up/right/down/left）——玩家/agent 不必"先转身再前进"（少一轮往返、
+    少一次换算错误）
+  - G14 过滤器演示保留并改为**方向别名归一**：`上/北/north` → `up`（中英文
+    方位都能收，对 LLM 更友好）；`world_move` 缺 direction 时明确报错
+  - `world_look` 返回 `location`（当前地块）与中文可走方向，不再有 facing
+  - 视图 `web/view.js`：去掉「你面向 ▲ up / ← 左转 / 右转 →」，改为**点相邻
+    格直接走**（箭头提示 ↑→↓← + 中文方位），顶部显示当前地块名
+  - 包版本 0.1.0 → 0.2.0（破坏性：工具集变化）
+- test: `tests/test_plays_movement.py` 同步重写（11 项）——含防回归
+  `test_package_has_no_facing_concept`（包内不得再出现朝向/相对方向字样）
+- docs: PLAY_DEV §5 过滤器示例 / §11 命名契约（移除朝向行，注明朝向不在内置
+  约定内）/ §12 内置包一览；DESIGN §5 行为归属（朝向移动 = 玩法包自定）
+
 ## v0.1.17（2026-09-15）
 
 - fix: **玩家端视图"整片发白、样式崩坏"**——三处根因一并修：

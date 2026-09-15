@@ -173,8 +173,8 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 - 同包可注册多个过滤器（各带 label）；生命周期随包卸载自动清理（内核恢复默认）
 - 管理页可见（谁、顺序）
 
-> 经典用法：movement 包的"相对方向换算"过滤器（forward/back/left/right →
-> 绝对方向）、束缚/锁血/遮蔽类效果包。
+> 经典用法：movement 包的"方向别名归一"过滤器（上/北/north → up）、
+> 束缚/锁血/遮蔽类效果包。
 
 ## 6. 跨包服务（M3：玩法包间同步调用）
 
@@ -341,12 +341,15 @@ SSE 推送；`log=True` 才写 world_log（高频事件勿写，5000 条上限�
 
 | 领域 | 建议字段/事件名 |
 |---|---|
-| 朝向 | attrs `facing`（up/right/down/left，默认 up）——movement 包 |
 | 金币 | attrs `gold`——interaction/player 包 |
 | 精力 | attrs `energy`——interaction 包（eat 效果） |
 | 说话 | 事件 `say`（cell）/ `broadcast`（world）——social 包 |
 | 礼包标记 | attrs `starter_granted`——player 包 |
 | 广播冷却 | kv `broadcast_cd:<entity_id>`——social 包 |
+
+> **朝向不在内置约定内**（v0.1.18）：地块连接槽的方向（up/right/down/left）是
+> 内核数据模型，但"实体朝向/视角"属于具体玩法的自由发挥——内置 movement 包
+> 不做朝向，若你的包需要（第一人称/相对移动），自行约定字段名并登记到本表。
 
 跨包读写**约定字段**前先查提供方包的服务/文档；通用字段建议进本表（PR 更新）。
 
@@ -383,7 +386,7 @@ interaction 包商贩交易 = 金币 attrs + items 服务，无内核强制。
 | `worlditor_play_items` | 背包（20 格/堆叠 99）+ world_bag/use + 苹果/面包 | **服务** bag_add/take/count/get；持有下沉（D8）；**ui_hook 注入玩家聚合视图**（character after → 背包面板）；**物品管理页**（管理员可维护物品定义，§13） |
 | `worlditor_play_starter` | 出生礼包（金币+物品，只发一次） | 部件模式（§11）：事件 on_world_edited + 跨包服务；可停用/替换 |
 | `worlditor_play_player` | 角色视图 + world_profile | 玩家壳**零引用**：背包信息由 items 包工具/hook 单向提供（§11）；**玩家聚合界面**——角色卡 + items hook 注入的背包面板（world_profile 返回 ui，视图通用渲染）；出生礼包见 starter |
-| `worlditor_play_movement` | 朝向移动 + 3×3 视野 + world_look/move/turn/who | move 过滤器（相对方向换算）+ register_view |
+| `worlditor_play_movement` | 方向移动 + 3×3 视野 + world_look/move/who | move 过滤器（方向别名归一：上/北/north → up）+ register_view；**无朝向概念** |
 | `worlditor_play_interaction` | 种子实体 kind/交互 + world_interact | 商贩交易跨包；door block_move |
 | `worlditor_play_social` | cell 说话 + world 广播（喇叭+冷却）+ 日志视图 | 自定义事件 + kv 冷却自管 |
 

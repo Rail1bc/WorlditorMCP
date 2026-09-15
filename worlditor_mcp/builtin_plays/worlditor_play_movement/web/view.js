@@ -8,9 +8,10 @@
   const { ref, onMounted, h } = Vue;
 
   const TOKEN_KEY = "worlditor_token";
-  const ABS = ["up", "right", "down", "left"];
-  const DIR_OFFSETS = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1] };
-  const REL = ["forward", "right", "back", "left"];
+  // 地块连接槽的绝对方向（内核数据模型，DESIGN §数据模型）——本包无朝向概念
+  const DIR_OFFSETS = { up: [-1, 0], right: [0, 1], down: [1, 0], left: [0, -1] };
+  const DIR_LABEL = { up: "上", right: "右", down: "下", left: "左" };
+  const DIR_ARROW = { up: "↑", right: "→", down: "↓", left: "←" };
   const KIND_EMOJI = {
     player: "🧍",
     agent: "🤖",
@@ -19,7 +20,6 @@
     door: "🚪",
     wolf: "🐺",
   };
-  const FACING_ARROW = { up: "▲", right: "▶", down: "▼", left: "◀" };
 
   // MCP streamable HTTP 会话（视图组件无法 import SDK，内嵌轻量实现）
   let _sessionId = "";
@@ -88,15 +88,8 @@
     }
   }
 
-  function relTo(facing, dir) {
-    const f = ABS.indexOf(facing);
-    const d = ABS.indexOf(dir);
-    const delta = ((d - f) % 4 + 4) % 4;
-    return REL[delta];
-  }
-
   function dirOf(dr, dc) {
-    for (const d of ABS) {
+    for (const d of Object.keys(DIR_OFFSETS)) {
       const [oDr, oDc] = DIR_OFFSETS[d];
       if (oDr === dr && oDc === dc) return d;
     }
@@ -108,7 +101,7 @@
     props: { view: { type: Object, required: true } },
     setup() {
       const grid = ref([]);
-      const facing = ref("up");
+      const here = ref(null);
       const paths = ref([]);
       const error = ref("");
       const busy = ref(false);
@@ -117,7 +110,7 @@
         try {
           const look = await callTool("world_look", {});
           grid.value = Array.isArray(look.grid) ? look.grid : [];
-          facing.value = look.facing || "up";
+          here.value = look.location || null;
           paths.value = Array.isArray(look.paths) ? look.paths : [];
           error.value = "";
         } catch (e) {
@@ -125,26 +118,18 @@
         }
       }
 
-      async function go(rel) {
-        if (busy.value) return;
+      // 点相邻格直接走（绝对方向，无"先转身"步骤）
+      async function go(dir) {
+        if (busy.value || !dir) return;
         busy.value = true;
         error.value = "";
         try {
-          await callTool("world_move", { direction: rel });
+          await callTool("world_move", { direction: dir });
           await refresh();
         } catch (e) {
           error.value = e.message;
         } finally {
           busy.value = false;
-        }
-      }
-
-      async function turn(rel) {
-        try {
-          await callTool("world_turn", { direction: rel });
-          await refresh();
-        } catch (e) {
-          error.value = e.message;
         }
       }
 
@@ -165,7 +150,7 @@
             if (cell) {
               for (const e of cell.entities) {
                 const label = e.is_me
-                  ? "你 " + (FACING_ARROW[facing.value] || "")
+                  ? "你"
                   : (KIND_EMOJI[e.kind] || "❔") + " " + e.name;
                 children.push(
                   h("div", { class: e.is_me ? "wt-strong wt-clip" : "wt-clip" }, label)
@@ -173,7 +158,9 @@
               }
             }
             if (!isCenter && walkable) {
-              children.push(h("div", { class: "wt-dim" }, "可走 →"));
+              children.push(
+                h("div", { class: "wt-dim" }, (DIR_ARROW[dir] || "") + " 可走")
+              );
             }
             const cls = ["wt-cell"];
             if (isCenter) cls.push("here");
@@ -183,9 +170,7 @@
                 "div",
                 {
                   class: cls.join(" "),
-                  onClick: walkable
-                    ? () => go(relTo(facing.value, dir))
-                    : null,
+                  onClick: walkable ? () => go(dir) : null,
                 },
                 children
               )
@@ -194,14 +179,17 @@
         }
 
         return h("div", {}, [
-          h("div", { class: "wt-row", style: { marginBottom: 10 } }, [
-            h("button", { class: "wt-btn", onClick: () => turn("left") }, "← 左转"),
+          h("div", { class: "wt-head" }, [
             h(
               "span",
-              { class: "wt-title", style: { flex: 1, textAlign: "center" } },
-              "你面向 " + (FACING_ARROW[facing.value] || "") + " " + facing.value
+              { class: "wt-title" },
+              here.value ? here.value.name : "…"
             ),
-            h("button", { class: "wt-btn", onClick: () => turn("right") }, "右转 →"),
+            h(
+              "button",
+              { class: "wt-btn", onClick: () => refresh(), disabled: busy.value },
+              "刷新"
+            ),
           ]),
           h("div", { class: "wt-grid wt-cols-3" }, cells),
           paths.value.length
@@ -209,14 +197,9 @@
                 "div",
                 { class: "wt-note" },
                 "可走：" +
-                  paths.value
-                    .map((d) => {
-                      const rel = relTo(facing.value, d);
-                      return d + "（" + rel + "）";
-                    })
-                    .join("、")
+                  paths.value.map((d) => DIR_LABEL[d] || d).join("、")
               )
-            : null,
+            : h("div", { class: "wt-note" }, "这里没有可走的出口。"),
           error.value ? h("div", { class: "wt-err" }, "⚠ " + error.value) : null,
         ]);
       };
