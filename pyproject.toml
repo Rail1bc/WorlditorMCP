@@ -16,7 +16,7 @@ authors = [{ name = "Rail1bc" }]
 keywords = ["mcp", "world", "agent", "game"]
 dependencies = [
     "aiosqlite",
-    "mcp>=1.28,<2",  # 2.x 重构删除了 mcp.server.fastmcp，锁定 1.x 线
+    "mcp>=1.28,<3",  # 2.x 重构删除了 mcp.server.fastmcp，锁定 1.x 线
     "pyyaml",
     "starlette",
     "tzdata",  # zoneinfo 时区数据：Windows 必装；slim 容器同样缺系统时区
