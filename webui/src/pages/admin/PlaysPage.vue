@@ -1,6 +1,21 @@
 <template>
   <section class="card play-layout">
-    <h2>玩法包</h2>
+    <div class="page-head">
+      <h2>玩法包</h2>
+      <div class="ops">
+        <button class="btn" :disabled="busy" @click="pickFile">安装玩法包（zip）</button>
+        <button class="btn btn-ghost" :disabled="busy" @click="load">刷新</button>
+      </div>
+    </div>
+    <input
+      ref="fileInput"
+      type="file"
+      accept=".zip,application/zip"
+      class="hidden-file"
+      @change="onFile"
+    />
+    <p v-if="note" class="dim">{{ note }}</p>
+    <p v-if="error" class="error-text">{{ error }}</p>
 
     <div class="play-body">
       <div class="play-list">
@@ -166,7 +181,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from "vue";
-import { apiGet, apiPost } from "../../api";
+import { apiGet, apiPost, installPlay } from "../../api";
 
 const plays = ref([]);
 const pages = ref([]);
@@ -179,6 +194,8 @@ const selected = ref("");
 const tab = ref("pages");
 const busy = ref(false);
 const error = ref("");
+const note = ref("");
+const fileInput = ref(null);
 
 const tabs = [
   { key: "pages", title: "管理页" },
@@ -280,6 +297,29 @@ async function uninstall(playId) {
   }
 }
 
+function pickFile() {
+  if (fileInput.value) fileInput.value.click();
+}
+
+async function onFile(event) {
+  const file = event.target.files && event.target.files[0];
+  event.target.value = ""; // 允许连续上传同一个文件
+  if (!file) return;
+  busy.value = true;
+  error.value = "";
+  note.value = "";
+  try {
+    const res = await installPlay(file);
+    const installed = (res && res.data && res.data.play_id) || "";
+    note.value = installed ? `已安装并启用：${installed}` : "安装完成";
+    await load();
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
 function openPlayPage(pg) {
   // 管理页为独立路由页面（#/admin/pages/{play_id}/{key}）——复杂配置的
   // 管理页可自建二级面板，避免弹窗套弹窗
@@ -290,6 +330,19 @@ onMounted(load);
 </script>
 
 <style scoped>
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.page-head h2 {
+  margin: 0;
+}
+.hidden-file {
+  display: none;
+}
 .play-body {
   display: flex;
   gap: 12px;

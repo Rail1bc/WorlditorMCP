@@ -258,7 +258,7 @@ async def _on_entity_enter(
     api: WorlditorPlayAPI, entity, map_id: str, row: int, col: int
 ) -> None:
     """演示事件驱动行为：进入迷雾区域发自定义事件（说话下沉后，M2/D1）。"""
-    if row >= FOREST_ROW and entity.kind in ("player", "agent"):
+    if row >= FOREST_ROW and entity.kind == "player":
         await api.emit(
             "fog_enter",
             {"entity_id": entity.id, "row": row, "text": "雾越来越浓，你几乎看不清三米以外的东西……"},
@@ -276,12 +276,12 @@ async def _on_item_used(
 
 
 async def _on_world_edited(api: WorlditorPlayAPI, what) -> None:
-    """演示编辑事件响应：新玩家/agent 实体出生礼包（初始金币）。"""
+    """演示编辑事件响应：新玩家实体出生礼包（初始金币）。"""
     if isinstance(what, dict) and what.get("op") == "place_entity":
         entity = api.get_entity(what["entity_id"])
         if (
             entity is not None
-            and entity.kind in ("player", "agent")
+            and entity.kind == "player"
             and "gold" not in entity.attrs
         ):
             await api.set_attrs(entity.id, {"gold": 100})

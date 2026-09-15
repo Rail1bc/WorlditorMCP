@@ -13,6 +13,7 @@ import asyncio
 import socket
 
 import httpx
+from world_fixtures import seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine
 from worlditor_mcp.world.identity import IdentityService
@@ -86,6 +87,8 @@ async def _probe(tmp_path, host_header: str, *, allowed_hosts=None, origin=None)
 
     engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
+    # v0.2.0：内核不再内置地图/地块，注册探针要有地方站——先铺最小世界
+    await seed_test_world(engine)
     loader = PlayLoader(engine, plays_dir=tmp_path / "plays")
     await loader.load_all(None)
     identity = IdentityService(engine, auth_mode="open")

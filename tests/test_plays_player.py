@@ -9,6 +9,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from world_fixtures import seed_test_world
+
 from worlditor_mcp.world.engine import WorldEngine
 from worlditor_mcp.world.play import PlayLoader
 from worlditor_mcp.world.store import WorldStore
@@ -109,6 +111,9 @@ def test_world_profile_ui_without_items(tmp_path):
     async def fn(engine, loader):
         _copy_only(loader, tmp_path, PLAYER_ID)
         await loader.load_all()
+        # v0.2.0：内核不内置世界内容；本场景只保留 player 包（内置演示世界包
+        # 未加载）→ 自行铺最小测试世界，注册实体才有地方站
+        await seed_test_world(engine)
         player_pkg = next(
             p
             for p in loader.plays.values()

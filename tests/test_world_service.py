@@ -1,6 +1,9 @@
 """v4.1 世界服务测试（6288 独立端口：MCP + 快照 + SSE + auth + 静态 + CORS）。
 
 用 httpx ASGI transport 直调 build_http_app 构建的 app（不起真实端口）。
+
+v0.2.0：内核不再内置世界内容（初始化后 0 地图/地块/实体），需要地图才能注册
+身份的用例经 ``world_fixtures`` 自行铺世界（最小十字世界 / 演示世界）。
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ import json
 
 import httpx
 from play_fixtures import install_demo_play  # noqa: E402
+from world_fixtures import install_demo_world, seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine  # noqa: E402
 from worlditor_mcp.world.identity import IdentityService  # noqa: E402
@@ -23,11 +27,21 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-async def _scenario(tmp_path, fn, *, origins=None, install_demo=False):
+async def _scenario(tmp_path, fn, *, origins=None, install_demo=False, world=None):
+    """起服务场景；world 指定本用例要铺的世界（内核不内置世界内容，v0.2.0）。
+
+    - ``None``：不铺（只需要身份/静态资源的用例）
+    - ``"test"``：最小十字世界（seed_test_world，注册身份要有地方站）
+    - ``"demo"``：演示世界（install_demo_world，断言真实地名/实体/41 地块）
+    """
     if install_demo:
         install_demo_play(tmp_path / "plays")
     engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
+    if world == "demo":
+        await install_demo_world(engine)
+    elif world == "test":
+        await seed_test_world(engine)
     loader = PlayLoader(engine, plays_dir=tmp_path / "plays")
     await loader.load_all(None)
     identity = IdentityService(engine, auth_mode="open", admin_key="sekret")
@@ -91,9 +105,9 @@ def test_public_auth_endpoints(tmp_path):
             json={"username": "管理员", "password": "pass123", "admin_key": "sekret"},
         )
         assert resp.json()["token"]["tier"] == "admin"
-        # agent 注册
+        # 无密码自助注册（agent 通道）：实体与凭据类型都是 player（v0.2.0 不区分）
         resp = await client.post("/auth/agent-register", json={"name": "探针"})
-        assert resp.json()["token"]["kind"] == "agent"
+        assert resp.json()["token"]["kind"] == "player"
         # 错误密码 → 400
         resp = await client.post(
             "/auth/login", json={"username": "小明", "password": "wrong"}
@@ -106,7 +120,7 @@ def test_public_auth_endpoints(tmp_path):
         )
         assert resp.status_code == 401  # 无 token
 
-    _run(_scenario(tmp_path, fn))
+    _run(_scenario(tmp_path, fn, world="test"))
 
 
 def test_snapshot_and_auth(tmp_path):
@@ -130,7 +144,7 @@ def test_snapshot_and_auth(tmp_path):
         assert data["scene"]["location"]["name"] == "小镇广场"
         assert data["peers"] == []
 
-    _run(_scenario(tmp_path, fn))
+    _run(_scenario(tmp_path, fn, world="demo"))
 
 
 def test_events_auth(tmp_path):
@@ -163,7 +177,7 @@ def test_events_auth(tmp_path):
         read = (await client.get("/auth/read-token")).json()["token"]["token"]
         assert (await client.get("/events", headers=_auth(read))).status_code == 403
 
-    _run(_scenario(tmp_path, fn))
+    _run(_scenario(tmp_path, fn, world="test"))
 
 
 def test_play_web_static(tmp_path):
@@ -260,7 +274,7 @@ def test_mcp_endpoint_auth(tmp_path):
         )
         assert resp.status_code == 401
 
-    _run(_scenario(tmp_path, fn))
+    _run(_scenario(tmp_path, fn, world="test"))
 
 
 def test_scene_actions_with_demo(tmp_path):
@@ -290,7 +304,7 @@ def test_scene_actions_with_demo(tmp_path):
         action_names = {a["action"] for a in merchant_peer["actions"]}
         assert {"talk", "trade"} <= action_names
 
-    _run(_scenario(tmp_path, fn, install_demo=True))
+    _run(_scenario(tmp_path, fn, install_demo=True, world="demo"))
 
 
 def test_embedded_webui(tmp_path):
@@ -398,4 +412,4 @@ def test_mcp_http_end_to_end(tmp_path):
             server.should_exit = True
             await asyncio.wait_for(task, timeout=10)
 
-    _run(_scenario(tmp_path, fn, install_demo=True))
+    _run(_scenario(tmp_path, fn, install_demo=True, world="test"))

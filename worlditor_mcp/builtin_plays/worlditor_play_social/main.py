@@ -4,8 +4,8 @@
   text, map_id, row, col}, log=True)——同地块的 WebUI/agent 经 SSE 收到；
   语义（谁能听到）由订阅方按位置自行判断（通道 = 事件总线，D1）。
 - **全图广播（world）**：world_say(text, scope="world") → 消耗 1 个喇叭
-  （items 背包，内核物品定义）+ 每人 30s 冷却（kv 自管）→
-  emit("broadcast", {entity_id, name, text}, log=True)。
+  （items 背包；**喇叭物品定义由本包注册**，v0.2.0 起内核不内置物品）+ 每人 30s
+  冷却（kv 自管）→ emit("broadcast", {entity_id, name, text}, log=True)。
 - **日志视图**：world_log 工具 + 日志视图（历史回放，数据源 world_log 表）。
 
 依赖：worlditor_play_items（喇叭持有）。
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import time
 
-from worlditor_mcp.world import WorldError
+from worlditor_mcp.world import ItemDef, WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
 ITEMS_PLAY = "worlditor_play_items"
@@ -29,6 +29,15 @@ _VIEW_KEY = "social_log"
 
 def setup(api: WorlditorPlayAPI, context) -> None:
     """玩法包入口（由内核 PlayLoader 调用）。"""
+    # 广播道具定义（D1：喇叭归本包持有；v0.2.0 起内核不内置任何物品定义）
+    api.register_item_def(
+        ItemDef(
+            id=MEGAPHONE_ITEM,
+            name="喇叭",
+            desc="全图广播道具：向整个世界喊话一次（每人每 30 秒可用一次）。",
+            stackable=True,
+        )
+    )
     api.register_tool(
         "world_say",
         _world_say,

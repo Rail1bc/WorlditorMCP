@@ -5,6 +5,8 @@
 2. 停用 movement 包后 override 成功，移动被替换
 3. 停用 warp 包后移动恢复内核默认（D11 恢复语义）
 4. 全部内置包停用 → 世界仍可编辑/浏览（空态）
+   （v0.2.0：世界内容由内置世界包 worlditor_play_demo_world 导入，停用它
+   只卸载包本身，已导入的地图数据留在世界——数据归用户）
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ BUILTIN_DIR = Path(__file__).resolve().parent.parent / "worlditor_mcp" / "builti
 WARP_ID = "worlditor_play_warp"
 
 BUILTIN_IDS = (
+    "worlditor_play_demo_world",
     "worlditor_play_movement",
     "worlditor_play_items",
     "worlditor_play_player",
@@ -163,13 +166,14 @@ def test_disable_replacement_restores_default(tmp_path):
 
 
 async def _disable_all(loader) -> None:
-    """按依赖拓扑从叶子到根停用全部内置包。"""
+    """按依赖拓扑从叶子到根停用全部内置包（含世界内容包）。"""
     for play_id in (
         "worlditor_play_social",
         "worlditor_play_player",
         "worlditor_play_interaction",
         "worlditor_play_starter",
         "worlditor_play_items",
+        "worlditor_play_demo_world",
         "worlditor_play_movement",
     ):
         await loader.disable(play_id)
@@ -179,9 +183,9 @@ def test_empty_state_world_usable(tmp_path):
     """全部内置包停用：世界仍可编辑/浏览（内核能力不依赖玩法包）。"""
 
     async def fn(engine, loader):
-        await loader.load_all()
+        await loader.load_all()  # 含世界包：load_all 时已导入演示世界（41 地块）
         await _disable_all(loader)
-        assert not loader.plays  # 全部卸载出内存
+        assert not loader.plays  # 全部卸载出内存（世界数据保留在库里）
         # 世界仍可编辑
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         # 移动 = 内核默认（无过滤器无 override）
@@ -190,7 +194,7 @@ def test_empty_state_world_usable(tmp_path):
         # 字段原语可用
         await engine.set_data(player.id, "hp", 100)
         assert await engine.get_data(player.id, "hp") == 100
-        # 只读浏览
+        # 只读浏览：地图数据是之前由世界包导入的，停用包不删数据
         assert len(engine.list_locations()) == 41
         assert len(engine.list_entities()) >= 1
         # 管理端视角：状态列表显示全部 disabled

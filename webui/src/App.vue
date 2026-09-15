@@ -32,7 +32,10 @@
         </div>
         <div v-else class="empty-hint">
           <p>这个世界还没有任何视图。</p>
-          <p class="dim">管理员可在管理端口（默认 6289）安装玩法包。</p>
+          <p class="dim">
+            视图与工具由玩法包提供——去管理端安装/启用玩法包；
+            还没有地图就先在地图编辑器里建一张。
+          </p>
         </div>
       </main>
     </template>
@@ -45,7 +48,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import * as Vue from "vue";
 import { getToken, listViews, logout, setToken, deleteAccount, getMeta } from "./api";
 import { store } from "./store";
@@ -72,8 +75,8 @@ async function refreshViews() {
     // 视图列表失败不弹全局错误（登录前 401 属正常流程，静默）
     console.warn("视图列表加载失败：", e.message);
   }
-  // 默认进入第一个视图
-  if (!route.value && views.value.length) {
+  // 默认进入第一个视图（仅在已登录时：未登录预加载必然 401，会留下误导提示）
+  if (!route.value && views.value.length && store.token) {
     goto(views.value[0].key);
   }
 }
@@ -88,6 +91,8 @@ async function goto(key) {
     const token = getToken();
     if (token) headers["Authorization"] = `Bearer ${token}`;
     const res = await fetch(meta.provider.url, { headers });
+    // 401 = 尚未登录/凭据失效：静默跳过（登录后由 watch(hasToken) 重新加载）
+    if (res.status === 401) return;
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const code = await res.text();
     // 视图组件协议（G3）：文件 = IIFE（function(Vue, UiBlock) 形参由加载器注入）
@@ -121,6 +126,24 @@ async function doDeleteAccount() {
     store.error = e.message;
   }
 }
+
+// 登录后若无路由（AuthPage 登录成功时会清空 hash）→ 按视图列表进默认视图
+watch(hasToken, (token) => {
+  if (token && store.mode === "play" && !route.value) {
+    refreshViews();
+  }
+});
+
+// 全局错误 toast 自动消失（否则一条旧错误会常驻，例如登录前的 401 预加载）
+watch(
+  () => store.error,
+  (message) => {
+    if (!message) return;
+    setTimeout(() => {
+      if (store.error === message) store.error = "";
+    }, 4000);
+  }
+);
 
 onMounted(async () => {
   store.token = getToken();

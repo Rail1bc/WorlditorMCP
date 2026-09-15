@@ -44,7 +44,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .model import (
+    ATTR_INVISIBLE,
+    ATTR_SEE_INVISIBLE,
     DIRECTIONS,
+    IDENTITY_KINDS,
+    STATE_BLOCK_MOVE,
     WORLD_EVENTS,
     ConnectionPath,
     Entity,
@@ -71,7 +75,7 @@ from .store import WorldStore
 logger = logging.getLogger("worlditor")
 
 TICK_GRANULARITY_SECONDS = 1.0
-IDENTITY_KINDS = ("player", "agent")
+# IDENTITY_KINDS 权威定义在 model.py（v0.2.0 起只有 player）
 
 # 哨兵：update 类动作用于区分「参数未提供（不变）」与「显式传 None（清空/重置）」
 _UNSET = object()
@@ -339,6 +343,8 @@ class WorldEngine:
         self._kind_fields: dict[str, list[_FieldAppend]] = {}
         self._category_fields: dict[str, list[_FieldAppend]] = {}
         self._item_fields: dict[str, list[_FieldAppend]] = {}
+        # 物品定义归属（play_id）：玩法包卸载时清理其注册的物品定义（v0.2.0）
+        self._item_def_play: dict[str, str] = {}
         # D11/A3 原语分派表：name -> 覆盖登记（无登记 = 内核默认实现）
         self._primitive_overrides: dict[str, _PrimitiveOverride] = {}
         # G14 原语过滤器链：name -> 按注册序的过滤器列表（链尾 = 默认实现）
@@ -411,10 +417,11 @@ class WorldEngine:
 
     # ---------- 玩法包注册（WorlditorPlayAPI 转发至此） ----------
 
-    def register_item_def(self, item: Any) -> None:
+    def register_item_def(self, item: Any, *, play_id: str = "") -> None:
         """注册/更新物品定义（同步更新内存；``flush_item_defs`` 批量落库）。
 
-        物品 id 是类型键（玩法包引用），注册冲突即覆盖更新（同 id 视为同一物品）。
+        物品 id 是类型键（玩法包引用），注册冲突即覆盖更新（同 id 视为同一物品）；
+        ``play_id`` 记录归属，玩法包卸载时据此清理（见 item_defs_of_play）。
         """
         if not isinstance(item, ItemDef) and not (
             hasattr(item, "id") and hasattr(item, "name") and hasattr(item, "to_dict")
@@ -425,6 +432,12 @@ class WorldEngine:
         if not isinstance(item.name, str) or not item.name.strip():
             raise WorldError("物品名称不能为空")
         self.store.items[item.id] = item
+        if play_id:
+            self._item_def_play[item.id] = play_id
+
+    def item_defs_of_play(self, play_id: str) -> list[str]:
+        """该玩法包注册的物品定义 id（卸载清理用）。"""
+        return [i for i, p in self._item_def_play.items() if p == play_id]
 
     async def flush_item_defs(self) -> None:
         """把内存中的物品定义全量写回 items 表（PlayLoader 加载结束后调用）。"""
@@ -552,6 +565,19 @@ class WorldEngine:
         self._mcp = mcp
         for name in list(self._tools):
             self._sync_tool_add(name)
+        self._refresh_instructions()
+
+    def _refresh_instructions(self) -> None:
+        """按当前工具集刷新 MCP instructions（零工具时提示未加载玩法包）。"""
+        settings = getattr(self._mcp, "settings", None)
+        if settings is None:
+            return
+        try:
+            from .mcp import build_instructions
+
+            settings.instructions = build_instructions(self)
+        except Exception:  # noqa: BLE001
+            logger.debug("[worlditor] MCP instructions 刷新失败", exc_info=True)
 
     def _sync_tool_add(self, name: str) -> None:
         if self._mcp is None:
@@ -566,6 +592,7 @@ class WorldEngine:
             name=name,
             description=binding.description or f"玩法包工具：{name}",
         )
+        self._refresh_instructions()
 
     def _sync_tool_remove(self, name: str) -> None:
         if self._mcp is not None:
@@ -573,6 +600,7 @@ class WorldEngine:
                 self._mcp.remove_tool(name)
             except Exception:  # noqa: BLE001
                 logger.debug("[worlditor] MCP 工具移除失败（可能未注册）：%s", name)
+            self._refresh_instructions()
 
     def register_tool(
         self,
@@ -1096,6 +1124,10 @@ class WorldEngine:
             for k, v in self._item_fields.items()
             if any(a.play_id != play_id for a in v)
         }
+        # 本包注册的物品定义：内存清理（落库删除由 PlayLoader._teardown_one 负责）
+        for item_id in self.item_defs_of_play(play_id):
+            self.store.items.pop(item_id, None)
+            self._item_def_play.pop(item_id, None)
         self._primitive_overrides = {
             k: v for k, v in self._primitive_overrides.items() if v.play_id != play_id
         }
@@ -1420,12 +1452,12 @@ class WorldEngine:
             entities = [e for e in entities if e.col == col]
         if viewer_id is not None:
             viewer = self.store.entities.get(viewer_id)
-            see_all = bool(viewer and viewer.attrs.get("see_invisible"))
+            see_all = bool(viewer and viewer.attrs.get(ATTR_SEE_INVISIBLE))
             if not see_all:
                 entities = [
                     e
                     for e in entities
-                    if e.id == viewer_id or not e.attrs.get("invisible")
+                    if e.id == viewer_id or not e.attrs.get(ATTR_INVISIBLE)
                 ]
         return entities
 
@@ -1875,8 +1907,8 @@ class WorldEngine:
 
     def _is_blocking(self, e: Entity) -> bool:
         """阻挡判定：state 可动态覆盖 kind 声明（门开/关由玩法包写 state）。"""
-        if "block_move" in e.state:
-            return bool(e.state["block_move"])
+        if STATE_BLOCK_MOVE in e.state:
+            return bool(e.state[STATE_BLOCK_MOVE])
         spec = self._kind_specs.get(e.kind)
         return bool(spec and spec.block_move)
 

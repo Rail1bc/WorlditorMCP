@@ -103,9 +103,9 @@ def test_starter_pack(tmp_path):
             )
             == 2
         )
-        # agent 也有礼包
-        agent = await engine.place_entity("agent", "default", 1, 0, name="小智")
-        assert engine.get_attrs(agent.id).get("gold") == 100
+        # 无密码注册的玩家同样有礼包（kind 统一 player）
+        second = await engine.place_entity("player", "default", 1, 0, name="小智")
+        assert engine.get_attrs(second.id).get("gold") == 100
 
     _run(_scenario(tmp_path / "world.db", fn))
 

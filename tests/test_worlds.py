@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from world_fixtures import seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.model import World, WorldFolder
@@ -24,7 +25,7 @@ async def _engine(tmp_path: Path) -> WorldEngine:
 
 
 def test_default_world_seeded(tmp_path):
-    """空库播种：默认世界 + 种子地图归属。"""
+    """空库播种：只建「默认世界」容器，不播任何世界内容（v0.2.0）。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -32,8 +33,17 @@ def test_default_world_seeded(tmp_path):
             world = engine.get_world(DEFAULT_WORLD_ID)
             assert world is not None and world.name == "默认世界"
             assert world.play_ids == []  # 空 = 全部激活
+            # v0.2.0：内核不再内置演示世界——地图/地块/实体/物品全由玩法包导入
+            assert engine.list_maps() == []
+            assert engine.list_locations() == []
+            assert engine.list_entities() == []
+            assert engine.store.items == {}
+            # 归属仍经地图推导：铺一张测试地图并归属到默认世界
+            await seed_test_world(engine)
+            await engine.assign_map("default", DEFAULT_WORLD_ID)
             assert engine.map_world("default") == DEFAULT_WORLD_ID
-            assert engine.entity_world(engine.list_entities()[0].id) == DEFAULT_WORLD_ID
+            player = await engine.place_entity("player", "default", 0, 0, name="小明")
+            assert engine.entity_world(player.id) == DEFAULT_WORLD_ID
         finally:
             await engine.terminate()
 
@@ -73,8 +83,9 @@ def test_delete_world_guarded(tmp_path):
     async def fn():
         engine = await _engine(tmp_path)
         try:
+            await seed_test_world(engine)  # 世界归属要有地图才测得了
             await engine.create_world("w2", "二")
-            # 把种子地图归属到 w2（覆盖默认归属）
+            # 把测试地图归属到 w2（覆盖默认归属）
             await engine.assign_map("default", "w2")
             with pytest.raises(WorldError, match="仍有地图"):
                 await engine.delete_world("w2")
@@ -94,6 +105,7 @@ def test_folders_tree(tmp_path):
     async def fn():
         engine = await _engine(tmp_path)
         try:
+            await seed_test_world(engine)  # 组织树挂载要有地图才测得了
             root = await engine.create_folder(DEFAULT_WORLD_ID, "新手村")
             sub = await engine.create_folder(
                 DEFAULT_WORLD_ID, "副本", parent_id=root.id, sort=1

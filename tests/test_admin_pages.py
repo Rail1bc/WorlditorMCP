@@ -15,6 +15,7 @@ import asyncio
 
 import httpx
 from play_fixtures import PLAY_ID, install_demo_play
+from world_fixtures import seed_test_world
 
 from worlditor_mcp.admin import build_admin_app
 from worlditor_mcp.world.engine import WorldEngine
@@ -34,6 +35,7 @@ async def _scenario(tmp_path, fn, *, admin_key="sekret"):
     install_demo_play(tmp_path / "plays")
     engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
+    await seed_test_world(engine)  # v0.2.0：内核不再内置世界内容，注册要有地方站
     loader = PlayLoader(engine, plays_dir=tmp_path / "plays", worlditor_version="0.3.0")
     await loader.load_all()
     identity = IdentityService(engine, auth_mode="open", admin_key=admin_key)
@@ -332,7 +334,8 @@ def test_map_read_endpoints(tmp_path):
         assert resp.status_code == 400
         assert "不存在" in resp.json()["error"]
 
-    _run(_scenario(tmp_path, fn))
+    # 断言演示世界内容（41 地块/小镇广场）→ 用内置包场景（世界包导入该世界）
+    _run(_scenario_builtin(tmp_path, fn))
 
 
 # ---------- 账户检索 ----------

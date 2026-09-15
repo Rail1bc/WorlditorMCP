@@ -55,6 +55,17 @@ def _result(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _tier_of(ctx: Context) -> str:
+    """连接凭据档位（HTTP 经 _meta 注入；进程内直调等场景为空串 = 不校验）。"""
+    meta = None
+    try:
+        meta = ctx.request_context.meta if ctx.request_context else None
+    except ValueError:  # Context 不在请求内
+        meta = None
+    tier = getattr(meta, _META_TIER_KEY, None)
+    return tier if isinstance(tier, str) else ""
+
+
 def _entity_id(ctx: Context) -> str:
     """从连接身份解析实体 id（HTTP 读 _meta；无请求上下文时不可用）。"""
     meta = None
@@ -87,6 +98,11 @@ def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
         api = engine._play_apis.get(binding.play_id)
         if api is None:
             return _result({"text": f"玩法包未加载：{binding.play_id}"})
+        # 档位消费（v0.2.0）：read（围观）凭据只能看，不能执行动作
+        if _tier_of(ctx) == "read":
+            return _result(
+                {"text": "围观（read）凭据不能执行动作：请用玩家身份登录后再试。"}
+            )
         try:
             entity_id = _entity_id(ctx)
         except McpAuthError as e:
@@ -200,6 +216,35 @@ def build_transport_security(
     )
 
 
+# MCP server instructions（按当前工具集生成；零包时明确告知无事可做）
+_INSTRUCTIONS_HEAD = (
+    "你是 worlditor 世界中的一个存在。世界的规则、可用工具与界面都由**玩法包**"
+    "提供（内核只提供世界数据与协议）。所有工具返回 JSON：text 字段是给你的文本，"
+    "ui 字段是界面结构（忽略即可）。"
+)
+_INSTRUCTIONS_EMPTY = (
+    " ⚠ 当前世界**未加载任何玩法包**：工具列表为空，你无法行动——"
+    "请让管理员在管理端安装或启用玩法包。"
+)
+
+
+def build_instructions(engine: Any = None) -> str:
+    """按当前工具集生成 MCP instructions（零工具时给出明确提示）。
+
+    Args:
+        engine: WorldEngine 实例（None 视为无工具）。
+
+    Returns:
+        instructions 文本。
+    """
+    names = [t["name"] for t in engine.list_tools()] if engine is not None else []
+    if not names:
+        return _INSTRUCTIONS_HEAD + _INSTRUCTIONS_EMPTY
+    shown = "、".join(names[:12])
+    more = f" 等共 {len(names)} 个" if len(names) > 12 else ""
+    return _INSTRUCTIONS_HEAD + f" 当前可用工具：{shown}{more}。"
+
+
 def build_mcp_server(
     engine: Any,
     *,
@@ -208,8 +253,9 @@ def build_mcp_server(
 ) -> FastMCP:
     """构建 worlditor MCP server（M2：无内置工具，工具全部由玩法包注册）。
 
-    工具 = 玩法包 register_tool 动态注册（build_dynamic_tool）；M3 领域包
-    将注册 world_look/world_move 等行为工具。身份经请求 _meta 注入。
+    工具 = 玩法包 register_tool 动态注册（build_dynamic_tool）；身份经请求
+    _meta 注入。instructions 由 build_instructions 按当前工具集生成，并随
+    注册表变化刷新（见 engine._refresh_instructions）。
 
     Args:
         engine: WorldEngine 实例。
@@ -222,11 +268,7 @@ def build_mcp_server(
     """
     mcp = FastMCP(
         "worlditor",
-        instructions=(
-            "你是一个生活在 worlditor 世界中的实体。可用工具由当前世界的玩法包"
-            "提供（如 world_look 查看位置、world_move 移动、world_interact 交互）。"
-            "所有工具返回 JSON：text 字段是给 LLM 的文本，ui 字段是界面结构（忽略即可）。"
-        ),
+        instructions=build_instructions(engine),
         streamable_http_path="/world/mcp",
         # 显式传入：SDK 在 host=127.0.0.1（默认）时会自动只放行 localhost → 421
         transport_security=build_transport_security(allowed_hosts, allowed_origins),

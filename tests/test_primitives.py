@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from world_fixtures import seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
@@ -19,6 +20,8 @@ def _run(coro):
 async def _engine(tmp_path: Path) -> WorldEngine:
     engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
+    # v0.2.0：内核不再内置地图/地块，测试自铺最小世界（中央广场 (0,0) 可四向走）
+    await seed_test_world(engine)
     return engine
 
 
@@ -263,6 +266,8 @@ def test_item_fields(tmp_path):
                 ItemDef(id="sword", name="剑"),
                 fields=[{"name": "atk", "label": "攻击", "type": "int"}],
             )
+            # 喇叭不再由内核播种（v0.2.0：物品归 items 包注册）——这里显式注册后再追加字段
+            api.register_item_def(ItemDef(id="megaphone", name="喇叭"))
             api.add_item_fields("megaphone", [{"name": "price", "type": "int"}])
             assert engine.store.items["sword"].fields[0]["name"] == "atk"
             # add_item_fields 落内存注册表（flush 后持久化）

@@ -81,7 +81,8 @@ CLI 参数（`worlditor serve --port 6288 --admin-port 6289 --admin-key xxx`）
 
 ## 玩法包
 
-行为、规则、工具与界面全部由玩法包提供（内核纯数据 + 原语 + 注册表）。
+行为、规则、工具、界面**以及世界内容**全部由玩法包提供（内核纯数据 + 原语 +
+注册表）——v0.2.0 起内核不内置任何地图/地块/实体，空库只有一个空的「默认世界」。
 一个最小的玩法包（`<数据目录>/plays/worlditor_play_hello/`）：
 
 ```
@@ -92,12 +93,23 @@ main.py            # setup(api, context)：注册 kind/交互/事件/工具/视�
 玩法包可：注册实体 kind（含字段声明）、交互、事件订阅、MCP 工具
 （参数支持 array，G11）、WebUI 视图、覆盖/禁用行为原语（override/
 disable/过滤器链，D11/G14）、跨包服务（M3）、spawn/编辑实体与地图（D14）、
-读写实体字段与按世界隔离的 KV。
+读写实体字段与按世界隔离的 KV；**世界包**还可写 `async def setup(...)` 导入
+地图、地块、连接与实体（参考内置 `worlditor_play_demo_world`，幂等：地图
+已存在则跳过，不覆盖用户改动）。
 
+安装方式：把包目录放进 `<数据目录>/plays/`，或在管理端
+「玩法包 → 安装玩法包（zip）」上传（zip 内单个顶层目录 `<play_id>/`，
+含 play.yaml 与 main.py）。
+
+- 内置包：**世界包** `worlditor_play_demo_world`（示例主世界：41 地块 +
+  商贩·阿福/告示牌/木门）+ 6 个领域包（items/starter/player/movement/
+  interaction/social）
+- 身份只有一种 `player`：人类玩家与 agent 不作区分（脚本/agent 可用登录页
+  「agent / 脚本接入」无密码注册）
 - `docs/PLAY_DEV.md`：玩法包开发指南（API 全量 + 约定 + 示例）
+- `docs/CORE_AUDIT.md`：内核边界审查（零玩法包视角）+ 决策记录 + 待办
 - `DESIGN.md`：设计/协议/路线（唯一权威）
 - `GAPS.md`：平台缺口清单（历史与观察项）
-- 内置 6 个领域包（`worlditor_mcp/builtin_plays/`）即参考实现
 
 ## 开发
 

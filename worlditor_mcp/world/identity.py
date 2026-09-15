@@ -19,12 +19,15 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import secrets
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger("worlditor")
 
 AUTH_MODES = ("open", "invite", "closed")
 TOKEN_TIERS = ("read", "play", "admin")
@@ -53,7 +56,7 @@ class TokenInfo:
     token: str
     entity_id: str
     tier: str
-    kind: str  # "player" | "agent" | "readonly"
+    kind: str  # "player" | "readonly"（v0.2.0 起不再有 agent 类型）
     account_id: str | None = None
     username: str | None = None
 
@@ -149,18 +152,10 @@ class IdentityService:
                 role=role,
                 created_ts=self._now(),
             )
-            spawn = self._spawn_pos()
-            entity = await self._engine.place_entity(
-                "player",
-                spawn[0],
-                spawn[1],
-                spawn[2],
-                name=username,
-                user_id=account.id,
-            )
+            entity = await self._materialize(username, account_id=account.id)
             await self._engine.store.save_account(account)
             token = await self._issue_token(
-                entity_id=entity.id,
+                entity_id=entity.id if entity is not None else "",
                 tier="admin" if role == "admin" else "play",
                 kind="player",
                 account_id=account.id,
@@ -173,29 +168,37 @@ class IdentityService:
     async def register_agent(
         self, name: str, *, invite_code: str | None = None
     ) -> TokenInfo:
-        """agent 自助注册：创建 agent 实体 + 发放 play 档凭据（B13）。
+        """无密码自助注册（agent / 脚本友好；B13）。
+
+        实体类型与人类注册**完全一致**（kind=player——v0.2.0 起不再区分人类与
+        agent，实体名就是 name，不加前缀），发放 play 档凭据。
 
         Raises:
-            IdentityError: 模式限制 / agent 注册关闭 / 邀请码无效 / 名称非法。
+            IdentityError: 模式限制 / 自助注册关闭 / 邀请码无效 / 名称非法。
         """
         name = self._check_username(name)
         if not self.allow_agent_register:
             raise IdentityError("agent 自助注册已关闭，请联系管理员")
         self._check_invite(self.auth_mode, invite_code)
         async with self._engine._lock:
-            spawn = self._spawn_pos()
-            entity = await self._engine.place_entity(
-                "agent", spawn[0], spawn[1], spawn[2], name=f"AI·{name}"
-            )
+            entity = await self._materialize(name)
             token = await self._issue_token(
-                entity_id=entity.id, tier="play", kind="agent", username=name
+                entity_id=entity.id if entity is not None else "",
+                tier="play",
+                kind="player",
+                username=name,
             )
             if invite_code:
                 await self._engine.store.set_invite_code_used(invite_code)
             return token
 
     async def login(self, username: str, password: str) -> TokenInfo:
-        """人类登录：校验密码，刷新凭据（旧 token 吊销）。"""
+        """人类登录：校验密码，刷新凭据（旧 token 吊销）。
+
+        账户尚未绑定世界实体时（注册时世界还没有地图）尝试补建；仍无地图则
+        以空 entity_id 发放凭据——管理员因此**始终能登录管理端**去启用世界包
+        或建图（v0.2.0：内核不内置世界内容，不能让部署死锁在门口）。
+        """
         async with self._engine._lock:
             account = self._engine.store.get_account_by_username(username.strip())
             if account is None or not _verify_password(password, account.password_hash):
@@ -203,9 +206,11 @@ class IdentityService:
             await self._engine.store.revoke_tokens_of_account(account.id)
             entity = self._find_entity_of_account(account.id)
             if entity is None:
-                raise IdentityError("账户未绑定世界角色，请联系管理员")
+                entity = await self._materialize(
+                    account.username, account_id=account.id
+                )
             return await self._issue_token(
-                entity_id=entity.id,
+                entity_id=entity.id if entity is not None else "",
                 tier="admin" if account.role == "admin" else "play",
                 kind="player",
                 account_id=account.id,
@@ -428,12 +433,31 @@ class IdentityService:
                 return e
         return None
 
-    def _spawn_pos(self) -> tuple[str, int, int]:
-        """默认地图出生点（注册时的初始位置）。"""
+    def _spawn_pos(self) -> tuple[str, int, int] | None:
+        """出生点（注册时的初始位置）= 首张地图的 spawn；世界还没有地图 → None。
+
+        无地图不是错误（v0.2.0：内核不内置世界内容）——账户与凭据照常创建，
+        实体延后到有地图时补建（见 `_materialize`），否则新部署会死锁在
+        "想启用世界包却登录不进管理端"。出生点的世界/地图治理语义待设计
+        （见 docs/CORE_AUDIT.md §4）。
+        """
         m = next(iter(self._engine.store.maps.values()), None)
         if m is None:
-            raise IdentityError("世界尚未初始化")
+            return None
         return (m.id, m.spawn_row, m.spawn_col)
+
+    async def _materialize(self, name: str, *, account_id: str | None = None):
+        """按出生点放置 player 实体；无地图 → None（调用方照常发凭据）。"""
+        spawn = self._spawn_pos()
+        if spawn is None:
+            logger.info(
+                "[worlditor] 世界还没有地图：%s 暂不生成世界实体（启用世界包或建图后自动补建）",
+                name,
+            )
+            return None
+        return await self._engine.place_entity(
+            "player", spawn[0], spawn[1], spawn[2], name=name, user_id=account_id
+        )
 
     async def _issue_token(
         self,

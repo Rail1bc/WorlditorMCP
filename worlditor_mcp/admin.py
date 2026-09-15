@@ -70,6 +70,28 @@ async def _plays_list(request: Request) -> Response:
     return JSONResponse({"plays": _loader(request).list_plays()})
 
 
+async def _play_install(request: Request) -> Response:
+    """安装社区玩法包（v0.2.0）：请求体 = zip 字节流（Content-Type: application/zip）。
+
+    包结构：zip 内单个顶层目录 `<play_id>/`，含 play.yaml 与 main.py。
+    校验与路径安全在 PlayLoader.install_zip 内（体积/结构/越界/命名），
+    加载失败会自动回滚已解压目录。
+    """
+    _require_admin(request)
+    loader = _loader(request)
+    if loader is None:
+        return _err(WorldError("玩法包加载器不可用"))
+    data = await request.body()
+    if not data:
+        return _err(WorldError("请求体为空：请以 application/zip 上传玩法包"))
+    filename = request.headers.get("x-play-filename", "")
+    try:
+        play_id = await loader.install_zip(data, filename=filename)
+    except WorldError as e:
+        return _err(e)
+    return _ok({"play_id": play_id})
+
+
 async def _play_enable(request: Request) -> Response:
     _require_admin(request)
     try:
@@ -647,6 +669,7 @@ def build_admin_app(
         Route("/auth/login", _login_route, methods=["POST"]),
         Route("/auth/agent-register", _agent_register_route, methods=["POST"]),
         Route("/admin/plays", _plays_list),
+        Route("/admin/plays/install", _play_install, methods=["POST"]),
         Route("/admin/plays/{play_id}/enable", _play_enable, methods=["POST"]),
         Route("/admin/plays/{play_id}/disable", _play_disable, methods=["POST"]),
         Route("/admin/plays/{play_id}/uninstall", _play_uninstall, methods=["POST"]),

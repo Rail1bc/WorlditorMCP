@@ -28,7 +28,7 @@ class WorlditorPlayAPI:
         """注册物品定义（持久化；同 id 覆盖更新）；fields 为字段 schema（D9）。"""
         if fields:
             item.fields = list(item.fields or []) + list(fields)
-        self._engine.register_item_def(item)
+        self._engine.register_item_def(item, play_id=self.play_id)
 
     def add_item_fields(self, item_id: str, fields: list[dict]) -> None:
         """向已有物品类型追加字段（D9）。"""
@@ -372,6 +372,20 @@ class WorlditorPlayAPI:
 
     # ---------- 地图编辑（D14：地块/连接/地图/模板） ----------
 
+    async def create_location(
+        self,
+        map_id: str,
+        row: int,
+        col: int,
+        name: str,
+        *,
+        description: object = None,
+    ):
+        """新建地块（世界包/内容导入用；坐标重复或空名称报错）。"""
+        return await self._engine.create_location(
+            map_id, row, col, name, description=description
+        )
+
     async def update_location(self, map_id: str, row: int, col: int, **kwargs) -> None:
         await self._engine.update_location(map_id, row, col, **kwargs)
 
@@ -384,6 +398,12 @@ class WorlditorPlayAPI:
         self, map_id: str, name: str, *, description: str | None = None, **kwargs
     ):
         await self._engine.create_map(map_id, name, description=description, **kwargs)
+
+    async def assign_map(
+        self, map_id: str, world_id: str, *, folder_id: str | None = None
+    ) -> None:
+        """把地图归属到世界（世界包导入内容时用；覆盖旧归属）。"""
+        await self._engine.assign_map(map_id, world_id, folder_id=folder_id)
 
     async def delete_map(self, map_id: str) -> None:
         """删除地图（G2：级联清理；图上玩家/agent 在场被拒）。"""

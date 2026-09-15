@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from world_fixtures import install_demo_world, seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import (  # noqa: E402
     WorldEngine,
@@ -38,6 +39,8 @@ def test_create_update_delete_location(tmp_path):
     """地块 CRUD：新建/改名/改描述/删除（级联）。"""
 
     async def fn(engine: WorldEngine):
+        # v0.2.0：内核不再内置世界内容——先铺最小测试世界（default 地图 + 十字地块）
+        await seed_test_world(engine)
         edited = []
         engine.register_world_event(
             "on_world_edited", lambda api, what: edited.append(what)
@@ -65,6 +68,8 @@ def test_move_location_rewrites_refs_and_entities(tmp_path):
     """移动地块：全图引用重写 + 实体跟随。"""
 
     async def fn(engine: WorldEngine):
+        # 真实地名/实体断言 → 用演示世界（内容来自内置世界包）
+        await install_demo_world(engine)
         # 把告示牌移到 (-1,0)（地块移动前），再移动地块 → 实体跟随
         sign = [e for e in engine.list_entities() if e.kind == "sign"][0]
         await engine.move_entity(sign.id, "default", -1, 0)
@@ -88,8 +93,9 @@ def test_update_connection(tmp_path):
     """连接槽位更新：enabled / paths 整体替换。"""
 
     async def fn(engine: WorldEngine):
+        await seed_test_world(engine)
         plaza = engine.get_location("default", 0, 0)
-        assert plaza.connections["up"].enabled is True  # 种子默认连步行街
+        assert plaza.connections["up"].enabled is True  # 测试世界默认连北门 (-1,0)
         await engine.update_connection("default", 0, 0, "up", enabled=False)
         assert plaza.connections["up"].enabled is False
         await engine.update_connection(
@@ -143,6 +149,8 @@ def test_update_entity_fields(tmp_path):
     """实体字段更新（admin 编辑：name/desc/attrs/state 整体替换）。"""
 
     async def fn(engine: WorldEngine):
+        # 告示牌实体由演示世界包提供
+        await install_demo_world(engine)
         sign = [e for e in engine.list_entities() if e.kind == "sign"][0]
         changed = []
         engine.register_world_event(
@@ -172,6 +180,8 @@ def test_subscribe_receives_events(tmp_path):
     """订阅者收到事件 payload（含实体与事件字段）；unsubscribe 停止。"""
 
     async def fn(engine: WorldEngine):
+        # 需要能站人、能沿连接向上走一步 → 最小测试世界（中央广场 ↔ 北门）
+        await seed_test_world(engine)
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         queue = engine.subscribe()  # 先建实体再订阅（place 触发 on_world_edited）
         await engine.emit("my_say", "hello")

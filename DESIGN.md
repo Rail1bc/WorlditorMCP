@@ -184,7 +184,7 @@ emit / kv_set…）为同一任务重入，安全且多段「读-判-写」天�
 @dataclass
 class Entity:
     id: str          # uuid4 hex
-    kind: str        # 种类（player/agent 内置或玩法包注册）
+    kind: str        # 种类（player 内置，或玩法包注册的 kind）
     map_id: str      # 位置
     row: int
     col: int
@@ -355,7 +355,7 @@ class ItemDef:
 但*不依赖*部件（无包间硬依赖；部件从玩家身上"追加/卸下"）。
 
 ```
-内核 Entity（kind=player/agent：id/位置/name/desc/attrs/state/user_id）——玩家"存在"
+内核 Entity（kind=player：id/位置/name/desc/attrs/state/user_id）——玩家"存在"
    ├─ worlditor_play_player     玩家壳：角色视图 + world_profile（零包间依赖）
    └─ 部件（可追加，按 entity_id 键控）：
         ├─ worlditor_play_starter   出生礼包（阶段 1 拆分，硬依赖 items——发货需要）
@@ -420,7 +420,7 @@ class ItemDef:
 | 玩家出生礼包 | starter 包（阶段 1 从 player 拆分；可停用=无礼包，可替换=自定义礼包） |
 | 角色视图 / world_profile | player 包（零依赖壳；背包摘要软依赖，§4.5） |
 | 交互弹窗编排 / 动作菜单 | interaction 包 |
-| 种子演示实体（商贩/告示牌/木门）的 kind 与交互 | interaction 包（实体本身由内核播种，D13） |
+| 种子演示实体（商贩/告示牌/木门）的 kind 与交互 | interaction 包（实体由**世界包**放置：worlditor_play_demo_world——v0.2.0 起内核不播种任何世界内容） |
 | 日志视图 | social 包 |
 | 登录/注册/身份 | 内核 |
 | 世界/组织树管理（CRUD/激活配置） | 内核（admin，管理端口，D15） |
@@ -433,7 +433,7 @@ class ItemDef:
 | 玩法包 | 领域 | 贡献 |
 |---|---|---|
 | `worlditor_play_items` | 背包与物品使用（持有下沉，D8） | 背包模型自定（有限格子/单物品多格/堆叠/整理）、物品 use 规则、背包视图、world_bag/world_use 工具；注册基础物品定义（苹果等）并声明字段；**物品管理页**（管理端注册协议，§4.6） |
-| `worlditor_play_starter` | 出生礼包（部件，§4.5） | 新玩家/agent 出生礼包（金币 + 物品，attrs 标记只发一次）；可停用/可替换 |
+| `worlditor_play_starter` | 出生礼包（部件，§4.5） | 新玩家出生礼包（金币 + 物品，attrs 标记只发一次）；可停用/可替换 |
 | `worlditor_play_player` | 玩家 | 玩家壳（零依赖）：角色视图、world_profile 工具（背包摘要为软依赖）；出生礼包见 starter |
 | `worlditor_play_movement` | 移动与视野 | 默认移动 = 内核 move；视野视图（3×3）、world_look/world_move/world_who 工具；可按需 override move |
 | `worlditor_play_interaction` | 交互 | 交互弹窗编排、动作菜单、world_interact 工具；注册种子演示实体的 kind 与交互（merchant/sign/door：talk/trade/read/open） |
@@ -475,8 +475,10 @@ WorlditorMCP 以独立服务重开：
 
 - 服务使用独立数据目录（`WORLDITOR_DATA_DIR`，默认 `./data`），无历史数据
 - 插件时代库不迁移、不兼容；无 schema_version 检测/迁移逻辑
-- 新库播种：41 地块 + 3 个种子演示实体（内核，实体 kind 与交互由 interaction
-  包注册）；物品定义由玩法包注册（苹果归 items 包）；内核仅注册 D1 喇叭定义
+- **内核不播种任何世界内容**（v0.2.0）：空库只建一个空的「默认世界」容器，
+  地图/地块/实体由**世界包**导入（内置参考：worlditor_play_demo_world，含
+  41 地块与 3 个演示实体）或用户经管理端地图编辑器创建；物品定义由玩法包注册
+  （苹果归 items 包、喇叭归 social 包）；实体 kind 与交互由 interaction 包注册
 
 ## 8. 分阶段路线（每阶段可独立发布/验证）
 
@@ -516,7 +518,7 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 | D11 | 移动与内核能力覆盖 | **移动收束内核**（默认 = 路径移动：读 connections → 抽目标）；**全部原语可被玩法包 override/disable**（每原语至多一个覆盖者，第二个报错；禁用后调用报错）；**过滤器链（G14）**：可覆盖原语支持多过滤器（否决/改参/短路，注册序，链尾默认实现），与 override/disable 互斥；覆盖/过滤器状态管理页可见 |
 | D12 | 交互变更表达 | **删除 effects 机制**（取代 V4 A1 双轨）：InteractionResult 仅 text + ui；交互 handler 命令式调用内核原语（set_data / move_entity 等，锁内重入 + 异常隔离，机制已验证）；变更通知由事件总线 + SSE 承担；v5 只有命令式一轨 |
 | D13 | 旧数据与库形态 | **数据不保留**：v5 为开发阶段完全重构，零债务——独立服务使用全新数据目录，无迁移、无备份、无兼容分支 |
-| D14 | 实体生命周期与地图编辑 | **开放给玩法包**：API 提供 place/remove 与地图编辑原语（地块/连接/地图/模板，取代 v4 B8 的限制部分）；身份化实体（player/agent）不可被 remove（防 token 悬空）、delete_location 保留"身份化实体在场"保护；内核保证锁内执行、级联清理、异常隔离（程序安全）；内容治理与数据备份责任归用户/玩法包 |
+| D14 | 实体生命周期与地图编辑 | **开放给玩法包**：API 提供 place/remove 与地图编辑原语（地块/连接/地图/模板，取代 v4 B8 的限制部分）；身份化实体（player——v0.2.0 起人类与 agent 不区分）不可被 remove（防 token 悬空）、delete_location 保留"身份化实体在场"保护；内核保证锁内执行、级联清理、异常隔离（程序安全）；内容治理与数据备份责任归用户/玩法包 |
 | D15 | 世界概念 | **世界 = 玩法包激活集合 + 数据边界**：worlds 表（play_ids 激活集合）+ 组织树（多层纯管理）+ maps 归属（world_id/folder_id）；玩法包全局加载一次、按实体所在世界过滤分发；身份全局、身份化实体数据跟人走（可跨世界跳转）；跳转 = `world_list`/`world_travel` 传送；play_data 按 (世界, 玩法包) 双层隔离 |
 | D16 | 管理/游玩分端口 | **双端口物理隔离**：玩家端口（默认 6288，公开）= MCP + 游玩 WebUI + 快照/SSE + 注册登录；管理端口（默认 6289，127.0.0.1）= 管理 REST + 管理 WebUI；共享同一引擎实例；管理端仍要求 tier=admin（不信任端口隔离） |
 

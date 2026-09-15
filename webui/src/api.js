@@ -100,3 +100,16 @@ export const listViews = () => apiGet("/views");
 
 // 模式识别：play（玩家端口）/ admin（管理端口）——前端界面分离的运行时依据
 export const getMeta = () => apiGet("/meta");
+
+// 玩法包安装（zip 字节流；X-Play-Filename 仅用于错误提示）
+export async function installPlay(file) {
+  const resp = await http("/admin/plays/install", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/zip",
+      "X-Play-Filename": (file && file.name) || "play.zip",
+    },
+    body: file,
+  });
+  return resp.json();
+}

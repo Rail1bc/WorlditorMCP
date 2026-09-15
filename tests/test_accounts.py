@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
+from world_fixtures import seed_test_world  # noqa: E402
 
 from worlditor_mcp.admin import build_admin_app
 from worlditor_mcp.world.engine import WorldEngine, WorldError
@@ -34,6 +35,7 @@ def _scenario(db_path, fn, **kwargs):
 
     async def main():
         await engine.initialize()
+        await seed_test_world(engine)  # v0.2.0：内核不再内置世界内容，注册要有地方站
         try:
             return await fn(engine, identity)
         finally:

@@ -23,6 +23,18 @@ from typing import Any
 
 DIRECTIONS = ("up", "right", "down", "left")
 
+# 身份化实体类型（v0.2.0：只有 player——人类玩家与 agent 不区分，都由身份服务创建；
+# 权威定义，engine 与 identity 共用）
+IDENTITY_KINDS = ("player",)
+
+# ---------- 内置协议字段（引擎读取的约定键；玩法包按这些名字读写 attrs/state） ----------
+STATE_BLOCK_MOVE = "block_move"
+"""state：动态移动阻挡（门/机关），优先于 kind spec 的 block_move。"""
+ATTR_INVISIBLE = "invisible"
+"""attrs：实体对普通 viewer 隐藏（G1 可见性通道）。"""
+ATTR_SEE_INVISIBLE = "see_invisible"
+"""attrs：真视——viewer 带此字段为真时可看见 invisible 实体。"""
+
 # 方向 ↔ 坐标偏移（行, 列）：up=行-1 / down=行+1 / left=列-1 / right=列+1。
 # 权威定义；前端视图组件（worlditor_play_movement/web/view.js）按此约定渲染网格。
 DIR_OFFSETS: dict[str, tuple[int, int]] = {
@@ -566,8 +578,8 @@ class Entity:
         return (self.map_id, self.row, self.col)
 
     def is_identity(self) -> bool:
-        """身份化实体（可认证绑定、有背包、位置持久化）。"""
-        return self.kind in ("player", "agent")
+        """身份化实体（可认证绑定、不可被玩法包移除、位置持久化）。"""
+        return self.kind in IDENTITY_KINDS
 
     def to_dict(self) -> dict[str, Any]:
         return {

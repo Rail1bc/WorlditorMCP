@@ -85,11 +85,17 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
                                   （过滤器/覆盖自动清除 → 内核恢复默认实现）
 ```
 
+- **setup 可为同步或 async**（v0.2.0 起内核 `await` 返回值）：需要写世界的
+  「世界包」用 `async def setup(...)`，例如内置 `worlditor_play_demo_world`
+  在 setup 里导入地图/地块/实体（幂等，地图已存在则跳过、不覆盖用户改动）
 - **世界激活（D15）**：玩法包全局加载一次；事件/交互/感知按实体所在世界的
   `worlds.play_ids` 激活集合过滤分发（on_tick 例外，不过滤）
 - **数据隔离**：`api.kv_*` 的 namespace = 本包 id（或 `世界id:包id` 双层）——
   不同玩法包互不可见；同包跨世界各自状态
 - **disable 保留数据**：只卸载代码注册，kv/data/web 资源保留，enable 即恢复
+- **安装/分发**：包目录放到 `<数据目录>/plays/`（或管理端「安装玩法包（zip）」
+  上传：zip 内单个顶层目录 `<play_id>/`，含 play.yaml 与 main.py）；内置包
+  随版本分发、只可停用不可卸载
 
 ## 4. API 参考（WorlditorPlayAPI 全量）
 
@@ -383,6 +389,7 @@ interaction 包商贩交易 = 金币 attrs + items 服务，无内核强制。
 
 | 包 | 能力 | 关键机制 |
 |---|---|---|
+| `worlditor_play_demo_world` | **世界内容包**：导入示例主世界（41 地块：广场/步行街/AstrBot大道/开源小区/迷雾森林 + 商贩·阿福/告示牌/木门） | `async setup` 读取本包 `world.json`（地图/地块/连接/实体）并写入世界；**地图已存在则跳过**（不覆盖用户改动）；不注册 kind/交互（行为归 interaction 包）；换世界主题 = 停用本包换成你自己的世界包 |
 | `worlditor_play_items` | 背包（20 格/堆叠 99）+ world_bag/use + 苹果/面包 | **服务** bag_add/take/count/get；持有下沉（D8）；**ui_hook 注入玩家聚合视图**（character after → 背包面板）；**物品管理页**（管理员可维护物品定义，§13） |
 | `worlditor_play_starter` | 出生礼包（金币+物品，只发一次） | 部件模式（§11）：事件 on_world_edited + 跨包服务；可停用/替换 |
 | `worlditor_play_player` | 角色视图 + world_profile | 玩家壳**零引用**：背包信息由 items 包工具/hook 单向提供（§11）；**玩家聚合界面**——角色卡 + items hook 注入的背包面板（world_profile 返回 ui，视图通用渲染）；出生礼包见 starter |

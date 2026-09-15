@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from play_fixtures import install_demo_play
+from world_fixtures import install_demo_world, seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.mcp import build_dynamic_tool
@@ -20,9 +21,18 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-async def _make(tmp_path: Path) -> tuple[WorldEngine, PlayLoader]:
+async def _make(
+    tmp_path: Path, *, seed_world: bool = True
+) -> tuple[WorldEngine, PlayLoader]:
+    """引擎 + 加载器；默认先铺最小世界（v0.2.0：内核不再内置世界内容）。
+
+    ``seed_world=False`` 供需要演示世界的用例：演示世界（install_demo_world）
+    与最小世界互斥——都从 "default" 地图起步，只能二选一。
+    """
     engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
+    if seed_world:
+        await seed_test_world(engine)  # 中央广场 (0,0)，可放实体
     loader = PlayLoader(engine, plays_dir=tmp_path / "plays", worlditor_version="0.3.0")
     return engine, loader
 
@@ -219,7 +229,8 @@ def test_world_activation_filter(tmp_path):
 
     async def fn():
         install_demo_play(tmp_path / "plays")
-        engine, loader = await _make(tmp_path)
+        engine, loader = await _make(tmp_path, seed_world=False)
+        await install_demo_world(engine)  # 演示世界：商贩·阿福在广场 (0,0)
         await loader.load_all()
         try:
             # 默认世界 play_ids 空 = 全部激活 → 商贩可 talk

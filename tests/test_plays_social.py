@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from worlditor_mcp.world import ItemDef
 from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.play import PlayLoader
 from worlditor_mcp.world.store import WorldStore
@@ -125,6 +126,10 @@ def test_world_broadcast(tmp_path):
         social = next(p for p in plays if p.play_id == SOCIAL_ID)
         items = next(p for p in plays if p.play_id == ITEMS_ID)
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
+        # 喇叭定义不来自内核（v0.2.0 零内置物品）：由玩法包注册——已注册则直接用，
+        # 缺失时本用例补一份，保证广播用例的物品前提成立
+        if items.api.get_item_def("megaphone") is None:
+            items.api.register_item_def(ItemDef(id="megaphone", name="喇叭"))
         await items.api.call_service(
             ITEMS_ID, "bag_add", entity_id=player.id, item_id="megaphone", count=2
         )

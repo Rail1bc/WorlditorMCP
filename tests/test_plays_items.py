@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from worlditor_mcp.world import ItemDef
 from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.play import PlayLoader
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
@@ -289,7 +290,10 @@ def test_world_use_unknown_item(tmp_path):
 
         with pytest.raises(WorldError, match="物品不存在"):
             await _call_as(player.id, lambda: call("nope"))
-        # 喇叭不可使用（use_action 为空）
+        # 喇叭不可使用（use_action 为空）：喇叭定义不来自内核（v0.2.0 零内置物品），
+        # 归玩法包注册——已注册则直接用，缺失时本用例补一份
+        if items.api.get_item_def("megaphone") is None:
+            items.api.register_item_def(ItemDef(id="megaphone", name="喇叭"))
         await items.api.call_service(
             ITEMS_ID, "bag_add", entity_id=player.id, item_id="megaphone", count=1
         )

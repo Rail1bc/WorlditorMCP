@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from world_fixtures import seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.identity import IdentityService
@@ -23,6 +24,8 @@ def _run(coro):
 async def _engine(tmp_path: Path) -> WorldEngine:
     engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
+    # v0.2.0：内核不再内置地图/地块，测试自铺最小世界（default 地图 + 中央广场 (0,0)）
+    await seed_test_world(engine)
     return engine
 
 

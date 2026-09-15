@@ -36,8 +36,8 @@ def _attr_label(key: str) -> str:
     return _ATTR_LABELS.get(key, key)
 
 
-# 身份 kind 中文标签（内核内置 player/agent/readonly）
-_KIND_LABELS = {"player": "玩家", "agent": "智能体", "readonly": "观察者"}
+# 身份 kind 中文标签（内核内置 player/readonly；v0.2.0 起人类与 agent 不区分）
+_KIND_LABELS = {"player": "玩家", "readonly": "观察者"}
 
 
 def _kind_label(kind: str) -> str:

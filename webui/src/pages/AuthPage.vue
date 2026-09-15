@@ -39,10 +39,17 @@
       </button>
 
       <details v-if="store.mode === 'play'" class="agent-register">
-        <summary>agent 接入</summary>
+        <summary>agent / 脚本接入</summary>
         <form class="auth-form" @submit.prevent="submitAgent">
-          <input v-model="agentName" placeholder="agent 名称" minlength="2" maxlength="24" />
-          <button type="submit" class="btn btn-primary" :disabled="busy">注册 agent 凭据</button>
+          <input
+            v-model="agentName"
+            placeholder="名称（人类与 agent 同一类型）"
+            minlength="2"
+            maxlength="24"
+          />
+          <button type="submit" class="btn btn-primary" :disabled="busy">
+            注册凭据（无需密码）
+          </button>
         </form>
         <p v-if="agentToken" class="result-text">凭据：{{ agentToken }}</p>
       </details>
@@ -123,6 +130,8 @@ function enter(tokenData) {
   }
   setToken(t);
   store.token = t;
-  location.hash = "#/world";
+  // 清空路由：由 App 决定默认视图（视图 key 由玩法包注册，不能写死）
+  location.hash = "";
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
 }
 </script>

@@ -10,6 +10,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from world_fixtures import seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
@@ -141,6 +142,8 @@ def test_admin_services_endpoint(tmp_path):
 
         engine.attach_play_api("pkg_a", api)
         api.register_service("s1", lambda api, **p: 1)
+        # v0.2.0：内核不再播种地图——注册身份需要出生点，先铺最小测试世界
+        await seed_test_world(engine)
         identity = IdentityService(engine, auth_mode="open", admin_key="sekret")
         app = build_admin_app(identity, engine=engine)
         client = TestClient(app)

@@ -31,11 +31,11 @@ def setup(api: WorlditorPlayAPI, context) -> None:
 
 
 async def _on_edited(api: WorlditorPlayAPI, what) -> None:
-    """新玩家/agent 出生 → 发礼包（幂等：attrs 标记只发一次）。"""
+    """新玩家出生 → 发礼包（幂等：attrs 标记只发一次）。"""
     if not isinstance(what, dict) or what.get("op") != "place_entity":
         return
     entity = api.get_entity(what.get("entity_id", ""))
-    if entity is None or entity.kind not in ("player", "agent"):
+    if entity is None or entity.kind != "player":
         return
     if entity.attrs.get(_STARTER_ATTR):
         return

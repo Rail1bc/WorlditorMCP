@@ -16,11 +16,14 @@ importlib 加载 main.py 并调用 setup(api, context)。
 from __future__ import annotations
 
 import importlib.util
+import inspect
+import io
 import json
 import logging
 import re
 import shutil
 import sys
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +35,22 @@ from .spec import PlaySpec, load_play_spec, version_ok
 logger = logging.getLogger("worlditor")
 
 _PLAY_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+# 社区玩法包安装（zip 上传，管理端）限制
+_MAX_PLAY_ZIP_BYTES = 5 * 1024 * 1024
+_MAX_PLAY_ZIP_UNPACKED = 20 * 1024 * 1024
+
+
+def _zip_parts(name: str) -> list[str]:
+    """zip 条目名 → 规范路径片段（去空段与 `.`；含 `..` 直接拒绝）。"""
+    parts = [
+        p for p in name.replace("\\", "/").lstrip("/").split("/") if p not in ("", ".")
+    ]
+    if any(p == ".." for p in parts):
+        raise WorldError("包内路径非法（含 ..）")
+    return parts
+
+
 _META_DISABLED_KEY = "plays_disabled_json"
 
 
@@ -181,7 +200,10 @@ class PlayLoader:
             setup = getattr(module, "setup", None)
             if not callable(setup):
                 raise RuntimeError("main.py 缺少 setup(api, context)")
-            setup(api, context)
+            # setup 可为同步或 async（v0.2.0：世界包这类导入型包需要 await 写世界）
+            result = setup(api, context)
+            if inspect.isawaitable(result):
+                await result
             info = PlayInfo(
                 spec=spec, api=api, module=module, path=path, builtin=builtin
             )
@@ -353,6 +375,90 @@ class PlayLoader:
                 raise WorldError(f"删除玩法包目录失败：{e}") from e
             logger.info("[worlditor] 玩法包已卸载：%s", play_id)
 
+    async def install_zip(self, data: bytes, *, filename: str = "") -> str:
+        """安装社区玩法包（zip 字节流；安全校验 → 解压到 plays_dir → 加载）。
+
+        包结构要求：zip 内**恰好一个顶层目录** ``<play_id>/``，其中含
+        ``play.yaml`` 与 ``main.py``（目录名即 play_id，须匹配命名规则）。
+
+        Args:
+            data: zip 文件字节。
+            filename: 原始文件名（仅用于错误提示）。
+
+        Returns:
+            安装并加载成功的 play_id。
+
+        Raises:
+            WorldError: 体积超限 / zip 非法 / 结构不符 / play_id 非法 /
+                目录已存在 / 加载失败（失败时自动回滚已解压目录）。
+        """
+        if len(data) > _MAX_PLAY_ZIP_BYTES:
+            raise WorldError(
+                f"玩法包体积过大（上限 {_MAX_PLAY_ZIP_BYTES // (1024 * 1024)} MB）"
+            )
+        try:
+            archive = zipfile.ZipFile(io.BytesIO(data))
+        except zipfile.BadZipFile as e:
+            raise WorldError(f"不是有效的 zip 包：{filename or '上传内容'}") from e
+        members = [i for i in archive.infolist() if not i.is_dir()]
+        if not members:
+            raise WorldError("zip 包为空")
+        unpacked = sum(i.file_size for i in archive.infolist())
+        if unpacked > _MAX_PLAY_ZIP_UNPACKED:
+            raise WorldError("解压后体积过大，拒绝安装")
+        # 顶层目录必须唯一（避免散文件与多包混装）
+        tops = set()
+        for item in archive.infolist():
+            parts = _zip_parts(item.filename)
+            if not parts:
+                continue
+            if not item.is_dir() and len(parts) == 1:
+                raise WorldError("包结构错误：请把玩法包放在单个顶层目录里再打包")
+            tops.add(parts[0])
+        if len(tops) != 1:
+            raise WorldError(
+                "包结构错误：需要且仅需要一个顶层目录（如 worlditor_play_xxx/）"
+            )
+        play_id = next(iter(tops))
+        if not _PLAY_ID_RE.match(play_id):
+            raise WorldError(
+                f"play_id 非法：{play_id}（仅允许字母/数字/下划线/连字符）"
+            )
+        target = self.plays_dir / play_id
+        if target.exists():
+            raise WorldError(f"玩法包目录已存在：{play_id}（如需更新请先卸载）")
+        self.plays_dir.mkdir(parents=True, exist_ok=True)
+        root = self.plays_dir.resolve()
+        try:
+            for item in archive.infolist():
+                parts = _zip_parts(item.filename)
+                if not parts:
+                    continue
+                dest = self.plays_dir.joinpath(*parts)
+                if not dest.resolve().is_relative_to(root):
+                    raise WorldError("包内路径越界，拒绝安装")
+                if item.is_dir():
+                    dest.mkdir(parents=True, exist_ok=True)
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(item) as src, open(dest, "wb") as out:
+                    shutil.copyfileobj(src, out)
+        except Exception:
+            shutil.rmtree(target, ignore_errors=True)
+            raise
+        if not (target / "play.yaml").is_file() or not (target / "main.py").is_file():
+            shutil.rmtree(target, ignore_errors=True)
+            raise WorldError("包内缺少 play.yaml 或 main.py")
+        info = await self.load_one(target, None)
+        if info is None:
+            reason = self._load_errors.pop(play_id, "加载失败")
+            shutil.rmtree(target, ignore_errors=True)
+            raise WorldError(f"玩法包加载失败：{reason}")
+        self._disabled.discard(play_id)
+        await self._save_disabled_state()
+        logger.info("[worlditor] 玩法包已安装：%s", play_id)
+        return play_id
+
     def _find_candidate(self, play_id: str) -> tuple[Path, bool] | None:
         for path, builtin in self.discover():
             spec = load_play_spec(path)
@@ -369,13 +475,16 @@ class PlayLoader:
         return ids
 
     async def _teardown_one(self, info: PlayInfo) -> None:
-        """卸载单个玩法包：teardown(api)（可选）+ 清注册 + 解绑。"""
+        """卸载单个玩法包：teardown(api)（可选）+ 清注册（含物品定义落库删除）+ 解绑。"""
         teardown = getattr(info.module, "teardown", None)
         if callable(teardown):
             try:
                 teardown(info.api)
             except Exception:  # noqa: BLE001
                 logger.exception("[worlditor] 玩法包 teardown 异常：%s", info.play_id)
+        # 先落库删除本包注册的物品定义（v0.2.0：避免"幽灵物品"残留）
+        for item_id in self.engine.item_defs_of_play(info.play_id):
+            await self.engine.store.delete_item(item_id)
         self.engine.clear_play_registrations(info.play_id)
         self.engine.detach_play_api(info.play_id)
 

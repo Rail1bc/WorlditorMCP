@@ -7,8 +7,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+from world_fixtures import install_demo_world  # noqa: E402
+
 from worlditor_mcp.world import ItemDef  # noqa: E402
+from worlditor_mcp.world.engine import WorldEngine  # noqa: E402
 from worlditor_mcp.world.store import (  # noqa: E402
+    DEFAULT_WORLD_ID,
     WORLD_LOG_LIMIT,
     WorldStore,  # noqa: E402
 )
@@ -25,25 +29,47 @@ async def _make_store(db_path: Path) -> WorldStore:
 
 
 def test_seed_tables(tmp_path):
-    """v4 播种：v3 世界（41 地块）+ v4 实体/物品。"""
+    """v4 播种（v0.2.0）：空库只建「默认世界」容器——0 地图/0 地块/0 实体/0 物品。"""
 
     async def fn():
         store = await _make_store(tmp_path / "world.db")
         try:
-            assert len(store.loc_by_pos) == 41
-            assert len(store.maps) == 1
-            assert len(store.entities) == 3
-            assert len(store.items) == 1
-            assert "megaphone" in store.items
+            # 内核不再内置世界内容（旧的 41 地块演示世界已移入内置世界包）
+            assert len(store.maps) == 0
+            assert len(store.loc_by_pos) == 0
+            assert len(store.entities) == 0
+            assert len(store.items) == 0
+            # 只播种「默认世界」这一结构性容器
+            assert list(store.worlds) == [DEFAULT_WORLD_ID]
+            assert store.worlds[DEFAULT_WORLD_ID].name == "默认世界"
+            # 物品定义随玩法包注册（megaphone 已随旧播种移除）
+            assert "megaphone" not in store.items
             assert "apple" not in store.items
             # 索引生效（不报错即可）
             cur = await store._conn.execute(
                 "SELECT COUNT(*) AS n FROM entities WHERE map_id=? AND row=? AND col=?",
                 ("default", 0, 0),
             )
-            assert (await cur.fetchone())["n"] == 1
+            assert (await cur.fetchone())["n"] == 0
         finally:
             await store.close()
+
+        # 世界内容改由内置世界包导入：演示世界 → 41 地块 + 3 静态实体
+        engine = WorldEngine(WorldStore(tmp_path / "world.db"))
+        await engine.initialize()
+        try:
+            await install_demo_world(engine)
+            assert len(engine.store.maps) == 1
+            assert len(engine.store.loc_by_pos) == 41
+            assert len(engine.store.entities) == 3
+            # 索引生效（不报错即可）：演示世界小镇广场 (0,0) 有 1 个实体
+            cur = await engine.store._conn.execute(
+                "SELECT COUNT(*) AS n FROM entities WHERE map_id=? AND row=? AND col=?",
+                ("default", 0, 0),
+            )
+            assert (await cur.fetchone())["n"] == 1
+        finally:
+            await engine.terminate()
 
     _run(fn())
 

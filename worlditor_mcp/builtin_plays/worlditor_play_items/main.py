@@ -5,8 +5,8 @@
   内核无 inventories 表；格子容量 BAG_SLOTS、单格堆叠上限 STACK_MAX。
 - **操作统一走服务通道**：bag_add/take/count/get 注册为跨包服务（M3 服务机制），
   由引擎在锁内调用（读改写原子）；工具与视图也经服务读写——单一入口。
-- **物品定义**（D13）：苹果/面包归本包注册（内核仅喇叭）；use_action 指向
-  interaction 包注册的交互动作（eat）。
+- **物品定义**（D13）：苹果/面包归本包注册（v0.2.0 起内核不注册任何物品定义——
+  喇叭归 social 包）；use_action 指向 interaction 包注册的交互动作（eat）。
 - **跨包用例**：starter 包发出生礼包（bag_add，阶段 1 拆分自 player）、
   interaction 包商贩交易（bag_take 收款 / bag_add 交货）、social 包喇叭持有
   （bag_count/take）。

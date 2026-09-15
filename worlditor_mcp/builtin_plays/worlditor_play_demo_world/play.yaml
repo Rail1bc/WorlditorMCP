@@ -1,0 +1,9 @@
+name: worlditor_play_demo_world
+display_name: 演示世界
+version: 0.1.0
+author: worlditor
+desc: 导入示例主世界（41 地块：广场/步行街/AstrBot大道/开源小区/迷雾森林 + 商贩·阿福/告示牌/木门）
+icon: 🌏
+requires:
+  worlditor: ">=0.1.0"
+  plays: []

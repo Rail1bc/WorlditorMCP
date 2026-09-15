@@ -12,6 +12,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from world_fixtures import install_demo_world, seed_test_world  # noqa: E402
 
 from worlditor_mcp.world import (  # noqa: E402
     InteractionRequest,
@@ -27,6 +28,7 @@ from worlditor_mcp.world.store import (  # noqa: E402
 )
 
 SH_TZ = ZoneInfo("Asia/Shanghai")
+# 演示世界包（worlditor_play_demo_world）导入后的规模：41 地块 + 3 实体
 SEED_LOCATION_COUNT = 41
 SEED_ENTITY_COUNT = 3  # 商贩·阿福 / 告示牌 / 木门
 
@@ -69,14 +71,21 @@ async def _scenario(tmp_path: Path, fn, *, clock=None, rand=None):
 
 
 def test_seed_world(tmp_path):
-    """种子世界 v4：41 地块 + 3 个种子实体 + 1 个种子物品（喇叭，D13）。"""
+    """v0.2.0：内核只建空容器；41 地块 + 3 实体由内置演示世界包导入。"""
 
     async def fn(engine: WorldEngine, clock=None):
+        # 内核不再内置世界内容/物品：初始化后 0 地图、0 地块、0 实体、0 物品
+        assert engine.store.maps == {}
+        assert engine.list_locations() == []
+        assert engine.list_entities() == []
+        assert engine.store.items == {}
+        # 世界内容来自世界包（worlditor_play_demo_world）
+        await install_demo_world(engine)
         assert len(engine.list_locations()) == SEED_LOCATION_COUNT
         assert len(engine.list_entities()) == SEED_ENTITY_COUNT
-        assert len(engine.store.items) == 1
-        assert "megaphone" in engine.store.items
-        assert "apple" not in engine.store.items  # 苹果归 items 包注册（D13）
+        # 物品不随世界导入：喇叭归 items 包注册（D13），世界包不播种物品
+        assert "megaphone" not in engine.store.items
+        assert "apple" not in engine.store.items
         kinds = {e.kind for e in engine.list_entities()}
         assert kinds == {"merchant", "sign", "door"}
         plaza = engine.list_entities(row=0, col=0)
@@ -88,15 +97,19 @@ def test_seed_world(tmp_path):
 
 
 def test_seed_is_idempotent(tmp_path):
-    """重复初始化不重复播种（幂等）。"""
+    """重复初始化 + 重复导入世界包不重复播种（幂等）。"""
 
     async def fn(engine: WorldEngine, clock=None):
+        await install_demo_world(engine)
         await engine.terminate()
         engine2 = make_engine(tmp_path / "world.db")
         await engine2.initialize()
         try:
+            # 再导入一次：地图已存在 → 整体跳过，地块/实体不翻倍
+            await install_demo_world(engine2)
+            assert len(engine2.list_locations()) == SEED_LOCATION_COUNT
             assert len(engine2.list_entities()) == SEED_ENTITY_COUNT
-            assert len(engine2.store.items) == 1
+            assert len(engine2.store.items) == 0  # 物品同样不播种（内核不内置）
         finally:
             await engine2.terminate()
 
@@ -110,6 +123,7 @@ def test_place_entity(tmp_path):
     """放置实体：uuid id、name 缺省取 kind label、地块必须存在。"""
 
     async def fn(engine: WorldEngine, clock=None):
+        await install_demo_world(engine)  # (1,0) / (1,2) 等演示地块
         engine.register_entity_kind("workshop", label="工坊")
         e = await engine.place_entity("workshop", "default", 1, 0, desc="叮叮当当。")
         assert len(e.id) == 32 and all(c in "0123456789abcdef" for c in e.id)
@@ -128,6 +142,7 @@ def test_remove_entity(tmp_path):
     """移除实体：实体消失 + on_entity_removed 事件；身份化实体拒绝（D14）。"""
 
     async def fn(engine: WorldEngine, clock=None):
+        await seed_test_world(engine)  # 中央广场 (0,0)
         removed = []
         engine.register_world_event(
             "on_entity_removed", lambda api, e: removed.append(e.id)
@@ -154,6 +169,7 @@ def test_move_identity_entity(tmp_path):
     """身份化实体路径移动（v3 语义）：广场 (0,0) 向北到步行街南街口。"""
 
     async def fn(engine: WorldEngine, clock=None):
+        await install_demo_world(engine)  # 广场 (0,0) 北上是步行街·南街口
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         scene = await engine.move(player.id, "up")
         assert (scene.map_id, scene.row, scene.col) == ("default", -1, 0)
@@ -173,6 +189,7 @@ def test_move_blocked_by_door(tmp_path):
     """block_move：木门（kind 声明）阻挡移动；开门（state 覆盖）后可通过。"""
 
     async def fn(engine: WorldEngine, clock=None):
+        await install_demo_world(engine)  # 木门在 (3,0)
         engine.register_entity_kind("door", block_move=True, interactions=("open",))
         player = await engine.place_entity("player", "default", 2, 0, name="小明")
         # (2,0) 老路 → 南 (3,0) 林间路口（木门在此）
@@ -190,6 +207,7 @@ def test_move_entity_teleport(tmp_path):
     """move_entity：直接坐标（行为驱动），触发 on_entity_move/on_entity_enter。"""
 
     async def fn(engine: WorldEngine, clock=None):
+        await install_demo_world(engine)  # 告示牌在 (-2,0)
         moves = []
         engine.register_world_event(
             "on_entity_move", lambda api, e, f, t: moves.append((e.id, f, t))
@@ -211,6 +229,7 @@ def test_attrs_state_patch(tmp_path):
     """set_attrs/set_state 合并写；on_entity_changed 事件；重复实体不存在报错。"""
 
     async def fn(engine: WorldEngine, clock=None):
+        await seed_test_world(engine)  # 中央广场 (0,0)
         changed = []
         engine.register_world_event(
             "on_entity_changed", lambda api, e, c: changed.append((e.id, c))
@@ -276,6 +295,7 @@ def test_interact_flow_command_mode(tmp_path):
     async def fn(engine: WorldEngine, clock=None):
         from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
+        await install_demo_world(engine)  # 商贩·阿福在 (0,0)，(1,0) 老路可放机器人
         engine.attach_play_api("test_play", WorlditorPlayAPI(engine, "test_play"))
         _demo_registry(engine)
         merchant = [e for e in engine.list_entities() if e.kind == "merchant"][0]
@@ -312,6 +332,7 @@ def test_interact_use_item(tmp_path):
         # handler 需要 api：挂一个真实 WorlditorPlayAPI 实例（模拟 PlayLoader 绑定）
         from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
+        await seed_test_world(engine)  # 中央广场 (0,0)
         engine.attach_play_api("test_play", WorlditorPlayAPI(engine, "test_play"))
         used = []
         engine.register_world_event(
@@ -348,6 +369,7 @@ def test_interact_handler_error_isolated(tmp_path):
         raise RuntimeError("玩法包炸了")
 
     async def fn(engine: WorldEngine, clock=None):
+        await seed_test_world(engine)  # 中央广场 (0,0)
         engine.register_interaction("boom", boom, label="自爆")
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         with pytest.raises(WorldError, match="交互执行出错"):
@@ -367,6 +389,7 @@ def test_interact_command_reentrant(tmp_path):
         from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
         engine.attach_play_api("test_play", WorlditorPlayAPI(engine, "test_play"))
+        await install_demo_world(engine)  # 传送目标 (5,1) 迷雾深处
         engine.register_entity_kind("teleporter", interactions=("activate",))
         engine.register_interaction(
             "activate",
@@ -397,6 +420,7 @@ def test_events_and_world_log(tmp_path):
     """事件总线分发（含 handler 异常隔离）+ world_log 写入。"""
 
     async def fn(engine: WorldEngine, clock=None):
+        await seed_test_world(engine)  # 中央广场 (0,0) 北上是北门
         seen = []
         engine.register_world_event("my_say", _bad_event_handler)
         engine.register_world_event(
@@ -498,6 +522,7 @@ def test_delete_location_cascade(tmp_path):
     """删除地块：级联删其上实体 + 全图引用清理；有身份化实体在场拒绝。"""
 
     async def fn(engine: WorldEngine, clock=None):
+        await install_demo_world(engine)  # 告示牌 + 广场 (0,0) / (-1,0) / (1,0)
         sign = [e for e in engine.list_entities() if e.kind == "sign"][0]
         # 把告示牌移到步行街南街口 (-1,0) 然后删除该地块
         await engine.move_entity(sign.id, "default", -1, 0)
@@ -598,6 +623,7 @@ def test_interact_result_applies_ui_hooks(tmp_path):
     from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
     async def fn(engine: WorldEngine, clock=None):
+        await seed_test_world(engine)  # 中央广场 (0,0) / 东街 (0,1)
         api = WorlditorPlayAPI(engine, "pkg_a")
         engine.attach_play_api("pkg_a", api)
 

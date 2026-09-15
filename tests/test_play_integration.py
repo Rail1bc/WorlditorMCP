@@ -11,7 +11,9 @@ from pathlib import Path
 
 import pytest
 from play_fixtures import PLAY_ID, install_demo_play  # noqa: E402
+from world_fixtures import install_demo_world  # noqa: E402
 
+from worlditor_mcp.world import ItemDef  # noqa: E402
 from worlditor_mcp.world.engine import (  # noqa: E402
     WorldEngine,
     WorldError,
@@ -76,7 +78,13 @@ def test_demo_play_loaded(tmp_path):
         # on_tick 带间隔订阅
         tick_bindings = engine._event_bindings["on_tick"]
         assert len(tick_bindings) == 1 and tick_bindings[0].interval == 5
-        # 物品落库（flush 后持久化；喇叭 = 内核定义 D13，苹果归 items 包）
+        # 物品落库（flush 后持久化）：v0.2.0 内核对物品同样零内置（不再播种喇叭），
+        # 物品定义由玩法包注册——演示夹具包只注册 kind/交互，这里经其 API 补一个
+        # 喇叭定义，验证 flush 后重启仍在
+        loader.plays[PLAY_ID].api.register_item_def(
+            ItemDef(id="megaphone", name="喇叭")
+        )
+        await engine.flush_item_defs()
         await engine.terminate()
         engine2 = WorldEngine(WorldStore(db_path))
         await engine2.initialize()
@@ -156,14 +164,18 @@ def test_demo_full_interaction_chain(tmp_path):
         result = await engine.interact(player.id, door.id, "open")
         assert "已经开着" in result.text
 
-    _run(_play_scenario(tmp_path, fn))
+    _run(_play_scenario(tmp_path, fn, demo_world=True))
 
 
-async def _play_scenario(tmp_path, fn):
+async def _play_scenario(tmp_path, fn, *, demo_world=False):
+    """起引擎场景；``demo_world=True`` 先导入演示世界（v0.2.0 内核不内置世界内容）。"""
     db_path = tmp_path / "world.db"
     loader = make_loader(db_path, tmp_path / "plays")
     engine = loader.engine
     await engine.initialize()
+    if demo_world:
+        # 商贩·阿福 / 告示牌 / 木门 与 41 地块来自内置世界包（不再由内核播种）
+        await install_demo_world(engine)
     try:
         return await fn(engine, loader)
     finally:
@@ -190,7 +202,7 @@ def test_demo_door_blocks_and_enter_forest(tmp_path):
         fog_logs = [row for row in logs if row["kind"] == "fog_enter"]
         assert any("雾" in str(row["data"]) for row in fog_logs)
 
-    _run(_play_scenario(tmp_path, fn))
+    _run(_play_scenario(tmp_path, fn, demo_world=True))
 
 
 # ---------- 发现 / namespace 隔离 / 异常隔离 / 版本 ----------

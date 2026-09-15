@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from play_fixtures import install_demo_play  # noqa: E402
+from world_fixtures import seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine  # noqa: E402
 from worlditor_mcp.world.identity import IdentityService  # noqa: E402
@@ -39,6 +40,8 @@ async def _make_world(tmp_path: Path):
     install_demo_play(tmp_path / "plays")
     engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
+    # v0.2.0：内核不再内置地图/地块，注册探针要有地方站——先铺最小世界
+    await seed_test_world(engine)
     loader = PlayLoader(engine, plays_dir=tmp_path / "plays")
     await loader.load_all(None)
     identity = IdentityService(engine, auth_mode="open")

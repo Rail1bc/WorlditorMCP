@@ -1,0 +1,4201 @@
+{
+ "_comment": "worlditor_play_demo_world 的初始世界数据：地图 1 张 + 地块/连接 + 静态实体。坐标 (row, col)：up=行-1 / down=行+1 / left=列-1 / right=列+1。",
+ "map": {
+  "id": "default",
+  "name": "主世界",
+  "description": "由广场、步行街、AstrBot大道、开源小区与迷雾森林组成的世界。",
+  "timezone": "Asia/Shanghai",
+  "spawn_row": 0,
+  "spawn_col": 0
+ },
+ "locations": [
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": 0,
+   "name": "小镇广场",
+   "description": {
+    "periods": [
+     {
+      "start": "06:00",
+      "end": "18:00",
+      "items": [
+       {
+        "text": "阳光洒在广场中央的喷泉上，水花晶莹，人来人往。",
+        "weight": 1.0
+       }
+      ]
+     },
+     {
+      "start": "18:00",
+      "end": "06:00",
+      "items": [
+       {
+        "text": "夜色渐浓，广场安静下来，只有路灯投下昏黄的光圈。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往步行街·南街口",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -1,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往老路",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 1,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": -1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -1,
+   "col": 0,
+   "name": "步行街·南街口",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "步行街的南端入口，青石板路通向小镇广场，两旁是古旧的二层小楼。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往步行街",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -2,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往小镇广场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -2,
+   "col": 0,
+   "name": "步行街",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "青石板铺就的步行街，路边的梧桐投下浓荫，行人慢悠悠地走着。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往步行街·北街尾",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -3,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往步行街·南街口",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -1,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -3,
+   "col": 0,
+   "name": "步行街·北街尾",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "步行街的北端，再往前几步就是'开源'小区的大门。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·主街",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -4,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往步行街",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -2,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -4,
+   "col": 0,
+   "name": "开源小区·主街",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "开源小区的主街，两侧是灰白色的六层居民楼，楼下停着自行车。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·中心小广场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -5,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·梧桐苑",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -4,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往步行街·北街尾",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -3,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·丁香苑",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -4,
+         "col": -1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -4,
+   "col": -1,
+   "name": "开源小区·丁香苑",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "一栋爬满常青藤的居民楼，单元门前的花坛里丁香开得正盛。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·枫林苑",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -5,
+         "col": -1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·主街",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -4,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -4,
+   "col": 1,
+   "name": "开源小区·梧桐苑",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "一棵大梧桐遮住半栋楼，树荫下摆着几张石桌，有人在下棋。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·银杏苑",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·主街",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -4,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -5,
+   "col": 0,
+   "name": "开源小区·中心小广场",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "小区中心的小广场，健身器材边围着一群闲聊的老人。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·银杏苑",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·主街",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -4,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·枫林苑",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -5,
+         "col": -1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -5,
+   "col": -1,
+   "name": "开源小区·枫林苑",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "一排红色的居民楼，阳台上晾着五颜六色的衣服。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·中心小广场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -5,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·丁香苑",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -4,
+         "col": -1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -5,
+   "col": 1,
+   "name": "开源小区·银杏苑",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "楼下种着两排银杏，秋叶落满一地的时候一定很好看。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·梧桐苑",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -4,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往开源小区·中心小广场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -5,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 1,
+   "col": 0,
+   "name": "老路",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "一条踩得发亮的老土路，路边的野草足有半人高。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往小镇广场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往南走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 2,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 2,
+   "col": 0,
+   "name": "老路",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "老路渐渐没入树林，树冠遮住天光，空气变得潮湿。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往北走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 1,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往老路·林间路口",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 3,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 3,
+   "col": 0,
+   "name": "老路·林间路口",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "老路在这里消失在一片浓雾弥漫的树林前，雾里有模糊的树影。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往老路",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 2,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往迷雾森林",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 4,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 4,
+   "col": 0,
+   "name": "迷雾森林",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "浓雾从树林间涌出，脚下落叶沙沙，看不见三米以外。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往老路·林间路口",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 3,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "在浓雾中迷失方向，摸索着向前",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往南走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "在浓雾中迷失方向，摸索着向前",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 5,
+   "col": 0,
+   "name": "迷雾森林",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "雾更浓了，四周的树木仿佛都长着一个样子。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往北走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 4,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往迷雾深处",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "在浓雾中迷失方向，摸索着向前",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "在浓雾中迷失方向，摸索着向前",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 5,
+   "col": 1,
+   "name": "迷雾深处",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "几乎伸手不见五指，东南西北在这里似乎没有意义。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "在浓雾中迷失方向，摸索着向前",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "在浓雾中迷失方向，摸索着向前",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往南走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 6,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往迷雾森林",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 6,
+   "col": 1,
+   "name": "迷雾深处",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "林子的最深处，四面全是雾墙，你感觉一直在原地打转。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往北走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "在浓雾中迷失方向，摸索着向前",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "在浓雾中迷失方向，摸索着向前",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "在浓雾中迷失方向，摸索着向前",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 5,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": -5,
+   "name": "AstrBot大道·西尽头",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "大道到这里戛然而止，正前方是一堵爬满爬山虎的老墙——这是条死路。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": -4,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": -4,
+   "name": "AstrBot大道",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "开阔的六车道大道，西段行人和车辆都少，路灯亮得整齐。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往东走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": -3,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道·西尽头",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": -5,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": -3,
+   "name": "AstrBot大道",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "大道西段的中央有一个环岛花坛，花坛里的月季开得正好。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往东走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": -2,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往西走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": -4,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": -2,
+   "name": "AstrBot大道",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "街道空旷安静，偶尔有一辆车驶过，卷起一阵风。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往东走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": -1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往西走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": -3,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": -1,
+   "name": "AstrBot大道",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "从这里开始，大道逐渐热闹起来，能听到远处的喧嚣。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往旧书店",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -1,
+         "col": -1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往小镇广场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往插件市场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 1,
+         "col": -1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往西走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": -2,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": 1,
+   "name": "AstrBot大道",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "大道两侧商铺林立，行人摩肩接踵，是镇里最热闹的地段。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往知识库市场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -1,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往东走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 2,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往小镇广场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 0,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": 2,
+   "name": "AstrBot大道",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "各种招牌在阳光下闪闪发亮，叫卖声此起彼伏。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往TTS市场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -1,
+         "col": 2,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往东走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 3,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往Skill商店",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 1,
+         "col": 2,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往西走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": 3,
+   "name": "AstrBot大道",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "暮色里霓虹灯渐次亮起，大道上依然人流如织。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往T2I市场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -1,
+         "col": 3,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往东走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 4,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往人格设定市场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 1,
+         "col": 3,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往西走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 2,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": 4,
+   "name": "AstrBot大道",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "大道尽头隐约可见一座大学的红色校门。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道·东尽头",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 5,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "继续往西走",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 3,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": 5,
+   "name": "AstrBot大道·东尽头",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "大道的东端，正前方是AstrBot大学气派的校门，进进出出都是学生。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·南门",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 6,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 4,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 1,
+   "col": 2,
+   "name": "Skill商店",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "店里挂着各种'技能'卷轴，店员说学会就能立刻上手。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 2,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 1,
+   "col": 3,
+   "name": "人格设定市场",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "一栋造型奇特的建筑，门口排队的人都在小声讨论'人设'方案。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 3,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -1,
+   "col": 1,
+   "name": "知识库市场",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "巨大的书库直通天花板，店员推着推车穿梭在书架间。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -1,
+   "col": 2,
+   "name": "TTS市场",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "店里传来各种合成嗓音的试听，有人在挑选'说话的声音'。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 2,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -1,
+   "col": 3,
+   "name": "T2I市场",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "橱窗里挂满色彩斑斓的画作，据说都是用'想象'生成的新画。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 3,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 1,
+   "col": -1,
+   "name": "插件市场",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "大道西侧的一个批发市场，堆满了各种二手插件和零件。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": -1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -1,
+   "col": -1,
+   "name": "旧书店",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "一家昏暗的旧书店，泛黄的书页散发着油墨香，老板在柜台后打盹。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": -1,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": 6,
+   "name": "AstrBot大学·南门",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "校门气派，门楣上刻着'AstrBot大学'，新生和游客络绎不绝。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·食堂",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -1,
+         "col": 6,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·主教学楼",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 7,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·实验楼",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 1,
+         "col": 6,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大道·东尽头",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 5,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": 7,
+   "name": "AstrBot大学·主教学楼",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "十层的教学楼，走廊里传来琅琅的读书声和敲键盘的声音。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·操场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -1,
+         "col": 7,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·图书馆",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 8,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·宿舍区",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 1,
+         "col": 7,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·南门",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 6,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 0,
+   "col": 8,
+   "name": "AstrBot大学·图书馆",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "图书馆安静极了，只有翻书声和轻微的脚步声。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·主教学楼",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 7,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 1,
+   "col": 6,
+   "name": "AstrBot大学·实验楼",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "实验楼里灯光彻夜不熄，隐约有机器运转的嗡嗡声。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·南门",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 6,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·宿舍区",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 1,
+         "col": 7,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": 1,
+   "col": 7,
+   "name": "AstrBot大学·宿舍区",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "一片学生宿舍楼，阳台上晾着五颜六色的衣服，楼下有小卖部。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·主教学楼",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 7,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": false,
+     "paths": []
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·实验楼",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 1,
+         "col": 6,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -1,
+   "col": 6,
+   "name": "AstrBot大学·食堂",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "饭点时分，食堂门口排起长队，飘出饭菜的香味。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·操场",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -1,
+         "col": 7,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·南门",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 6,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": false,
+     "paths": []
+    }
+   }
+  },
+  {
+   "map_id": "default",
+   "row": -1,
+   "col": 7,
+   "name": "AstrBot大学·操场",
+   "description": {
+    "periods": [
+     {
+      "start": "00:00",
+      "end": "24:00",
+      "items": [
+       {
+        "text": "绿茵场上有人在踢球，跑道上是一圈圈慢跑的身影。",
+        "weight": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   "connections": {
+    "up": {
+     "direction": "up",
+     "enabled": false,
+     "paths": []
+    },
+    "right": {
+     "direction": "right",
+     "enabled": false,
+     "paths": []
+    },
+    "down": {
+     "direction": "down",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·主教学楼",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": 0,
+         "col": 7,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    },
+    "left": {
+     "direction": "left",
+     "enabled": true,
+     "paths": [
+      {
+       "reveal_target": true,
+       "label": {
+        "periods": [
+         {
+          "start": "00:00",
+          "end": "24:00",
+          "items": [
+           {
+            "text": "前往AstrBot大学·食堂",
+            "weight": 1.0
+           }
+          ]
+         }
+        ]
+       },
+       "targets": [
+        {
+         "row": -1,
+         "col": 6,
+         "weight": 1.0
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ ],
+ "entities": [
+  {
+   "kind": "merchant",
+   "row": 0,
+   "col": 0,
+   "name": "商贩·阿福",
+   "desc": "广场上的老商贩，货担里装着苹果和喇叭，笑眯眯地看着来往的行人。",
+   "attrs": {},
+   "state": {}
+  },
+  {
+   "kind": "sign",
+   "row": -2,
+   "col": 0,
+   "name": "告示牌",
+   "desc": "步行街边的木质告示牌，上面贴着几张纸。",
+   "attrs": {},
+   "state": {}
+  },
+  {
+   "kind": "door",
+   "row": 3,
+   "col": 0,
+   "name": "木门",
+   "desc": "迷雾森林入口处一扇紧闭的木门，门缝里渗出丝丝凉意。",
+   "attrs": {},
+   "state": {
+    "open": false
+   }
+  }
+ ]
+}

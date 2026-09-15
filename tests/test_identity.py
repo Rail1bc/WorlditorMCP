@@ -10,6 +10,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from world_fixtures import seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine  # noqa: E402
 from worlditor_mcp.world.identity import (  # noqa: E402
@@ -31,10 +32,54 @@ def make_identity(db_path: Path, **kwargs) -> IdentityService:
 async def _scenario(db_path: Path, fn, **kwargs):
     identity = make_identity(db_path, **kwargs)
     await identity._engine.initialize()
+    # v0.2.0：内核不再内置世界内容，注册玩家要有地方站——先铺最小世界
+    await seed_test_world(identity._engine)
     try:
         return await fn(identity)
     finally:
         await identity._engine.terminate()
+
+
+async def _scenario_no_map(db_path: Path, fn, **kwargs):
+    """不铺世界的场景：世界还没有地图（新部署 / 全部包停用）。"""
+    identity = make_identity(db_path, **kwargs)
+    await identity._engine.initialize()
+    try:
+        return await fn(identity)
+    finally:
+        await identity._engine.terminate()
+
+
+def test_register_and_login_without_map(tmp_path):
+    """世界还没有地图时：注册/登录仍可用（entity_id 为空），有地图后自动补建实体。
+
+    v0.2.0 内核不内置世界内容——若此时拒绝注册/登录，管理员就进不了管理端去
+    启用世界包（部署死锁），因此身份层必须放行。
+    """
+
+    async def fn(identity: IdentityService):
+        engine = identity._engine
+        admin = await identity.register_human("管理员", "pass123", admin_key="sekret")
+        assert admin.tier == "admin" and admin.entity_id == ""
+        agent = await identity.register_agent("探针")
+        assert agent.tier == "play" and agent.entity_id == ""
+        # 无实体也能登录（管理端可用）
+        again = await identity.login("管理员", "pass123")
+        assert again.tier == "admin" and again.entity_id == ""
+        assert engine.list_entities() == []
+        # 世界就绪后：同一账户登录即补建 player 实体
+        await seed_test_world(engine)
+        relogin = await identity.login("管理员", "pass123")
+        assert relogin.entity_id != ""
+        entity = engine.get_entity(relogin.entity_id)
+        assert entity is not None and entity.kind == "player"
+        assert entity.user_id is not None
+
+    _run(
+        _scenario_no_map(
+            tmp_path / "world.db", fn, auth_mode="open", admin_key="sekret"
+        )
+    )
 
 
 def _run_scenario(tmp_path, fn, **kwargs):
@@ -157,19 +202,19 @@ def test_closed_mode(tmp_path):
     _run_scenario(tmp_path, fn, auth_mode="closed")
 
 
-# ---------- agent 注册 ----------
+# ---------- 无密码自助注册（agent 通道，v0.2.0 起实体同为 player） ----------
 
 
 def test_register_agent(tmp_path):
-    """agent 自助注册：agent 实体 + play 档凭据；开关关闭时拒绝。"""
+    """无密码自助注册：实体 kind=player（与人类注册一致）+ play 档凭据。"""
 
     async def fn(identity: IdentityService):
         info = await identity.register_agent("探索者")
-        assert info.tier == "play" and info.kind == "agent"
+        assert info.tier == "play" and info.kind == "player"
         entity = identity._engine.get_entity(info.entity_id)
-        assert entity is not None and entity.kind == "agent"
-        assert entity.name == "AI·探索者"
-        # 关闭 agent 注册
+        assert entity is not None and entity.kind == "player"
+        assert entity.name == "探索者"  # 不再加 "AI·" 前缀（人类与 agent 不区分）
+        # 关闭自助注册
         identity.allow_agent_register = False
         with pytest.raises(IdentityError, match="关闭"):
             await identity.register_agent("另一个")
