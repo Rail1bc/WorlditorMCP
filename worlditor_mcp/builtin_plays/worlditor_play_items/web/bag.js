@@ -114,95 +114,40 @@
       onMounted(refresh);
 
       return () => {
-        const cellStyle = {
-          border: "1px solid #ddd",
-          borderRadius: 6,
-          padding: 8,
-          minHeight: 64,
-          background: "#ffffff",
-          fontSize: 13,
-          display: "flex",
-          flexDirection: "column",
-          gap: 4,
-        };
         const cells = [];
         for (let i = 0; i < capacity.value; i++) {
           const slot = slots.value[i];
           if (!slot) {
-            cells.push(
-              h(
-                "div",
-                { style: { ...cellStyle, background: "#f7f7f7", borderStyle: "dashed" } },
-                h("span", { style: { color: "#bbb" } }, "空")
-              )
-            );
+            cells.push(h("div", { class: "wt-cell empty" }, "空"));
             continue;
           }
           cells.push(
-            h("div", { style: cellStyle }, [
-              h(
-                "div",
-                { style: { fontWeight: 600 } },
-                slot.name + " ×" + slot.count
-              ),
+            h("div", { class: "wt-cell" }, [
+              h("div", { class: "wt-strong" }, slot.name + " ×" + slot.count),
               h(
                 "button",
-                {
-                  onClick: () => useItem(slot.item_id),
-                  style: { fontSize: 12, padding: "2px 8px" },
-                },
+                { class: "wt-btn", onClick: () => useItem(slot.item_id) },
                 "使用"
               ),
             ])
           );
         }
-        return h(
-          "div",
-          { style: { fontFamily: "system-ui, sans-serif", maxWidth: 560 } },
-          [
+        return h("div", {}, [
+          h("div", { class: "wt-head" }, [
             h(
-              "div",
-              {
-                style: {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  marginBottom: 8,
-                },
-              },
-              [
-                h(
-                  "span",
-                  { style: { fontWeight: 600 } },
-                  "背包（" + used.value + "/" + capacity.value + "）"
-                ),
-                h(
-                  "button",
-                  { onClick: () => refresh(), disabled: busy.value },
-                  "刷新"
-                ),
-              ]
+              "span",
+              { class: "wt-title" },
+              "背包（" + used.value + "/" + capacity.value + "）"
             ),
             h(
-              "div",
-              {
-                style: {
-                  display: "grid",
-                  gridTemplateColumns: "repeat(4, 1fr)",
-                  gap: 6,
-                },
-              },
-              cells
+              "button",
+              { class: "wt-btn", onClick: () => refresh(), disabled: busy.value },
+              "刷新"
             ),
-            error.value
-              ? h(
-                  "div",
-                  { style: { marginTop: 8, color: "#b00020", fontSize: 13 } },
-                  "⚠ " + error.value
-                )
-              : null,
-          ]
-        );
+          ]),
+          h("div", { class: "wt-grid wt-cols-4" }, cells),
+          error.value ? h("div", { class: "wt-err" }, "⚠ " + error.value) : null,
+        ]);
       };
     },
   };

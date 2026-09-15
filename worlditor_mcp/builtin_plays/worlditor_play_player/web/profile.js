@@ -99,23 +99,19 @@
         if (!ui.value) {
           return h(
             "div",
-            { style: { fontFamily: "system-ui, sans-serif", color: "var(--text-dim)" } },
+            { class: "wt-dim" },
             error.value ? "⚠ " + error.value : "加载中……"
           );
         }
         // 聚合渲染：角色卡 + 注入的部件面板（背包等），UiBlockRenderer 递归
-        return h(
-          "div",
-          { style: { fontFamily: "system-ui, sans-serif", maxWidth: 560 } },
-          [
-            h(UiBlock, { block: ui.value, onAction: () => refresh() }),
-            h(
-              "button",
-              { onClick: () => refresh(), style: { marginTop: 12 } },
-              "刷新"
-            ),
-          ]
-        );
+        return h("div", {}, [
+          h(UiBlock, { block: ui.value, onAction: () => refresh() }),
+          h(
+            "button",
+            { class: "wt-btn", onClick: () => refresh(), style: { marginTop: 12 } },
+            "刷新"
+          ),
+        ]);
       };
     },
   };

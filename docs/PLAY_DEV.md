@@ -266,6 +266,19 @@ Vue 组件选项）：
     slot_name, provider)` + 视图组件 `<slot name>`——快捷栏/手持按钮等需要
     注入到自定义 Vue 组件时再实现（G4）
 - 兜底：无任何视图时 WebUI 显示内核"无视图"提示（D7）
+- **样式约定（v0.1.17）**：WebUI 是**暗色主题**，视图组件**不得硬编码浅色**
+  （白底/浅灰底与主题冲突 → "整片发白、白底白字"）；统一用内核样式基石：
+  - 结构/文本：`wt-head`（两端对齐标题行）、`wt-row`、`wt-title`、`wt-strong`、
+    `wt-dim`、`wt-note`、`wt-err`、`wt-clip`（单行省略）
+  - 容器：`wt-card`、`wt-grid`（配 `wt-cols-3` / `wt-cols-4`）、`wt-cell`
+    （格子；`.empty` 空态、`.here` 当前位置、`.walkable` 可点）、
+    `wt-list` + `wt-li`、`wt-detail` + `wt-json`（折叠原始 JSON）
+  - 按钮：`wt-btn`（可加 `.primary` / `.ghost`）——**不要用裸 `<button>`**
+    （浏览器系统按钮样式是浅色的）
+  - 颜色只走 CSS 变量：`--bg` / `--bg-2` / `--bg-3` / `--text` / `--text-dim` /
+    `--accent` / `--danger`（如 `background: "var(--bg-2)"`）
+  - 参考实现：`items/web/bag.js`、`movement/web/view.js`、`social/web/log.js`；
+    防回归测试 `tests/test_web_view_styles.py`（硬编码浅色或裸按钮直接失败）
 - `/meta` 返回 `{mode: "play"|"admin"}`：同一前端按端口切换界面（玩家视图宿主
   vs 管理面板）——视图只在玩家模式加载（D16 界面分离）
 
@@ -412,6 +425,9 @@ api.register_admin_page(
   IIFE 形参由加载器注入执行，见 §8；render 函数，运行时无模板编译器；
   数据通道 = `fetch` 管理端代理端点
   `/admin/play-pages/{play_id}/{page_key}/{action}`（同源 + Bearer，
-  仅 tier=admin）。
+  仅 tier=admin））。
+- **样式**：管理端同为暗色主题——用 `.btn` / `.btn-primary` / `.btn-ghost` /
+  `.btn-danger`、`.card`、`.table` 或 CSS 变量（`var(--bg-2)`…），不要硬编码浅色
+  （管理页组件 `admin-*.js` 不在视图防回归测试范围内，但同属一条约定）。
 - **管理面不扩展内核**：不要用管理页绕过玩法包语义去裸写其他包的 play_data。
 - 参考实现：`worlditor_play_items/web/admin-items.js`（物品定义 CRUD）。

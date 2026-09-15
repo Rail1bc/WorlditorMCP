@@ -21,6 +21,34 @@ from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
 _VIEW_KEY = "player"
 
+# 常见属性中文标签（未命中的玩法包自定义 key 原样显示）
+_ATTR_LABELS = {
+    "gold": "金币",
+    "level": "等级",
+    "exp": "经验",
+    "hp": "生命",
+    "stamina": "体力",
+    "starter_granted": "出生礼包",
+}
+
+
+def _attr_label(key: str) -> str:
+    return _ATTR_LABELS.get(key, key)
+
+
+# 身份 kind 中文标签（内核内置 player/agent/readonly）
+_KIND_LABELS = {"player": "玩家", "agent": "智能体", "readonly": "观察者"}
+
+
+def _kind_label(kind: str) -> str:
+    return _KIND_LABELS.get(kind, kind)
+
+
+def _attr_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    return str(value)
+
 
 def setup(api: WorlditorPlayAPI, context) -> None:
     """玩法包入口（由内核 PlayLoader 调用）。"""
@@ -58,14 +86,18 @@ async def _world_profile(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
     背包文本信息用 items 包的 world_bag 工具（职责归部件包）。
     """
     me = _me(api)
-    text = f"{me.name}（{me.kind}）：" + "、".join(
-        f"{k}={v}" for k, v in me.attrs.items()
+    text = f"{me.name}（{_kind_label(me.kind)}）：" + "、".join(
+        f"{_attr_label(k)}={_attr_value(v)}" for k, v in me.attrs.items()
     )
     card = UiBlock(
         kind="character",
+        title=f"{me.name} · {_kind_label(me.kind)}",
         data={
             "avatar": "🧍",
-            "attrs": [{"label": k, "value": str(v)} for k, v in me.attrs.items()],
+            "attrs": [
+                {"label": _attr_label(k), "value": _attr_value(v)}
+                for k, v in me.attrs.items()
+            ],
         },
     )
     card = await api.apply_ui_hooks(card)

@@ -22,16 +22,14 @@
             <span>{{ v.title }}</span>
           </button>
         </nav>
-        <button class="logout-btn" title="永久注销账户" @click="doDeleteAccount">🗑</button>
-        <button class="logout-btn" title="退出登录" @click="doLogout">⎋</button>
+        <button class="header-btn" title="永久注销账户" @click="doDeleteAccount">🗑</button>
+        <button class="header-btn" title="退出登录" @click="doLogout">⎋</button>
       </header>
 
       <main class="app-main">
-        <component
-          v-if="currentView && currentView.comp"
-          :is="currentView.comp"
-          :view="currentView.meta"
-        />
+        <div v-if="currentView && currentView.comp" class="view-host">
+          <component :is="currentView.comp" :view="currentView.meta" />
+        </div>
         <div v-else class="empty-hint">
           <p>这个世界还没有任何视图。</p>
           <p class="dim">管理员可在管理端口（默认 6289）安装玩法包。</p>

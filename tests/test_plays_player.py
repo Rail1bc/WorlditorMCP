@@ -123,7 +123,9 @@ def test_world_profile_ui_without_items(tmp_path):
         assert result["ui"]["kind"] == "character"
         assert result["ui"]["blocks"] == []
         assert "bag" not in result
-        assert result["text"].startswith("小明（player）")
+        # v0.1.17：身份 kind 走中文标签（界面可读性）；本场景无 starter 包 → 属性为空
+        assert result["text"].startswith("小明（玩家）")
+        assert result["ui"]["title"] == "小明 · 玩家"
 
     _run(_scenario(tmp_path / "world.db", fn))
 
@@ -158,6 +160,9 @@ def test_world_profile_tool(tmp_path):
         assert result["attrs"]["gold"] == 100  # 礼包由 starter 包发放
         assert result["ui"]["kind"] == "character"
         assert "bag" not in result  # 玩家壳不搬运部件数据
+        # v0.1.17：属性 key 在界面走中文标签（未知 key 原样显示）
+        labels = [a["label"] for a in result["ui"]["data"]["attrs"]]
+        assert "金币" in labels and "出生礼包" in labels
 
     _run(_scenario(tmp_path / "world.db", fn))
 

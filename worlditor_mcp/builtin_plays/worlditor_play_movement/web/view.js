@@ -151,15 +151,6 @@
       onMounted(refresh);
 
       return () => {
-        const cellStyle = {
-          border: "1px solid #ddd",
-          borderRadius: 6,
-          padding: 6,
-          minHeight: 56,
-          background: "#f4f4f4",
-          fontSize: 12,
-          overflow: "hidden",
-        };
         const cells = [];
         for (let dr = -1; dr <= 1; dr++) {
           for (let dc = -1; dc <= 1; dc++) {
@@ -169,9 +160,7 @@
             const isCenter = dr === 0 && dc === 0;
             const children = [];
             if (cell && cell.loc) {
-              children.push(
-                h("div", { style: { fontWeight: 600 } }, cell.loc.name)
-              );
+              children.push(h("div", { class: "wt-strong" }, cell.loc.name));
             }
             if (cell) {
               for (const e of cell.entities) {
@@ -179,38 +168,21 @@
                   ? "你 " + (FACING_ARROW[facing.value] || "")
                   : (KIND_EMOJI[e.kind] || "❔") + " " + e.name;
                 children.push(
-                  h(
-                    "div",
-                    {
-                      style: {
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        fontWeight: e.is_me ? 700 : 400,
-                      },
-                    },
-                    label
-                  )
+                  h("div", { class: e.is_me ? "wt-strong wt-clip" : "wt-clip" }, label)
                 );
               }
             }
             if (!isCenter && walkable) {
-              children.push(h("div", { style: { color: "#2f6f2f" } }, "可走 →"));
+              children.push(h("div", { class: "wt-dim" }, "可走 →"));
             }
-            const style = {
-              ...cellStyle,
-              background: isCenter
-                ? "#fff7d6"
-                : cell && cell.loc
-                  ? "#ffffff"
-                  : "#f4f4f4",
-              cursor: walkable ? "pointer" : "default",
-            };
+            const cls = ["wt-cell"];
+            if (isCenter) cls.push("here");
+            if (walkable) cls.push("walkable");
             cells.push(
               h(
                 "div",
                 {
-                  style,
+                  class: cls.join(" "),
                   onClick: walkable
                     ? () => go(relTo(facing.value, dir))
                     : null,
@@ -221,67 +193,32 @@
           }
         }
 
-        const rowStyle = {
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: 4,
-          marginBottom: 4,
-        };
-
-        return h(
-          "div",
-          { style: { fontFamily: "system-ui, sans-serif", maxWidth: 420 } },
-          [
+        return h("div", {}, [
+          h("div", { class: "wt-row", style: { marginBottom: 10 } }, [
+            h("button", { class: "wt-btn", onClick: () => turn("left") }, "← 左转"),
             h(
-              "div",
-              {
-                style: {
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  marginBottom: 8,
-                },
-              },
-              [
-                h("button", { onClick: () => turn("left") }, "← 左转"),
-                h(
-                  "span",
-                  { style: { flex: 1, textAlign: "center", fontWeight: 600 } },
-                  "你面向 " + (FACING_ARROW[facing.value] || "") + " " + facing.value
-                ),
-                h("button", { onClick: () => turn("right") }, "右转 →"),
-              ]
+              "span",
+              { class: "wt-title", style: { flex: 1, textAlign: "center" } },
+              "你面向 " + (FACING_ARROW[facing.value] || "") + " " + facing.value
             ),
-            h("div", { style: rowStyle }, cells.slice(0, 3)),
-            h("div", { style: rowStyle }, cells.slice(3, 6)),
-            h("div", { style: rowStyle }, cells.slice(6, 9)),
-            paths.value.length
-              ? h(
-                  "div",
-                  { style: { marginTop: 8, fontSize: 12, color: "#555" } },
-                  "可走：" +
-                    paths.value
-                      .map((d) => {
-                        const rel = relTo(facing.value, d);
-                        return (
-                          d +
-                          "（" +
-                          rel +
-                          "）"
-                        );
-                      })
-                      .join("、")
-                )
-              : null,
-            error.value
-              ? h(
-                  "div",
-                  { style: { marginTop: 8, color: "#b00020", fontSize: 13 } },
-                  "⚠ " + error.value
-                )
-              : null,
-          ]
-        );
+            h("button", { class: "wt-btn", onClick: () => turn("right") }, "右转 →"),
+          ]),
+          h("div", { class: "wt-grid wt-cols-3" }, cells),
+          paths.value.length
+            ? h(
+                "div",
+                { class: "wt-note" },
+                "可走：" +
+                  paths.value
+                    .map((d) => {
+                      const rel = relTo(facing.value, d);
+                      return d + "（" + rel + "）";
+                    })
+                    .join("、")
+              )
+            : null,
+          error.value ? h("div", { class: "wt-err" }, "⚠ " + error.value) : null,
+        ]);
       };
     },
   };

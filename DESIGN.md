@@ -315,6 +315,12 @@ class ItemDef:
   未注册 key 报错（同 D2 风格）
 - **视图列表**：内核新增 `GET /views`（key/title/icon/包名），管理页展示与
   前端路由初始化共用
+- **视图样式基石（v0.1.17）**：WebUI 是暗色主题——内核 `styles.css` 提供
+  玩家端布局类（`.app-header`/`.view-tabs`/`.view-host`/`.app-main`）与
+  **组件样式基石 `wt-*`**（卡片/格子/按钮/列表/折叠 JSON，见 PLAY_DEV §8）；
+  玩法包视图组件必须复用这些类与 CSS 变量（`--bg*`/`--text*`/`--accent`），
+  **不得硬编码浅色**，按钮不得裸写（浏览器系统按钮是浅色样式）——否则暗色
+  主题下"整片发白、白底白字"。防回归：`tests/test_web_view_styles.py`
 - **兜底**：无任何视图注册时，WebUI 显示内核"无视图"提示（D7）
 - 不想写组件的玩法包可退化为"数据 + UiBlock 通用渲染"（内核渲染器兜底）
 
