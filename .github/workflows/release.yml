@@ -33,7 +33,7 @@ jobs:
           python -m pytest tests/ -q --tb=short
 
       - name: 登录 GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
