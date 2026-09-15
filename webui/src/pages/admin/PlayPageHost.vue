@@ -1,13 +1,10 @@
 <template>
   <section class="card page-host">
     <header class="host-head">
-      <div>
-        <h2>{{ icon }} {{ title }}</h2>
-        <p class="dim">
-          <code>{{ playId }} · {{ pageKey }}</code>
-        </p>
-      </div>
-      <button class="btn btn-ghost" @click="back">← 返回玩法包</button>
+      <h2>{{ icon }} {{ title }}</h2>
+      <p class="dim">
+        <code>{{ playId }} · {{ pageKey }}</code>
+      </p>
     </header>
 
     <p v-if="error" class="error-text">{{ error }}</p>
@@ -51,10 +48,6 @@ function syncFromHash() {
   pageKey.value = decodeURIComponent(parts[3] || "");
 }
 
-function back() {
-  location.hash = "#/admin/plays";
-}
-
 async function load() {
   error.value = "";
   try {
@@ -65,6 +58,8 @@ async function load() {
     return;
   }
   if (!page.value) {
+    // 页面已消失（包被停用/卸载）→ 让侧栏分组同步刷新
+    window.dispatchEvent(new Event("worlditor:plays-changed"));
     error.value = "管理页不存在或玩法包已停用";
     return;
   }
@@ -101,10 +96,6 @@ onMounted(async () => {
   min-height: 400px;
 }
 .host-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
   margin-bottom: 12px;
 }
 .host-head h2 {

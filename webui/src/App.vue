@@ -59,6 +59,7 @@ import UiBlockRenderer from "./components/UiBlockRenderer.vue";
 const route = ref(location.hash.replace(/^#/, "") || "");
 const views = ref([]); // {key,title,icon,play_id,provider}
 const loaded = ref({}); // key -> 组件对象（缓存）
+const metaReady = ref(false); // /meta 已确认端口模式（此前 mode 只是默认值）
 
 const hasToken = computed(() => Boolean(store.token));
 const currentView = computed(() => {
@@ -128,8 +129,9 @@ async function doDeleteAccount() {
 }
 
 // 登录后若无路由（AuthPage 登录成功时会清空 hash）→ 按视图列表进默认视图
+// （metaReady：/meta 未回来前 store.mode 是默认值 "play"，管理端会误发 /views → 404）
 watch(hasToken, (token) => {
-  if (token && store.mode === "play" && !route.value) {
+  if (token && metaReady.value && store.mode === "play" && !route.value) {
     refreshViews();
   }
 });
@@ -153,6 +155,7 @@ onMounted(async () => {
   } catch (e) {
     store.error = e.message;
   }
+  metaReady.value = true;
   window.addEventListener("hashchange", () => {
     route.value = location.hash.replace(/^#/, "") || "";
   });

@@ -83,6 +83,28 @@ def test_app_shell_uses_view_host_and_header_buttons():
     assert "logout-btn" not in app
 
 
+def test_admin_sidebar_hosts_play_pages_group():
+    """管理端侧栏承载「玩法包管理页」分组（v0.2.1）。
+
+    入口不再挂在玩法包详情页：侧栏分组可收起展开（状态本地记忆），
+    并在注册表变化（装/卸/启/停）时经事件重新拉取清单。
+    """
+    panel = (_WEBUI / "components" / "AdminPanel.vue").read_text(encoding="utf-8")
+    assert "玩法包管理页" in panel
+    assert "worlditor_admin_pages_open" in panel  # 收起状态记忆
+    assert "worlditor:plays-changed" in panel  # 注册表变化实时刷新
+    assert 'class="group-body"' in panel
+
+
+def test_plays_page_no_longer_lists_admin_pages():
+    """玩法包详情页不列管理页；管理页自身无「返回玩法包」按钮（v0.2.1）。"""
+    plays = (_WEBUI / "pages" / "admin" / "PlaysPage.vue").read_text(encoding="utf-8")
+    assert "play-pages" not in plays  # 不再拉管理页清单
+    assert '{ key: "pages"' not in plays  # 页签里没有「管理页」
+    host = (_WEBUI / "pages" / "admin" / "PlayPageHost.vue").read_text(encoding="utf-8")
+    assert "返回玩法包" not in host
+
+
 def test_view_components_use_no_hardcoded_light_colors():
     """视图组件不得硬编码浅色（否则暗色主题下白底/白底白字）。"""
     files = _view_component_files()

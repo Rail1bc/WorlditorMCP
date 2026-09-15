@@ -17,6 +17,34 @@
           <span class="nav-icon">{{ item.icon }}</span>
           <span>{{ item.title }}</span>
         </button>
+
+        <!-- 玩法包管理页：独立层级（可收起展开；随管理页注册动态出现） -->
+        <div v-if="playPages.length" class="nav-group">
+          <button
+            class="nav-item group-head"
+            :class="{ on: route === 'pages' && !pagesOpen }"
+            :title="pagesOpen ? '收起玩法包管理页' : '展开玩法包管理页'"
+            @click="togglePages"
+          >
+            <span class="nav-icon">📑</span>
+            <span class="group-title">玩法包管理页</span>
+            <span class="caret">{{ pagesOpen ? "▾" : "▸" }}</span>
+          </button>
+          <div v-show="pagesOpen" class="group-body">
+            <button
+              v-for="pg in playPages"
+              :key="pg.play_id + '/' + pg.key"
+              class="nav-item sub"
+              :class="{ on: pageOn(pg) }"
+              :title="pg.title + '（' + playLabel(pg.play_id) + '）'"
+              @click="gotoPage(pg)"
+            >
+              <span class="nav-icon">{{ pg.icon || "⚙️" }}</span>
+              <span class="sub-title">{{ pg.title }}</span>
+              <span v-if="multiPlay" class="sub-play">{{ playLabel(pg.play_id) }}</span>
+            </button>
+          </div>
+        </div>
       </nav>
       <button class="side-logout" title="退出登录" @click="doLogout">⎋ 退出登录</button>
     </aside>
@@ -29,7 +57,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from "vue";
-import { getToken, setToken } from "../api";
+import { apiGet, setToken } from "../api";
 import { store } from "../store";
 import AccountsPage from "../pages/admin/AccountsPage.vue";
 import PlaysPage from "../pages/admin/PlaysPage.vue";
@@ -54,33 +82,90 @@ const PAGES = {
   pages: PlayPageHost, // 玩法包管理页（独立路由：#/admin/pages/{play_id}/{key}）
 };
 
+// 玩法包管理页在侧栏自成一个可收起层级：展开状态本地记忆
+const OPEN_KEY = "worlditor_admin_pages_open";
+
 const route = ref("");
+const routeInfo = ref({ playId: "", pageKey: "" });
+const playPages = ref([]); // {play_id,key,title,icon,actions,component_url}
+const playNames = ref({}); // play_id -> 显示名
+const pagesOpen = ref(localStorage.getItem(OPEN_KEY) !== "0");
 
 const current = computed(() => ({
   key: route.value,
   comp: PAGES[route.value] || PAGES.accounts,
 }));
 
+// 多个玩法包都注册管理页时，条目上补一个包名（单包时省略，避免噪音）
+const multiPlay = computed(
+  () => new Set(playPages.value.map((p) => p.play_id)).size > 1
+);
+
+function playLabel(playId) {
+  return playNames.value[playId] || playId;
+}
+
 function navOn(item) {
-  // 管理页子路由（pages/xxx）归属「玩法包」导航项高亮
-  if (item.key === "plays") return route.value === "plays" || route.value === "pages";
   return route.value === item.key;
 }
 
+function pageOn(pg) {
+  return (
+    route.value === "pages" &&
+    routeInfo.value.playId === pg.play_id &&
+    routeInfo.value.pageKey === pg.key
+  );
+}
+
+function togglePages() {
+  pagesOpen.value = !pagesOpen.value;
+  localStorage.setItem(OPEN_KEY, pagesOpen.value ? "1" : "0");
+}
+
 function parseRoute(hash) {
-  // "#/admin/accounts" / "#/admin/maps/default" → "accounts" / "maps"
+  // "#/admin/accounts" / "#/admin/maps/default" / "#/admin/pages/{play_id}/{key}"
   const parts = hash.replace(/^#/, "").split("/").filter(Boolean);
-  return parts[1] || "";
+  return {
+    key: parts[1] || "",
+    playId: decodeURIComponent(parts[2] || ""),
+    pageKey: decodeURIComponent(parts[3] || ""),
+  };
 }
 
 function syncRoute() {
-  const key = parseRoute(location.hash);
-  route.value = key && PAGES[key] ? key : "accounts";
+  const info = parseRoute(location.hash);
+  route.value = info.key && PAGES[info.key] ? info.key : "accounts";
+  routeInfo.value = { playId: info.playId, pageKey: info.pageKey };
+  // 进入管理页时确保分组展开（否则当前条目藏起来看不出在哪）
+  if (route.value === "pages") pagesOpen.value = true;
 }
 
 function goto(key) {
   location.hash = `#/admin/${key}`; // 同步更新 location.hash
   route.value = key; // 立即更新（不依赖 hashchange 时序）
+  routeInfo.value = { playId: "", pageKey: "" };
+}
+
+function gotoPage(pg) {
+  location.hash = `#/admin/pages/${encodeURIComponent(pg.play_id)}/${encodeURIComponent(pg.key)}`;
+  route.value = "pages";
+  routeInfo.value = { playId: pg.play_id, pageKey: pg.key };
+}
+
+async function loadPages() {
+  // 清单随玩法包启停/安装/卸载变化（PlaysPage 变更后广播 plays-changed）
+  try {
+    const [pages, plays] = await Promise.all([
+      apiGet("/admin/play-pages"),
+      apiGet("/admin/plays"),
+    ]);
+    playPages.value = pages.pages || [];
+    playNames.value = Object.fromEntries(
+      (plays.plays || []).map((p) => [p.play_id, p.name || p.play_id])
+    );
+  } catch (e) {
+    console.warn("管理页清单加载失败：", e.message);
+  }
 }
 
 function doLogout() {
@@ -93,8 +178,10 @@ function doLogout() {
 onMounted(() => {
   syncRoute();
   window.addEventListener("hashchange", syncRoute);
+  window.addEventListener("worlditor:plays-changed", loadPages);
+  loadPages();
   // 登录后 hash 可能残留 #/world / #/auth——规范化到默认管理页
-  if (!parseRoute(location.hash)) {
+  if (!parseRoute(location.hash).key) {
     goto("accounts");
   }
 });
@@ -138,6 +225,8 @@ onMounted(() => {
   flex-direction: column;
   gap: 4px;
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .nav-item {
   display: flex;
@@ -164,6 +253,52 @@ onMounted(() => {
   font-size: 17px;
   width: 22px;
   text-align: center;
+}
+
+/* ---------- 玩法包管理页：侧栏二级分组（可收起展开） ---------- */
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+}
+.group-head {
+  justify-content: flex-start;
+}
+.group-title {
+  flex: 1;
+}
+.caret {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: 12px;
+  padding-left: 10px;
+  border-left: 1px solid var(--bg-3);
+}
+.nav-item.sub {
+  font-size: 13px;
+  padding: 8px 10px;
+  gap: 8px;
+}
+.nav-item.sub .nav-icon {
+  font-size: 15px;
+  width: 18px;
+}
+.sub-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sub-play {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
 }
 .side-logout {
   border: none;
@@ -209,6 +344,7 @@ onMounted(() => {
   .nav {
     flex-direction: row;
     overflow-x: auto;
+    overflow-y: hidden;
     gap: 2px;
     flex: 1;
   }
@@ -222,7 +358,28 @@ onMounted(() => {
   .nav-item .nav-icon {
     font-size: 16px;
   }
-  .logout-btn {
+  .nav-group {
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+    margin-top: 0;
+  }
+  .group-head {
+    flex-direction: row;
+    gap: 4px;
+  }
+  .group-body {
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+    margin-left: 0;
+    padding-left: 0;
+    border-left: none;
+  }
+  .sub-play {
+    display: none;
+  }
+  .side-logout {
     padding: 8px;
     font-size: 12px;
   }

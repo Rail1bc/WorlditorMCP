@@ -85,23 +85,6 @@
           </button>
         </div>
 
-        <!-- 管理页（玩法包注册的管理入口） -->
-        <div v-if="tab === 'pages'" class="tab-body">
-          <p v-if="!pagesOfPlay.length" class="dim">
-            该玩法包未注册管理页（注册协议见 DESIGN §4.6 / PLAY_DEV §13）
-          </p>
-          <button
-            v-for="pg in pagesOfPlay"
-            :key="pg.key"
-            class="page-entry"
-            @click="openPlayPage(pg)"
-          >
-            <span>{{ pg.icon || "📄" }}</span>
-            <span>{{ pg.title }}</span>
-            <span class="dim">actions: {{ pg.actions.join(", ") }}</span>
-          </button>
-        </div>
-
         <!-- 工具 -->
         <div v-if="tab === 'tools'" class="tab-body">
           <p v-if="!toolsOfPlay.length" class="dim">该玩法包没有注册 MCP 工具</p>
@@ -184,21 +167,19 @@ import { computed, onMounted, ref } from "vue";
 import { apiGet, apiPost, installPlay } from "../../api";
 
 const plays = ref([]);
-const pages = ref([]);
 const tools = ref([]);
 const services = ref([]);
 const views = ref([]);
 const overrides = ref([]);
 const filters = ref([]);
 const selected = ref("");
-const tab = ref("pages");
+const tab = ref("tools");
 const busy = ref(false);
 const error = ref("");
 const note = ref("");
 const fileInput = ref(null);
 
 const tabs = [
-  { key: "pages", title: "管理页" },
   { key: "tools", title: "工具" },
   { key: "services", title: "服务" },
   { key: "views", title: "视图" },
@@ -207,9 +188,6 @@ const tabs = [
 
 const current = computed(
   () => plays.value.find((p) => p.play_id === selected.value) || null
-);
-const pagesOfPlay = computed(() =>
-  pages.value.filter((p) => p.play_id === selected.value)
 );
 const toolsOfPlay = computed(() =>
   tools.value.filter((t) => t.play_id === selected.value)
@@ -247,9 +225,8 @@ async function load() {
   busy.value = true;
   error.value = "";
   try {
-    const [pl, pg, tl, sv, vw, ov, ft] = await Promise.allSettled([
+    const [pl, tl, sv, vw, ov] = await Promise.allSettled([
       apiGet("/admin/plays"),
-      apiGet("/admin/play-pages"),
       apiGet("/admin/tools"),
       apiGet("/admin/services"),
       apiGet("/admin/views"),
@@ -261,7 +238,6 @@ async function load() {
       else if (selected.value && !plays.value.some((p) => p.play_id === selected.value))
         selected.value = plays.value[0]?.play_id || "";
     } else error.value = pl.reason.message;
-    if (pg.status === "fulfilled") pages.value = pg.value.pages || [];
     if (tl.status === "fulfilled") tools.value = tl.value.tools || [];
     if (sv.status === "fulfilled") services.value = sv.value.services || [];
     if (vw.status === "fulfilled") views.value = vw.value.views || [];
@@ -271,6 +247,8 @@ async function load() {
     }
   } finally {
     busy.value = false;
+    // 启停/安装/卸载都会改变管理页注册 → 通知侧栏刷新「玩法包管理页」分组
+    window.dispatchEvent(new Event("worlditor:plays-changed"));
   }
 }
 
@@ -318,12 +296,6 @@ async function onFile(event) {
   } finally {
     busy.value = false;
   }
-}
-
-function openPlayPage(pg) {
-  // 管理页为独立路由页面（#/admin/pages/{play_id}/{key}）——复杂配置的
-  // 管理页可自建二级面板，避免弹窗套弹窗
-  location.hash = `#/admin/pages/${encodeURIComponent(pg.play_id)}/${encodeURIComponent(pg.key)}`;
 }
 
 onMounted(load);
@@ -446,23 +418,6 @@ onMounted(load);
 }
 .tab-body {
   padding-top: 10px;
-}
-.page-entry {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 12px 14px;
-  border: 1px solid var(--bg-3);
-  border-radius: var(--radius);
-  background: var(--bg-2);
-  color: var(--text);
-  cursor: pointer;
-  margin-bottom: 6px;
-  font-size: 14px;
-}
-.page-entry:hover {
-  border-color: var(--accent-dim);
 }
 .dim {
   color: var(--text-dim);
