@@ -217,6 +217,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
 import { apiGet, apiPatch, apiPost, installPlay } from "../../api";
+import { askConfirm } from "../../confirm";
 
 const props = defineProps({
   worldId: { type: String, default: "" },
@@ -366,12 +367,13 @@ async function savePlayIds(ids, message) {
 
 async function useAll() {
   if (mode.value === "all" || !world.value) return;
-  if (
-    !confirm(
-      `把「${world.value.name}」的玩法包全部启用？该世界将跟随全局加载状态（以后新装的包自动生效）。`
-    )
-  )
-    return;
+  const ok = await askConfirm({
+    title: "全部启用",
+    text: `把「${world.value.name}」的玩法包全部启用？`,
+    detail: "该世界将跟随全局加载状态（以后新装的包自动生效）。",
+    confirmText: "全部启用",
+  });
+  if (!ok) return;
   await savePlayIds([], "已切换为「全部启用」");
 }
 
@@ -412,7 +414,14 @@ async function act(kind, playId) {
 }
 
 async function uninstall(playId) {
-  if (!confirm(`卸载玩法包 ${playId}？其目录与数据将被删除，不可恢复。`)) return;
+  const ok = await askConfirm({
+    title: "卸载玩法包",
+    danger: true,
+    text: `卸载玩法包 ${playId}？`,
+    detail: "其目录与数据将被删除，不可恢复。",
+    confirmText: "卸载",
+  });
+  if (!ok) return;
   try {
     await apiPost(`/admin/plays/${playId}/uninstall`);
     await load();

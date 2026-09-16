@@ -122,6 +122,7 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import { apiGet, apiPatch, apiDelete } from "../../api";
+import { askConfirm } from "../../confirm";
 
 const PAGE_SIZE = 20;
 
@@ -187,7 +188,13 @@ async function toggleDetails(a) {
 }
 
 async function revokeToken(token) {
-  if (!confirm("吊销该凭据？对方将立即失效。")) return;
+  const ok = await askConfirm({
+    title: "吊销凭据",
+    danger: true,
+    text: "吊销该凭据？",
+    detail: "持有该凭据的客户端将立即失效。",
+  });
+  if (!ok) return;
   try {
     await apiDelete(`/admin/tokens/${token}`);
     await toggleDetails(openId.value);
@@ -199,8 +206,12 @@ async function revokeToken(token) {
 
 async function toggleRole(a) {
   const next = a.role === "admin" ? "user" : "admin";
-  if (!confirm(`确认将「${a.username}」${next === "admin" ? "升为管理员" : "降为用户"}？`))
-    return;
+  const ok = await askConfirm({
+    title: next === "admin" ? "升为管理员" : "降为用户",
+    text: `确认将「${a.username}」${next === "admin" ? "升为管理员" : "降为用户"}？`,
+    detail: next === "admin" ? "管理员可管理玩法包、世界与地图。" : "对方将失去管理端权限。",
+  });
+  if (!ok) return;
   try {
     await apiPatch(`/admin/accounts/${a.id}`, { role: next });
     await load();
@@ -210,8 +221,14 @@ async function toggleRole(a) {
 }
 
 async function removeAccount(a) {
-  if (!confirm(`永久删除用户「${a.username}」？其实体与凭据将一并删除，不可恢复。`))
-    return;
+  const ok = await askConfirm({
+    title: "永久删除用户",
+    danger: true,
+    text: `永久删除用户「${a.username}」？`,
+    detail: "其实体与凭据将一并删除，不可恢复。",
+    confirmText: "永久删除",
+  });
+  if (!ok) return;
   try {
     await apiDelete(`/admin/accounts/${a.id}`);
     await load();

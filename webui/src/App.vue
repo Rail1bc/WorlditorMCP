@@ -45,15 +45,20 @@
   <Transition name="fade">
     <div v-if="store.error" class="toast">{{ store.error }}</div>
   </Transition>
+
+  <!-- 全局确认层（替代原生 confirm；原生弹窗在 iframe/沙箱里会被浏览器屏蔽） -->
+  <ConfirmHost />
 </template>
 
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
 import * as Vue from "vue";
 import { getToken, listViews, logout, setToken, deleteAccount, getMeta } from "./api";
+import { askConfirm } from "./confirm";
 import { store } from "./store";
 import AuthPage from "./pages/AuthPage.vue";
 import AdminPanel from "./components/AdminPanel.vue";
+import ConfirmHost from "./components/ConfirmHost.vue";
 import UiBlockRenderer from "./components/UiBlockRenderer.vue";
 
 const route = ref(location.hash.replace(/^#/, "") || "");
@@ -119,7 +124,14 @@ function doLogout() {
 }
 
 async function doDeleteAccount() {
-  if (!confirm("确定永久注销账户？角色与实体将被删除，该操作不可恢复。")) return;
+  const ok = await askConfirm({
+    title: "永久注销账户",
+    danger: true,
+    text: "确定永久注销账户？",
+    detail: "角色与实体将被删除，该操作不可恢复。",
+    confirmText: "永久注销",
+  });
+  if (!ok) return;
   try {
     await deleteAccount();
     doLogout();

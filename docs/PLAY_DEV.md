@@ -139,7 +139,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `get_location(map_id, row, col)` / `get_map(map_id)` | 地块 / 地图（Location 含 connections） |
 | `list_actions(target_id)` | 目标可用动作按钮（UI 菜单） |
 | `list_worlds()` / `get_world(id)` / `entity_world(id)` / `map_world(id)` | 世界与归属（D15） |
-| `list_folders(world_id)` / `list_maps_by_folder(world_id, folder_id)` | 组织树 |
+| `list_folders(world_id)` / `list_maps_by_folder(world_id, folder_id)` | 组织树（按容器内序号排序） |
 | `kv_get(key, default, world_id)` / `kv_set(key, value, world_id)` | 玩法数据 KV（namespace = 本包） |
 | `list_world_log(limit=100)` | 世界日志（最新在前） |
 | `list_primitive_overrides()` / `list_primitive_filters()` / `list_services()` / `list_views()` | 注册表状态（管理页同源） |
@@ -162,6 +162,12 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 ### 地图编辑（D14：内容治理归玩法包/用户）
 
 `update_location(map_id, row, col, **kwargs)` / `update_connection(map_id, row, col, direction, **kwargs)` / `create_map(map_id, name, ...)` / `delete_map(map_id)`（图上玩家在场拒绝，G2）/ `save_template(template)` / `delete_template(template_id)`
+
+**世界包导入内容时**：`assign_map(map_id, world_id, folder_id=None, sort=None)` 把地图
+归属到世界与组织节点（`sort` = 该节点内的序号，文件夹与地图**共用一个序号空间**，
+见 DESIGN §4.3.2；缺省 = 同节点保留原位 / 换节点排到末尾）。管理端还有组织树拖拽、
+地图搬家（含跨世界）、复制另存与地图体检（`GET /admin/lint`）——这些都是**管理维度**，
+玩法包一般只需要 `assign_map` 把自己的地图放进世界。
 
 ### 身份
 

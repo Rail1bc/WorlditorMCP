@@ -163,7 +163,11 @@ async def _worlds_list(request: Request) -> Response:
     for w in engine.list_worlds():
         d = w.to_dict()
         d["maps"] = [
-            {"id": map_id, "folder_id": engine.store.map_folder.get(map_id)}
+            {
+                "id": map_id,
+                "folder_id": engine.store.map_folder.get(map_id),
+                "sort": engine.store.map_sort.get(map_id, 0),
+            }
             for map_id in engine.list_world_maps(w.id)
         ]
         d["folders"] = [f.to_dict() for f in engine.list_folders(w.id)]
@@ -218,6 +222,7 @@ async def _world_assign_map(request: Request) -> Response:
             str(data.get("map_id") or ""),
             request.path_params["world_id"],
             folder_id=data.get("folder_id"),
+            sort=data.get("sort"),
         )
     except WorldError as e:
         return _err(e)
@@ -231,6 +236,21 @@ async def _world_unassign_map(request: Request) -> Response:
     return _ok()
 
 
+async def _tree_reorder(request: Request) -> Response:
+    """批量重排组织节点下的条目（拖拽落位；文件夹与地图共用一个序号空间）。"""
+    _require_admin(request)
+    data = await _json_body(request)
+    try:
+        await _engine(request).reorder_tree(
+            request.path_params["world_id"],
+            data.get("parent_id"),
+            list(data.get("items") or []),
+        )
+    except WorldError as e:
+        return _err(e)
+    return _ok()
+
+
 async def _folder_create(request: Request) -> Response:
     _require_admin(request)
     data = await _json_body(request)
@@ -239,20 +259,24 @@ async def _folder_create(request: Request) -> Response:
             request.path_params["world_id"],
             str(data.get("name") or ""),
             parent_id=data.get("parent_id"),
-            sort=int(data.get("sort") or 0),
+            sort=data.get("sort"),
         )
     except WorldError as e:
         return _err(e)
     return _ok(folder.to_dict())
 
 
-async def _folder_rename(request: Request) -> Response:
+async def _folder_update(request: Request) -> Response:
+    """文件夹属性编辑（PATCH；name / sort 任一或都给，未提供的字段不变）。"""
     _require_admin(request)
     data = await _json_body(request)
+    engine = _engine(request)
+    folder_id = request.path_params["folder_id"]
     try:
-        await _engine(request).rename_folder(
-            request.path_params["folder_id"], str(data.get("name") or "")
-        )
+        if data.get("name") is not None:
+            await engine.rename_folder(folder_id, str(data.get("name") or ""))
+        if data.get("sort") is not None:
+            await engine.set_folder_sort(folder_id, data.get("sort"))
     except WorldError as e:
         return _err(e)
     return _ok()
@@ -263,7 +287,9 @@ async def _folder_move(request: Request) -> Response:
     data = await _json_body(request)
     try:
         await _engine(request).move_folder(
-            request.path_params["folder_id"], data.get("parent_id")
+            request.path_params["folder_id"],
+            data.get("parent_id"),
+            sort=data.get("sort"),
         )
     except WorldError as e:
         return _err(e)
@@ -376,7 +402,7 @@ async def _token_revoke(request: Request) -> Response:
 
 
 async def _maps_list(request: Request) -> Response:
-    """地图列表（含世界归属 / 地块数 / 实体数）。"""
+    """地图列表（含世界归属 / 组织节点 / 序号 / 地块数 / 实体数）。"""
     _require_admin(request)
     engine = _engine(request)
     maps = []
@@ -392,6 +418,8 @@ async def _maps_list(request: Request) -> Response:
                 "spawn_col": m.spawn_col,
                 "visible": m.visible,
                 "world_id": engine.map_world(m.id),
+                "folder_id": engine.store.map_folder.get(m.id),
+                "sort": engine.store.map_sort.get(m.id, 0),
                 "location_count": len(locations),
                 "entity_count": len(engine.list_entities(map_id=m.id)),
             }
@@ -422,6 +450,8 @@ async def _map_detail(request: Request) -> Response:
                 "spawn_col": m.spawn_col,
                 "visible": m.visible,
                 "world_id": engine.map_world(map_id),
+                "folder_id": engine.store.map_folder.get(map_id),
+                "sort": engine.store.map_sort.get(map_id, 0),
             },
             "locations": locations,
             "entities": entities,
@@ -513,6 +543,57 @@ async def _map_delete(request: Request) -> Response:
     except WorldError as e:
         return _err(e)
     return _ok()
+
+
+async def _map_copy(request: Request) -> Response:
+    """地图复制另存（地块/连接全量；``with_entities`` 决定是否连实体一起带）。"""
+    _require_admin(request)
+    data = await _json_body(request)
+    want: dict[str, Any] = {"with_entities": bool(data.get("with_entities"))}
+    if data.get("name") is not None:
+        want["name"] = str(data.get("name") or "")
+    if "world_id" in data:
+        want["world_id"] = data.get("world_id")
+    if "folder_id" in data:
+        want["folder_id"] = data.get("folder_id")
+    try:
+        m = await _engine(request).copy_map(
+            request.path_params["map_id"], str(data.get("new_id") or ""), **want
+        )
+    except WorldError as e:
+        return _err(e)
+    return _ok({"id": m.id, "name": m.name})
+
+
+async def _map_move(request: Request) -> Response:
+    """地图搬家（组织树拖拽 + 跨世界转移）：世界 / 组织节点 / 序号可任选。
+
+    ``world_id=null`` = 解除世界归属；``folder_id=null`` = 世界根。
+    """
+    _require_admin(request)
+    data = await _json_body(request)
+    want: dict[str, Any] = {}
+    for key in ("world_id", "folder_id", "sort"):
+        if key in data:
+            want[key] = data[key]
+    try:
+        await _engine(request).move_map(request.path_params["map_id"], **want)
+    except WorldError as e:
+        return _err(e)
+    return _ok()
+
+
+async def _lint(request: Request) -> Response:
+    """地图体检（全量或单张：``?map_id=``）。"""
+    _require_admin(request)
+    engine = _engine(request)
+    map_id = request.query_params.get("map_id")
+    try:
+        if map_id:
+            return JSONResponse({"maps": [engine.lint_map(map_id)]})
+        return JSONResponse(engine.lint_maps())
+    except WorldError as e:
+        return _err(e)
 
 
 async def _location_upsert(request: Request) -> Response:
@@ -693,11 +774,16 @@ def build_admin_app(
             methods=["POST"],
         ),
         Route(
+            "/admin/worlds/{world_id}/reorder",
+            _tree_reorder,
+            methods=["POST"],
+        ),
+        Route(
             "/admin/worlds/{world_id}/folders",
             _folder_create,
             methods=["POST"],
         ),
-        Route("/admin/folders/{folder_id}", _folder_rename, methods=["PATCH"]),
+        Route("/admin/folders/{folder_id}", _folder_update, methods=["PATCH"]),
         Route("/admin/folders/{folder_id}/move", _folder_move, methods=["POST"]),
         Route("/admin/folders/{folder_id}", _folder_delete, methods=["DELETE"]),
         Route("/admin/accounts", _accounts),
@@ -712,6 +798,9 @@ def build_admin_app(
         Route("/admin/maps/{map_id}", _map_detail),
         Route("/admin/maps/{map_id}", _map_update, methods=["PATCH"]),
         Route("/admin/maps/{map_id}", _map_delete, methods=["DELETE"]),
+        Route("/admin/maps/{map_id}/copy", _map_copy, methods=["POST"]),
+        Route("/admin/maps/{map_id}/move", _map_move, methods=["POST"]),
+        Route("/admin/lint", _lint),
         Route("/admin/locations", _location_upsert, methods=["POST"]),
         Route("/admin/locations", _location_delete, methods=["DELETE"]),
         Route("/admin/connections", _connection_update, methods=["POST"]),

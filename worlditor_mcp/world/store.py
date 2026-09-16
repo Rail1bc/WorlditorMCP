@@ -36,8 +36,9 @@ from .model import (
     parse_map,
 )
 
-# 表结构版本（沿用 v4 引擎表布局；D13 无迁移逻辑，仅写入 world_meta 记录）
-SCHEMA_VERSION = "4"
+# 表结构版本（沿用 v4 引擎表布局；D13 无迁移逻辑，仅写入 world_meta 记录。
+# v5 = world_maps.sort：组织树内地图与文件夹共用一个排序空间）
+SCHEMA_VERSION = "5"
 DEFAULT_MAP_ID = "default"
 
 # 世界日志保留上限（超出后裁掉最旧记录；防高频事件刷爆库）
@@ -128,7 +129,8 @@ CREATE TABLE IF NOT EXISTS world_folders (
 CREATE TABLE IF NOT EXISTS world_maps (
     map_id TEXT PRIMARY KEY,
     world_id TEXT NOT NULL,
-    folder_id TEXT
+    folder_id TEXT,
+    sort INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -187,6 +189,7 @@ class WorldStore:
         self.folders: dict[str, WorldFolder] = {}
         self.map_world: dict[str, str] = {}  # map_id -> world_id
         self.map_folder: dict[str, str | None] = {}  # map_id -> folder_id | None
+        self.map_sort: dict[str, int] = {}  # map_id -> 组织树内的序号
         self.world_meta: dict[str, str] = {}  # world_meta 表内存态
 
     # ---------- 生命周期 ----------
@@ -199,6 +202,7 @@ class WorldStore:
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.executescript(_MAP_TABLES_SQL)
         await self._conn.executescript(_ENTITY_TABLES_SQL)
+        await self._ensure_columns()
         await self._seed_if_empty()
         await self._load_all()
 
@@ -206,6 +210,22 @@ class WorldStore:
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
+
+    async def _ensure_columns(self) -> None:
+        """补齐后加列（幂等）。
+
+        SQLite 的 ``CREATE TABLE IF NOT EXISTS`` 不会给**既有表**补列，所以旧库
+        升级时必须显式 ALTER；这是唯一的"迁移逻辑"，D13 的"不迁移"指不做语义
+        转换，不是不给表加列。
+        """
+        assert self._conn is not None
+        cur = await self._conn.execute("PRAGMA table_info(world_maps)")
+        cols = {row["name"] for row in await cur.fetchall()}
+        if "sort" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE world_maps ADD COLUMN sort INTEGER NOT NULL DEFAULT 0"
+            )
+        await self._conn.commit()
 
     async def _seed_if_empty(self) -> None:
         """空库只建「默认世界」这一结构性容器（幂等）。
@@ -324,6 +344,7 @@ class WorldStore:
         for row in await cur.fetchall():
             self.map_world[row["map_id"]] = row["world_id"]
             self.map_folder[row["map_id"]] = row["folder_id"]
+            self.map_sort[row["map_id"]] = row["sort"]
         cur = await self._conn.execute("SELECT * FROM world_meta")
         for row in await cur.fetchall():
             self.world_meta[row["key"]] = row["value"]
@@ -426,6 +447,7 @@ class WorldStore:
         self.loc_by_pos = {k: v for k, v in self.loc_by_pos.items() if k[0] != map_id}
         self.map_world.pop(map_id, None)
         self.map_folder.pop(map_id, None)
+        self.map_sort.pop(map_id, None)
 
     async def save_template(self, template: WorldTemplate) -> None:
         """写回 / 新建一个模板。"""
@@ -748,23 +770,48 @@ class WorldStore:
             if wid == world_id:
                 self.map_world.pop(map_id, None)
                 self.map_folder.pop(map_id, None)
+                self.map_sort.pop(map_id, None)
 
     async def assign_map(
-        self, map_id: str, world_id: str, *, folder_id: str | None = None
+        self,
+        map_id: str,
+        world_id: str,
+        *,
+        folder_id: str | None = None,
+        sort: int | None = None,
     ) -> None:
-        """把地图归属到世界（及可选组织节点）；覆盖旧归属。"""
+        """把地图归属到世界（及可选组织节点）；覆盖旧归属。
+
+        ``sort=None``：同世界同节点内重挂保留原位，换节点则排到末尾。
+        """
         assert self._conn is not None
         if map_id not in self.maps:
             raise KeyError(f"地图不存在：{map_id}")
         if world_id not in self.worlds:
             raise KeyError(f"世界不存在：{world_id}")
+        if folder_id is not None:
+            folder = self.folders.get(folder_id)
+            if folder is None or folder.world_id != world_id:
+                raise ValueError("组织节点不存在或不属于该世界")
+        if sort is None:
+            same = (
+                self.map_world.get(map_id) == world_id
+                and self.map_folder.get(map_id) == folder_id
+            )
+            sort = (
+                self.map_sort.get(map_id, 0)
+                if same
+                else self._next_sort(world_id, folder_id)
+            )
         await self._conn.execute(
-            "INSERT OR REPLACE INTO world_maps(map_id, world_id, folder_id) VALUES(?, ?, ?)",
-            (map_id, world_id, folder_id),
+            "INSERT OR REPLACE INTO world_maps(map_id, world_id, folder_id, sort) "
+            "VALUES(?, ?, ?, ?)",
+            (map_id, world_id, folder_id, sort),
         )
         await self._conn.commit()
         self.map_world[map_id] = world_id
         self.map_folder[map_id] = folder_id
+        self.map_sort[map_id] = sort
 
     async def unassign_map(self, map_id: str) -> None:
         """解除地图的世界归属（地图本身保留，变为未归属）。"""
@@ -773,18 +820,42 @@ class WorldStore:
         await self._conn.commit()
         self.map_world.pop(map_id, None)
         self.map_folder.pop(map_id, None)
+        self.map_sort.pop(map_id, None)
 
-    async def move_map_folder(self, map_id: str, folder_id: str | None) -> None:
+    async def move_map_folder(
+        self, map_id: str, folder_id: str | None, *, sort: int | None = None
+    ) -> None:
         """移动地图到世界内组织节点（folder_id=None = 世界根）。"""
         assert self._conn is not None
         if map_id not in self.map_world:
             raise KeyError(f"地图未归属世界：{map_id}")
+        await self.assign_map(
+            map_id, self.map_world[map_id], folder_id=folder_id, sort=sort
+        )
+
+    async def set_map_sort(self, map_id: str, sort: int) -> None:
+        """设置地图在其组织节点内的序号。"""
+        assert self._conn is not None
+        if map_id not in self.map_world:
+            raise KeyError(f"地图未归属世界：{map_id}")
         await self._conn.execute(
-            "UPDATE world_maps SET folder_id = ? WHERE map_id = ?",
-            (folder_id, map_id),
+            "UPDATE world_maps SET sort = ? WHERE map_id = ?", (sort, map_id)
         )
         await self._conn.commit()
-        self.map_folder[map_id] = folder_id
+        self.map_sort[map_id] = sort
+
+    def _next_sort(self, world_id: str, folder_id: str | None) -> int:
+        """组织节点内下一个可用序号（文件夹与地图共用一个排序空间）。"""
+        used = [
+            f.sort
+            for f in self.folders.values()
+            if f.world_id == world_id and f.parent_id == folder_id
+        ] + [
+            self.map_sort.get(map_id, 0)
+            for map_id, wid in self.map_world.items()
+            if wid == world_id and self.map_folder.get(map_id) == folder_id
+        ]
+        return max(used) + 1 if used else 0
 
     async def create_folder(
         self,
@@ -792,9 +863,9 @@ class WorldStore:
         name: str,
         *,
         parent_id: str | None = None,
-        sort: int = 0,
+        sort: int | None = None,
     ) -> WorldFolder:
-        """新建组织文件夹（parent 必须同世界；None = 世界根）。"""
+        """新建组织文件夹（parent 必须同世界；None = 世界根；sort=None 排到末尾）。"""
         assert self._conn is not None
         if world_id not in self.worlds:
             raise KeyError(f"世界不存在：{world_id}")
@@ -802,6 +873,8 @@ class WorldStore:
             parent = self.folders.get(parent_id)
             if parent is None or parent.world_id != world_id:
                 raise ValueError("父文件夹不存在或不属于该世界")
+        if sort is None:
+            sort = self._next_sort(world_id, parent_id)
         folder = WorldFolder(
             id=uuid.uuid4().hex,
             world_id=world_id,
@@ -829,12 +902,27 @@ class WorldStore:
         )
         await self._conn.commit()
 
-    async def move_folder(self, folder_id: str, parent_id: str | None) -> None:
+    async def set_folder_sort(self, folder_id: str, sort: int) -> None:
+        """设置文件夹在其父节点内的序号。"""
+        assert self._conn is not None
+        if folder_id not in self.folders:
+            raise KeyError(f"文件夹不存在：{folder_id}")
+        self.folders[folder_id].sort = sort
+        await self._conn.execute(
+            "UPDATE world_folders SET sort = ? WHERE id = ?", (sort, folder_id)
+        )
+        await self._conn.commit()
+
+    async def move_folder(
+        self, folder_id: str, parent_id: str | None, *, sort: int | None = None
+    ) -> None:
         """移动文件夹到新父节点（同世界；None = 世界根；防环）。"""
         assert self._conn is not None
         folder = self.folders.get(folder_id)
         if folder is None:
             raise KeyError(f"文件夹不存在：{folder_id}")
+        if parent_id == folder_id:
+            raise ValueError("不能移动到自身之下")
         if parent_id is not None:
             parent = self.folders.get(parent_id)
             if parent is None or parent.world_id != folder.world_id:
@@ -845,10 +933,14 @@ class WorldStore:
                 if node.id == folder_id:
                     raise ValueError("不能移动到自身或其后代之下")
                 node = self.folders.get(node.parent_id) if node.parent_id else None
+        if sort is None:
+            same = folder.parent_id == parent_id
+            sort = folder.sort if same else self._next_sort(folder.world_id, parent_id)
         folder.parent_id = parent_id
+        folder.sort = sort
         await self._conn.execute(
-            "UPDATE world_folders SET parent_id = ? WHERE id = ?",
-            (parent_id, folder_id),
+            "UPDATE world_folders SET parent_id = ?, sort = ? WHERE id = ?",
+            (parent_id, sort, folder_id),
         )
         await self._conn.commit()
 
@@ -876,16 +968,25 @@ class WorldStore:
                 self.map_folder[map_id] = None
 
     def list_maps_by_folder(self, world_id: str, folder_id: str | None) -> list[str]:
-        """世界内某组织节点下的地图 id 列表（folder_id=None = 世界根）。"""
-        return [
+        """世界内某组织节点下的地图 id 列表（folder_id=None = 世界根）。
+
+        按 sort、名称排序——与文件夹共用同一个序号空间，所以"同级排序"是全序。
+        """
+        ids = [
             map_id
             for map_id, wid in self.map_world.items()
             if wid == world_id and self.map_folder.get(map_id) == folder_id
         ]
 
+        def key(map_id: str) -> tuple[int, str, str]:
+            m = self.maps.get(map_id)
+            return (self.map_sort.get(map_id, 0), m.name if m else "", map_id)
+
+        return sorted(ids, key=key)
+
     def list_folders(self, world_id: str) -> list[WorldFolder]:
-        """世界内全部组织文件夹（按 sort 排序）。"""
+        """世界内全部组织文件夹（按 sort、名称排序）。"""
         return sorted(
             (f for f in self.folders.values() if f.world_id == world_id),
-            key=lambda f: (f.sort, f.name),
+            key=lambda f: (f.sort, f.name, f.id),
         )

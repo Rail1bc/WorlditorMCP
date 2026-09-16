@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import logging
 import random
@@ -65,6 +66,7 @@ from .model import (
     WorldFolder,
     WorldMap,
     WorldTemplate,
+    location_to_dict,
     parse_location,
     parse_map,
     parse_path,
@@ -314,6 +316,17 @@ def _check_direction(direction: object) -> str:
     if direction not in DIRECTIONS:
         raise WorldError(f"方向必须是 {'/'.join(DIRECTIONS)} 之一")
     return str(direction)
+
+
+def _clean_sort(sort: object) -> int | None:
+    """组织树序号归一化：None/未给 = 交给下层决定（保留原位或排到末尾）。"""
+    if sort is None or sort is _UNSET:
+        return None
+    if not _is_int(sort):
+        if isinstance(sort, str) and sort.strip().lstrip("-").isdigit():
+            return int(sort.strip())
+        raise WorldError("排序序号必须是整数")
+    return int(sort)
 
 
 class WorldEngine:
@@ -1612,13 +1625,23 @@ class WorldEngine:
             await self.store.delete_world(world_id)
 
     async def assign_map(
-        self, map_id: str, world_id: str, *, folder_id: str | None = None
+        self,
+        map_id: str,
+        world_id: str,
+        *,
+        folder_id: str | None = None,
+        sort: int | None = None,
     ) -> None:
-        """把地图归属到世界（及可选组织节点）；覆盖旧归属。"""
+        """把地图归属到世界（及可选组织节点）；覆盖旧归属。
+
+        ``sort=None``：同世界同节点内重挂保留原位，换节点排到末尾。
+        """
         async with self._lock:
             try:
-                await self.store.assign_map(map_id, world_id, folder_id=folder_id)
-            except KeyError as e:
+                await self.store.assign_map(
+                    map_id, world_id, folder_id=folder_id, sort=_clean_sort(sort)
+                )
+            except (KeyError, ValueError) as e:
                 raise WorldError(str(e)) from None
 
     async def unassign_map(self, map_id: str) -> None:
@@ -1626,22 +1649,133 @@ class WorldEngine:
         async with self._lock:
             await self.store.unassign_map(map_id)
 
-    async def move_map_folder(self, map_id: str, folder_id: str | None) -> None:
+    async def move_map_folder(
+        self, map_id: str, folder_id: str | None, *, sort: int | None = None
+    ) -> None:
         """移动地图到世界内组织节点（None = 世界根）。"""
         async with self._lock:
             try:
-                await self.store.move_map_folder(map_id, folder_id)
+                await self.store.move_map_folder(
+                    map_id, folder_id, sort=_clean_sort(sort)
+                )
+            except (KeyError, ValueError) as e:
+                raise WorldError(str(e)) from None
+
+    async def move_map(
+        self,
+        map_id: str,
+        *,
+        world_id: object = _UNSET,
+        folder_id: object = _UNSET,
+        sort: object = _UNSET,
+    ) -> None:
+        """地图搬家统一入口（组织树拖拽）：世界 / 组织节点 / 序号三者可任意组合。
+
+        ``world_id=None`` = 解除世界归属；``folder_id=None`` = 世界根。
+        跨世界搬家时若只给 folder，旧 folder 必然不属于新世界 → 一并落到世界根。
+        """
+        async with self._lock:
+            if map_id not in self.store.maps:
+                raise WorldError(f"地图不存在：{map_id}")
+            cur_world = self.store.map_world.get(map_id)
+            target_world = cur_world if world_id is _UNSET else world_id
+            target_folder = (
+                self.store.map_folder.get(map_id) if folder_id is _UNSET else folder_id
+            )
+            if target_world is not None and target_world not in self.store.worlds:
+                raise WorldError(f"世界不存在：{target_world}")
+            if target_world is None:
+                if target_folder is not None:
+                    raise WorldError("未归属世界的地图不能放进组织节点")
+                await self.store.unassign_map(map_id)
+                return
+            if target_world != cur_world and folder_id is _UNSET:
+                target_folder = None  # 跨世界：旧组织节点不属于新世界
+            try:
+                await self.store.assign_map(
+                    map_id,
+                    str(target_world),
+                    folder_id=target_folder,
+                    sort=_clean_sort(sort),
+                )
+            except (KeyError, ValueError) as e:
+                raise WorldError(str(e)) from None
+
+    async def set_map_sort(self, map_id: str, sort: int) -> None:
+        """设置地图在其组织节点内的序号。"""
+        async with self._lock:
+            try:
+                await self.store.set_map_sort(map_id, _clean_sort(sort))
             except KeyError as e:
                 raise WorldError(str(e)) from None
 
+    async def reorder_tree(
+        self, world_id: str, parent_id: str | None, items: list[dict]
+    ) -> None:
+        """批量重排某组织节点下的条目（文件夹与地图共用一个序号空间）。
+
+        ``items`` 为 ``[{"type": "folder"|"map", "id": ...}]``，按给定顺序赋
+        序号 0..n-1；未列出的条目排在后面并保持原有相对顺序。跨容器条目报错。
+        """
+        async with self._lock:
+            if world_id not in self.store.worlds:
+                raise WorldError(f"世界不存在：{world_id}")
+            if parent_id is not None:
+                parent = self.store.folders.get(parent_id)
+                if parent is None or parent.world_id != world_id:
+                    raise WorldError("组织节点不存在或不属于该世界")
+            listed: list[tuple[str, str]] = []
+            for item in items or []:
+                if not isinstance(item, dict):
+                    raise WorldError("排序项必须是对象")
+                kind = str(item.get("type") or "")
+                item_id = str(item.get("id") or "")
+                if kind not in ("folder", "map") or not item_id:
+                    raise WorldError("排序项需要 type（folder/map）与 id")
+                if kind == "folder":
+                    f = self.store.folders.get(item_id)
+                    if f is None or f.world_id != world_id:
+                        raise WorldError(f"文件夹不存在或不属于该世界：{item_id}")
+                    if f.parent_id != parent_id:
+                        raise WorldError(f"文件夹不在该组织节点下：{item_id}")
+                else:
+                    if self.store.map_world.get(item_id) != world_id:
+                        raise WorldError(f"地图不存在或不属于该世界：{item_id}")
+                    if self.store.map_folder.get(item_id) != parent_id:
+                        raise WorldError(f"地图不在该组织节点下：{item_id}")
+                listed.append((kind, item_id))
+            if len({i for _, i in listed}) != len(listed):
+                raise WorldError("排序项有重复")
+            # 未列出的条目：保持原有顺序跟在后面
+            seen = {i for _, i in listed}
+            rest = [
+                ("folder", f.id)
+                for f in self.store.list_folders(world_id)
+                if f.parent_id == parent_id and f.id not in seen
+            ] + [
+                ("map", map_id)
+                for map_id in self.store.list_maps_by_folder(world_id, parent_id)
+                if map_id not in seen
+            ]
+            for index, (kind, item_id) in enumerate([*listed, *rest]):
+                if kind == "folder":
+                    await self.store.set_folder_sort(item_id, index)
+                else:
+                    await self.store.set_map_sort(item_id, index)
+
     async def create_folder(
-        self, world_id: str, name: str, *, parent_id: str | None = None, sort: int = 0
+        self,
+        world_id: str,
+        name: str,
+        *,
+        parent_id: str | None = None,
+        sort: int | None = None,
     ) -> WorldFolder:
         """新建组织文件夹（parent 必须同世界；None = 世界根）。"""
         async with self._lock:
             try:
                 return await self.store.create_folder(
-                    world_id, name, parent_id=parent_id, sort=sort
+                    world_id, name, parent_id=parent_id, sort=_clean_sort(sort)
                 )
             except (KeyError, ValueError) as e:
                 raise WorldError(str(e)) from None
@@ -1653,11 +1787,23 @@ class WorldEngine:
             except KeyError as e:
                 raise WorldError(str(e)) from None
 
-    async def move_folder(self, folder_id: str, parent_id: str | None) -> None:
+    async def set_folder_sort(self, folder_id: str, sort: int) -> None:
+        """设置文件夹在其父节点内的序号。"""
+        async with self._lock:
+            try:
+                await self.store.set_folder_sort(folder_id, _clean_sort(sort))
+            except KeyError as e:
+                raise WorldError(str(e)) from None
+
+    async def move_folder(
+        self, folder_id: str, parent_id: str | None, *, sort: int | None = None
+    ) -> None:
         """移动文件夹到新父节点（同世界；None = 世界根；防环）。"""
         async with self._lock:
             try:
-                await self.store.move_folder(folder_id, parent_id)
+                await self.store.move_folder(
+                    folder_id, parent_id, sort=_clean_sort(sort)
+                )
             except (KeyError, ValueError) as e:
                 raise WorldError(str(e)) from None
 
@@ -2337,6 +2483,263 @@ class WorldEngine:
                     raise WorldError("地图上仍有玩家/agent 实体，无法删除")
             await self.store.delete_map(map_id)
             await self._emit("on_world_edited", {"op": "delete_map", "map_id": map_id})
+
+    async def copy_map(
+        self,
+        map_id: str,
+        new_map_id: str,
+        *,
+        name: str | None = None,
+        world_id: object = _UNSET,
+        folder_id: object = _UNSET,
+        with_entities: bool = False,
+    ) -> WorldMap:
+        """复制地图（地块 / 描述 / 连接全量另存为新地图；实体可选带过去）。
+
+        语义：
+        - 同图目标（``map_id`` 空或等于源地图）→ 重写为"新地图自己"，副本内自洽；
+        - 跨图目标（显式指向别的地图）→ 原样保留（那是作者写的跨图连线）；
+        - 身份化实体（玩家）**不复制**——人是人，不是布景；
+        - 归属默认跟随源地图（同世界同组织节点，紧挨着原件）。
+        """
+        async with self._lock:
+            src = self.store.maps.get(map_id)
+            if src is None:
+                raise WorldError(f"地图不存在：{map_id}")
+            new_map_id = _clean_required(new_map_id, "地图 id")
+            if new_map_id in self.store.maps:
+                raise WorldError(f"地图已存在：{new_map_id}")
+            new_name = (
+                _clean_required(name, "地图名称")
+                if name is not None
+                else f"{src.name}（副本）"
+            )
+            dup = parse_map(
+                {
+                    "id": new_map_id,
+                    "name": new_name,
+                    "description": src.description.to_dict()
+                    if src.description
+                    else None,
+                    "timezone": src.timezone,
+                    "spawn_row": src.spawn_row,
+                    "spawn_col": src.spawn_col,
+                    "visible": src.visible,
+                }
+            )
+            await self.store.save_map(dup)
+            for loc in [
+                x for x in self.store.loc_by_pos.values() if x.map_id == map_id
+            ]:
+                cloned = parse_location(location_to_dict(loc))
+                cloned.map_id = new_map_id
+                for slot in cloned.connections.values():
+                    for path in slot.paths:
+                        for t in path.targets:
+                            if t.map_id in ("", map_id):
+                                t.map_id = ""  # 同图目标 → 落到副本自己
+                await self.store.save_location(cloned)
+            if with_entities:
+                for e in list(self.store.entities.values()):
+                    if e.map_id != map_id or e.kind in IDENTITY_KINDS:
+                        continue
+                    clone = Entity(
+                        id=uuid.uuid4().hex,
+                        map_id=new_map_id,
+                        row=e.row,
+                        col=e.col,
+                        kind=e.kind,
+                        name=e.name,
+                        desc=e.desc,
+                        attrs=copy.deepcopy(e.attrs),
+                        state=copy.deepcopy(e.state),
+                        last_active_ts=0.0,
+                    )
+                    await self.store.save_entity(clone)
+            # 归属：默认与源地图同世界同节点
+            target_world = (
+                self.store.map_world.get(map_id) if world_id is _UNSET else world_id
+            )
+            if target_world is not None:
+                target_folder = (
+                    self.store.map_folder.get(map_id)
+                    if folder_id is _UNSET
+                    else folder_id
+                )
+                try:
+                    await self.store.assign_map(
+                        new_map_id, str(target_world), folder_id=target_folder
+                    )
+                except (KeyError, ValueError) as e:
+                    raise WorldError(str(e)) from None
+            await self._emit(
+                "on_world_edited",
+                {"op": "copy_map", "map_id": new_map_id, "from": map_id},
+            )
+            return dup
+
+    # ---------- 地图体检（纯数据检查，无玩法语义；管理端治理视图数据源） ----------
+
+    def lint_map(self, map_id: str) -> dict[str, Any]:
+        """单张地图体检：死连接 / 出生点落空 / 实体悬空 / 孤立地块 / 无世界归属。
+
+        只报"作者看不出来、但运行时有后果"的问题——运行时对死引用是**静默剔除**，
+        所以体检是唯一能提前告知的通道。
+        """
+        m = self.store.maps.get(map_id)
+        if m is None:
+            raise WorldError(f"地图不存在：{map_id}")
+        problems: list[dict] = []
+
+        def add(level: str, code: str, text: str, **where: Any) -> None:
+            problems.append(
+                {"level": level, "code": code, "text": text, "where": where}
+            )
+
+        locs = [x for x in self.store.loc_by_pos.values() if x.map_id == map_id]
+        entities = [e for e in self.store.entities.values() if e.map_id == map_id]
+        has_incoming: set[tuple[str, int, int]] = set()
+        out_count: dict[tuple[str, int, int], int] = {}
+        for loc in locs:
+            usable_exits = 0
+            for direction in DIRECTIONS:
+                slot = loc.connections.get(direction)
+                if slot is None or not slot.enabled:
+                    continue
+                for index, path in enumerate(slot.paths):
+                    main = self._resolve_main(path, loc.map_id)
+                    if main is None:
+                        head = path.targets[0] if path.targets else None
+                        target_txt = (
+                            f"{head.map_id or loc.map_id} ({head.row}, {head.col})"
+                            if head is not None
+                            else "（空路径）"
+                        )
+                        add(
+                            "error",
+                            "dead_target",
+                            f"({loc.row}, {loc.col})「{loc.name}」{direction} 第 "
+                            f"{index + 1} 条路径的主目标 {target_txt} 不存在，"
+                            "运行时整条路径不展示",
+                            map_id=map_id,
+                            row=loc.row,
+                            col=loc.col,
+                            direction=direction,
+                            path=index,
+                        )
+                        continue
+                    usable_exits += 1
+                    has_incoming.add((main.map_id, main.row, main.col))
+                    for alt in path.targets[1:]:
+                        if self.store.resolve_target(alt, loc.map_id) is None:
+                            add(
+                                "warn",
+                                "dead_alt_target",
+                                f"({loc.row}, {loc.col})「{loc.name}」{direction} 第 "
+                                f"{index + 1} 条路径的意外目标 "
+                                f"{alt.map_id or loc.map_id} ({alt.row}, {alt.col}) "
+                                "不存在，抽取时会被跳过",
+                                map_id=map_id,
+                                row=loc.row,
+                                col=loc.col,
+                                direction=direction,
+                                path=index,
+                            )
+            out_count[(map_id, loc.row, loc.col)] = usable_exits
+
+        for loc in locs:
+            key = (map_id, loc.row, loc.col)
+            if out_count.get(key, 0) == 0 and key not in has_incoming:
+                add(
+                    "warn" if len(locs) == 1 else "error",
+                    "isolated_location",
+                    f"({loc.row}, {loc.col})「{loc.name}」既没有出口也没有入口，"
+                    "玩家到不了、也出不去",
+                    map_id=map_id,
+                    row=loc.row,
+                    col=loc.col,
+                )
+            elif out_count.get(key, 0) == 0:
+                add(
+                    "warn",
+                    "no_exit",
+                    f"({loc.row}, {loc.col})「{loc.name}」没有任何可用出口（死胡同）",
+                    map_id=map_id,
+                    row=loc.row,
+                    col=loc.col,
+                )
+            elif key not in has_incoming:
+                add(
+                    "warn",
+                    "no_entry",
+                    f"({loc.row}, {loc.col})「{loc.name}」没有任何路径指向它（只能作为起点）",
+                    map_id=map_id,
+                    row=loc.row,
+                    col=loc.col,
+                )
+
+        if not locs:
+            add("warn", "empty_map", f"地图「{m.name}」还没有任何地块", map_id=map_id)
+        elif (map_id, m.spawn_row, m.spawn_col) not in self.store.loc_by_pos:
+            add(
+                "error",
+                "spawn_missing",
+                f"出生点 ({m.spawn_row}, {m.spawn_col}) 没有地块，新玩家会落空",
+                map_id=map_id,
+                row=m.spawn_row,
+                col=m.spawn_col,
+            )
+
+        for e in entities:
+            if e.pos_key() not in self.store.loc_by_pos:
+                add(
+                    "error",
+                    "dangling_entity",
+                    f"实体「{e.name}」（{e.kind}）在 ({e.row}, {e.col}) 但那里没有地块",
+                    map_id=map_id,
+                    row=e.row,
+                    col=e.col,
+                    entity_id=e.id,
+                )
+
+        if map_id not in self.store.map_world:
+            add(
+                "warn",
+                "no_world",
+                "这张地图未归属任何世界——运行时按默认世界的玩法包启停生效",
+                map_id=map_id,
+            )
+
+        errors = sum(1 for p in problems if p["level"] == "error")
+        warns = sum(1 for p in problems if p["level"] == "warn")
+        return {
+            "map_id": map_id,
+            "name": m.name,
+            "world_id": self.store.map_world.get(map_id),
+            "folder_id": self.store.map_folder.get(map_id),
+            "location_count": len(locs),
+            "entity_count": len(entities),
+            "counts": {"error": errors, "warn": warns},
+            "problems": problems,
+        }
+
+    def lint_maps(self, map_ids: list[str] | None = None) -> dict[str, Any]:
+        """地图总检（全部或指定地图）；按错误数降序，方便治理视图先看要紧的。"""
+        targets = list(map_ids) if map_ids is not None else list(self.store.maps.keys())
+        results = [
+            self.lint_map(map_id) for map_id in targets if map_id in self.store.maps
+        ]
+        results.sort(
+            key=lambda r: (-r["counts"]["error"], -r["counts"]["warn"], r["map_id"])
+        )
+        return {
+            "maps": results,
+            "counts": {
+                "maps": len(results),
+                "error": sum(r["counts"]["error"] for r in results),
+                "warn": sum(r["counts"]["warn"] for r in results),
+            },
+        }
 
     async def save_template(self, template: WorldTemplate) -> None:
         """写回 / 新建模板（地图编辑；D14 玩法包可调）。"""

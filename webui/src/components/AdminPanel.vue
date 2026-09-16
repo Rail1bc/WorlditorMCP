@@ -130,6 +130,7 @@ import AccountsPage from "../pages/admin/AccountsPage.vue";
 import InvitesPage from "../pages/admin/InvitesPage.vue";
 import WorldPlaysPage from "../pages/admin/WorldPlaysPage.vue";
 import WorldMapsPage from "../pages/admin/WorldMapsPage.vue";
+import AllMapsPage from "../pages/admin/AllMapsPage.vue";
 import MapEditorPage from "../pages/admin/MapEditorPage.vue";
 import PlayPageHost from "../pages/admin/PlayPageHost.vue";
 import WorldEditModal from "./WorldEditModal.vue";
@@ -137,16 +138,21 @@ import WorldEditModal from "./WorldEditModal.vue";
 const GLOBAL_NAV = [
   { key: "accounts", title: "账户管理", icon: "👤" },
   { key: "invites", title: "邀请码", icon: "🎫" },
+  { key: "allmaps", title: "全部地图", icon: "🗺" },
 ];
 
 const PAGES = {
   accounts: AccountsPage,
   invites: InvitesPage,
   plays: WorldPlaysPage, // 世界上下文：该世界的玩法包
-  maps: WorldMapsPage, // 世界上下文：该世界的地图
+  maps: WorldMapsPage, // 世界上下文：该世界的地图与组织树
+  allmaps: AllMapsPage, // 跨世界：地图治理总览
   map: MapEditorPage, // 地图编辑器（从地图页进入）
   pages: PlayPageHost, // 玩法包管理页（#/admin/pages/{play_id}/{key}）
 };
+
+// 页面 → URL 段（allmaps 的规范地址就是 #/admin/maps）
+const PAGE_PATH = { allmaps: "maps" };
 
 const WORLD_KEY = "worlditor_admin_world";
 const PAGES_OPEN_KEY = "worlditor_admin_pages_open";
@@ -219,7 +225,8 @@ function pageOn(pg) {
 
 function parseRoute(hash) {
   // "#/admin/accounts" | "#/admin/world/{id}/plays" | "#/admin/world/{id}/maps"
-  // | "#/admin/maps/{map_id}" | "#/admin/pages/{play_id}/{key}"
+  // | "#/admin/maps"（全部地图总览） | "#/admin/maps/{map_id}"（编辑器）
+  // | "#/admin/pages/{play_id}/{key}"
   const parts = hash.replace(/^#/, "").split("/").filter(Boolean);
   const key = parts[1] || "";
   if (key === "world") {
@@ -232,8 +239,9 @@ function parseRoute(hash) {
     };
   }
   if (key === "maps") {
+    // 带地图 id = 编辑器；不带 = 跨世界的全部地图总览（v0.4.0 起）
     return {
-      key: parts[2] ? "map" : "maps",
+      key: parts[2] ? "map" : "allmaps",
       worldId: "",
       playId: "",
       pageKey: "",
@@ -251,8 +259,8 @@ function parseRoute(hash) {
 
 function syncRoute() {
   const raw = parseRoute(location.hash);
-  // 旧链接（v0.2.x：#/admin/plays、#/admin/worlds）→ 收敛到当前世界的页面
-  const legacy = { plays: "plays", worlds: "maps" };
+  // 旧链接（v0.2.x）：#/admin/plays → 当前世界的玩法包；#/admin/worlds → 全部地图
+  const legacy = { plays: "plays", worlds: "allmaps" };
   const info = legacy[raw.key] ? { ...raw, key: legacy[raw.key] } : raw;
   route.value = info.key && PAGES[info.key] ? info.key : (worldId.value ? "plays" : "accounts");
   routeInfo.value = {
@@ -264,18 +272,17 @@ function syncRoute() {
   if (info.worldId && info.worldId !== worldId.value && worlds.value.some((w) => w.id === info.worldId)) {
     setWorld(info.worldId);
   }
-  // 规范化 URL：世界上下文的页面一律写成 #/admin/world/{id}/{page}
-  // （replaceState 不触发 hashchange，避免二次解析）
-  if (
-    worldId.value &&
-    (route.value === "plays" || route.value === "maps") &&
-    raw.worldId !== worldId.value
-  ) {
-    history.replaceState(
-      null,
-      "",
-      `#/admin/world/${encodeURIComponent(worldId.value)}/${route.value}`
-    );
+  // 地址栏规范化（旧链接 / 世界上下文一律收敛成规范地址；replaceState 不触发
+  // hashchange，避免二次解析）。编辑器与玩法包管理页的地址带参数，不动。
+  const seg = PAGE_PATH[route.value] || route.value;
+  let canonical = "";
+  if (route.value === "plays" || route.value === "maps") {
+    if (worldId.value) canonical = `#/admin/world/${encodeURIComponent(worldId.value)}/${seg}`;
+  } else if (route.value !== "pages" && route.value !== "map") {
+    canonical = `#/admin/${seg}`;
+  }
+  if (canonical && location.hash !== canonical) {
+    history.replaceState(null, "", canonical);
   }
 }
 
@@ -290,11 +297,12 @@ function pickWorld(id) {
 }
 
 function goto(key) {
+  const segment = PAGE_PATH[key] || key;
   if ((key === "plays" || key === "maps") && worldId.value) {
     location.hash = `#/admin/world/${encodeURIComponent(worldId.value)}/${key}`;
     route.value = key;
   } else {
-    location.hash = `#/admin/${key}`;
+    location.hash = `#/admin/${segment}`;
     route.value = key;
   }
   routeInfo.value = { playId: "", pageKey: "", mapId: "" };

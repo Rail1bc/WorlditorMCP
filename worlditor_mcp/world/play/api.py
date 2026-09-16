@@ -403,10 +403,19 @@ class WorlditorPlayAPI:
         await self._engine.create_map(map_id, name, description=description, **kwargs)
 
     async def assign_map(
-        self, map_id: str, world_id: str, *, folder_id: str | None = None
+        self,
+        map_id: str,
+        world_id: str,
+        *,
+        folder_id: str | None = None,
+        sort: int | None = None,
     ) -> None:
-        """把地图归属到世界（世界包导入内容时用；覆盖旧归属）。"""
-        await self._engine.assign_map(map_id, world_id, folder_id=folder_id)
+        """把地图归属到世界（世界包导入内容时用；覆盖旧归属）。
+
+        ``sort`` 为该组织节点内的序号（文件夹与地图共用序号空间，
+        见 DESIGN §4.3.2）；缺省 = 同节点保留原位 / 换节点排到末尾。
+        """
+        await self._engine.assign_map(map_id, world_id, folder_id=folder_id, sort=sort)
 
     async def delete_map(self, map_id: str) -> None:
         """删除地图（G2：级联清理；图上玩家/agent 在场被拒）。"""

@@ -131,6 +131,59 @@ def test_world_pages_toggle_activation_and_own_maps():
     assert "返回玩法包" not in host
 
 
+def test_map_governance_pages_shape():
+    """地图治理页（v0.4.0）：组织树递归/拖拽/排序 + 跨世界总览 + 体检 + 复制。
+
+    回归背景：v0.3.0 的组织树页只渲染两层（第三层在 UI 里根本看不见）、二级
+    文件夹里的地图没有移动入口（放进去就出不来）、`sort` 从建表起没被写过。
+    """
+    maps = (_WEBUI / "pages" / "admin" / "WorldMapsPage.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "draggable" in maps  # 拖拽移动/排序
+    assert "reorder" in maps  # 批量序号落位
+    assert "InlineEdit" in maps  # 内联重命名（替代 prompt）
+    assert "askConfirm" in maps  # 统一确认层（替代 confirm）
+    assert "lint" in maps  # 体检徽章与明细
+    assert "/admin/maps/" in maps and "/copy" in maps  # 复制另存
+
+    allmaps = (_WEBUI / "pages" / "admin" / "AllMapsPage.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "跨世界" in allmaps
+    assert "/move" in allmaps  # 批量归属/转移走统一搬家端点
+    assert "selected" in allmaps  # 多选批量
+
+    panel = (_WEBUI / "components" / "AdminPanel.vue").read_text(encoding="utf-8")
+    assert "全部地图" in panel  # 通用管理组入口
+    assert "AllMapsPage" in panel
+    assert "allmaps" in panel  # #/admin/maps = 跨世界总览
+
+
+def test_admin_pages_use_no_native_dialogs():
+    """管理端不用原生 confirm/prompt/alert（iframe/沙箱下会被浏览器屏蔽）。"""
+    offenders = []
+    for path in sorted((_WEBUI).rglob("*.vue")) + sorted((_WEBUI).rglob("*.js")):
+        text = path.read_text(encoding="utf-8")
+        for pattern in (
+            r"(?<![\w.$])confirm\(",
+            r"(?<![\w.$])prompt\(",
+            r"(?<![\w.$])alert\(",
+        ):
+            for match in re.finditer(pattern, text):
+                line = text[: match.start()].count("\n") + 1
+                offenders.append(f"{path.name}:{line} {match.group(0)}")
+    assert not offenders, f"原生弹窗应改用 askConfirm()：{offenders}"
+
+
+def test_confirm_host_is_mounted_globally():
+    """确认层宿主挂在 App.vue（所有页面共用一个 Promise API）。"""
+    app = (_WEBUI / "App.vue").read_text(encoding="utf-8")
+    assert "ConfirmHost" in app
+    confirm = (_WEBUI / "confirm.js").read_text(encoding="utf-8")
+    assert "askConfirm" in confirm and "settleConfirm" in confirm
+
+
 def test_view_components_use_no_hardcoded_light_colors():
     """视图组件不得硬编码浅色（否则暗色主题下白底/白底白字）。"""
     files = _view_component_files()

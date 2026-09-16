@@ -8,26 +8,9 @@
     </h2>
     <p v-if="error" class="error-text">{{ error }}</p>
 
-    <!-- 未选地图：列表选择 -->
+    <!-- 未选地图：地图总览页负责选择（v0.4.0 起 #/admin/maps 是跨世界总览） -->
     <div v-if="!mapId" class="picker">
-      <button
-        v-for="m in maps"
-        :key="m.id"
-        class="page-entry"
-        @click="openMap(m.id)"
-      >
-        <span>🗺 {{ m.name || m.id }}</span>
-        <span class="dim">
-          {{ m.location_count }} 地块 · {{ m.entity_count }} 实体
-          <template v-if="m.world_id"> · 属于 {{ m.world_id }}</template>
-        </span>
-      </button>
-      <button class="btn" @click="createMapForm = !createMapForm">＋ 新建地图</button>
-      <div v-if="createMapForm" class="inline-form">
-        <input v-model="nm.id" placeholder="地图 id（如 arena）" />
-        <input v-model="nm.name" placeholder="名称" />
-        <button class="btn" @click="createMap">创建</button>
-      </div>
+      <p class="dim">没有指定地图——正在跳转到「全部地图」…</p>
     </div>
 
     <template v-else>
@@ -214,11 +197,11 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../api";
+import { askConfirm } from "../../confirm";
 
 const DIR_KEYS = ["up", "right", "down", "left"];
 const dirLabel = { up: "北↑", right: "东→", down: "南↓", left: "西←" };
 
-const maps = ref([]);
 const mapId = ref("");
 const worldId = ref(""); // 该地图所属世界（侧栏上下文 + 返回目标）
 const meta = reactive({ name: "", visible: "public", spawn_row: 0, spawn_col: 0, timezone: "" });
@@ -231,8 +214,6 @@ const locForm = reactive({ name: "", description: "" });
 const connForm = reactive({});
 const nf = reactive({ kind: "", name: "", desc: "", row: 0, col: 0 });
 const nt = reactive({ id: "", name: "", data: "" });
-const nm = reactive({ id: "", name: "" });
-const createMapForm = ref(false);
 const gridSpan = 12; // 空地图默认网格跨度
 
 function syncFromHash() {
@@ -280,14 +261,6 @@ function dirMarks(conns) {
 
 function newPath() {
   return { label: "", targetsText: "", reveal_target: true };
-}
-
-async function loadMaps() {
-  try {
-    maps.value = (await apiGet("/admin/maps")).maps || [];
-  } catch (e) {
-    error.value = e.message;
-  }
 }
 
 async function loadDetail() {
@@ -393,8 +366,13 @@ async function saveLocation() {
 }
 
 async function removeLocation(cell) {
-  if (!confirm(`删除地块 (${cell.row}, ${cell.col})「${cell.loc.name}」？其上实体一并删除。`))
-    return;
+  const ok = await askConfirm({
+    title: "删除地块",
+    danger: true,
+    text: `删除地块 (${cell.row}, ${cell.col})「${cell.loc.name}」？`,
+    detail: "其上实体一并删除，指向它的连接目标会被清理。有玩家在场时会被拒绝。",
+  });
+  if (!ok) return;
   try {
     await apiDelete("/admin/locations", {
       map_id: mapId.value,
@@ -457,27 +435,22 @@ async function saveMeta() {
       spawn_col: meta.spawn_col,
       timezone: meta.timezone || null,
     });
-    await loadMaps();
   } catch (e) {
     error.value = e.message;
   }
 }
 
 async function removeMap() {
-  if (!confirm(`删除地图「${meta.name}」？地块/实体/归属将级联删除，不可恢复。`)) return;
+  const ok = await askConfirm({
+    title: "删除地图",
+    danger: true,
+    text: `删除地图「${meta.name}」？`,
+    detail: "地块 / 实体 / 世界归属将级联删除，不可恢复。图上有玩家实体时会被拒绝。",
+  });
+  if (!ok) return;
   try {
     await apiDelete(`/admin/maps/${mapId.value}`);
     goBack();
-  } catch (e) {
-    error.value = e.message;
-  }
-}
-
-async function createMap() {
-  try {
-    await apiPost("/admin/maps", { id: nm.id, name: nm.name });
-    await loadMaps();
-    openMap(nm.id);
   } catch (e) {
     error.value = e.message;
   }
@@ -511,7 +484,12 @@ async function saveEntityName(e) {
 }
 
 async function removeEntity(e) {
-  if (!confirm(`删除实体「${e.name}」（${e.kind}）？`)) return;
+  const ok = await askConfirm({
+    title: "删除实体",
+    danger: true,
+    text: `删除实体「${e.name}」（${e.kind}）？`,
+  });
+  if (!ok) return;
   try {
     await apiDelete(`/admin/entities/${e.id}`);
     await loadDetail();
@@ -549,17 +527,19 @@ async function createTemplate() {
 }
 
 async function removeTemplate(t) {
-  if (!confirm(`删除模板「${t.name}」？`)) return;
+  const ok = await askConfirm({
+    title: "删除模板",
+    danger: true,
+    text: `删除模板「${t.name}」？`,
+    detail: "模板是全局的（不跟地图），删除后其他地图也不再能用它。",
+  });
+  if (!ok) return;
   try {
     await apiDelete(`/admin/templates/${t.id}`);
     templates.value = (await apiGet("/admin/templates")).templates || [];
   } catch (e) {
     error.value = e.message;
   }
-}
-
-function openMap(id) {
-  location.hash = `#/admin/maps/${id}`;
 }
 
 function goBack() {
@@ -570,7 +550,6 @@ function goBack() {
 
 onMounted(async () => {
   syncFromHash();
-  await loadMaps();
   window.addEventListener("hashchange", async () => {
     const prev = mapId.value;
     syncFromHash();
@@ -578,7 +557,12 @@ onMounted(async () => {
       if (mapId.value) await loadDetail();
     }
   });
-  if (mapId.value) await loadDetail();
+  if (mapId.value) {
+    await loadDetail();
+  } else {
+    // 没带地图 id → 去跨世界总览页选
+    location.hash = "#/admin/maps";
+  }
 });
 </script>
 

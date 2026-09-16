@@ -35,6 +35,7 @@
 <script setup>
 import { reactive, ref } from "vue";
 import { apiPost, apiPatch, apiDelete } from "../api";
+import { askConfirm } from "../confirm";
 
 const props = defineProps({
   world: { type: Object, default: null }, // null = 新建
@@ -76,12 +77,13 @@ async function save() {
 }
 
 async function remove() {
-  if (
-    !confirm(
-      `删除世界「${form.name || form.id0}」？其组织树与地图归属一并删除（地图本身保留，变成未归属）。`
-    )
-  )
-    return;
+  const ok = await askConfirm({
+    title: "删除世界",
+    danger: true,
+    text: `删除世界「${form.name || form.id0}」？`,
+    detail: "其组织树与地图归属一并删除（地图本身保留，变成未归属）。世界仍有地图归属时会被拒绝。",
+  });
+  if (!ok) return;
   error.value = "";
   busy.value = true;
   try {

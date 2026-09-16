@@ -52,6 +52,7 @@
 <script setup>
 import { onMounted, ref } from "vue";
 import { apiGet, apiPost, apiDelete } from "../../api";
+import { askConfirm } from "../../confirm";
 
 const codes = ref([]);
 const fresh = ref([]);
@@ -78,7 +79,13 @@ async function makeCodes(count) {
 }
 
 async function revoke(code) {
-  if (!confirm(`吊销邀请码 ${code}？`)) return;
+  const ok = await askConfirm({
+    title: "吊销邀请码",
+    danger: true,
+    text: `吊销邀请码 ${code}？`,
+    detail: "未使用的邀请码将立即失效。",
+  });
+  if (!ok) return;
   try {
     await apiDelete(`/admin/invite-codes/${code}`);
     await load();
