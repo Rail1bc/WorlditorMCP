@@ -400,27 +400,37 @@ class WorldStore:
 
     async def save_location(self, loc: Location) -> None:
         """写回 / 新建一个地块（整体替换对象）。"""
-        assert self._conn is not None
-        await self._insert_location(loc)
-        self.loc_by_pos[(loc.map_id, loc.row, loc.col)] = loc
+        await self.save_locations([loc])
 
-    async def _insert_location(self, loc: Location) -> None:
-        assert self._conn is not None
-
+    def _location_row(self, loc: Location) -> tuple:
         data = location_to_dict(loc)
-        await self._conn.execute(
-            "INSERT OR REPLACE INTO locations(map_id, row, col, name, description_json, conns_json) "
+        return (
+            loc.map_id,
+            loc.row,
+            loc.col,
+            loc.name,
+            json.dumps(data["description"]) if data["description"] else None,
+            json.dumps(data["connections"]),
+        )
+
+    async def save_locations(self, locs: list[Location]) -> None:
+        """批量写回地块（**单事务**）。
+
+        地图复制这类批量路径必须走它：逐行提交在 WAL 下每行一次 fsync，
+        而调用方（引擎）持着实例锁——几千行的地图会把整个世界卡住。
+        """
+        assert self._conn is not None
+        if not locs:
+            return
+        await self._conn.executemany(
+            "INSERT OR REPLACE INTO locations"
+            "(map_id, row, col, name, description_json, conns_json) "
             "VALUES(?, ?, ?, ?, ?, ?)",
-            (
-                loc.map_id,
-                loc.row,
-                loc.col,
-                loc.name,
-                json.dumps(data["description"]) if data["description"] else None,
-                json.dumps(data["connections"]),
-            ),
+            [self._location_row(loc) for loc in locs],
         )
         await self._conn.commit()
+        for loc in locs:
+            self.loc_by_pos[(loc.map_id, loc.row, loc.col)] = loc
 
     async def delete_location(self, map_id: str, row: int, col: int) -> None:
         """删除地块（引用清理由引擎负责）。"""
@@ -470,19 +480,22 @@ class WorldStore:
 
     async def save_entity(self, entity: Entity) -> None:
         """写回 / 新建一个实体（整体替换对象）。"""
-        assert self._conn is not None
-        await self._insert_entity(entity)
-        self.entities[entity.id] = entity
+        await self.save_entities([entity])
 
-    async def _insert_entity(self, entity: Entity) -> None:
+    async def save_entities(self, entities: list[Entity]) -> None:
+        """批量写回实体（单事务；同 ``save_locations`` 的理由）。"""
         assert self._conn is not None
-        await self._conn.execute(
+        if not entities:
+            return
+        await self._conn.executemany(
             "INSERT OR REPLACE INTO entities("
             "id, map_id, row, col, kind, name, desc, user_id, attrs_json, state_json, last_active_ts"
             ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            entity_db_row(entity),
+            [entity_db_row(e) for e in entities],
         )
         await self._conn.commit()
+        for entity in entities:
+            self.entities[entity.id] = entity
 
     async def delete_entity(self, entity_id: str) -> None:
         """删除实体。"""

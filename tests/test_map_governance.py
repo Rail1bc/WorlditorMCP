@@ -589,6 +589,94 @@ def test_admin_endpoints_wire_governance_ops(tmp_path):
     _run(_admin_scenario(tmp_path, fn))
 
 
+# ---------- 旧库升级（v0.4.0 新增列；CHANGELOG 承诺"旧 world.db 直接可用"） ----------
+
+
+def test_legacy_db_without_sort_column_is_upgraded_in_place(tmp_path):
+    """v0.3.0 及更早的库（world_maps 无 sort 列）能被原地升级并正常读写。
+
+    ``CREATE TABLE IF NOT EXISTS`` 不会给既有表补列，旧库全靠 `_ensure_columns`
+    的 `ALTER TABLE`——这是"旧数据不丢"的唯一保障，不能只靠新库跑通就算过了。
+    """
+
+    async def fn():
+        import aiosqlite
+
+        db = tmp_path / "legacy.db"
+        conn = await aiosqlite.connect(db)
+        # 故意用 v0.3.0 的旧表结构（world_maps 没有 sort）
+        await conn.executescript(
+            """
+            CREATE TABLE maps (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, description_json TEXT,
+                timezone TEXT, spawn_row INTEGER NOT NULL DEFAULT 0,
+                spawn_col INTEGER NOT NULL DEFAULT 0,
+                visible TEXT NOT NULL DEFAULT 'public');
+            CREATE TABLE locations (
+                map_id TEXT NOT NULL, row INTEGER NOT NULL, col INTEGER NOT NULL,
+                name TEXT NOT NULL, description_json TEXT,
+                conns_json TEXT NOT NULL DEFAULT '{}',
+                PRIMARY KEY (map_id, row, col));
+            CREATE TABLE templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, data_json TEXT NOT NULL);
+            CREATE TABLE world_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE worlds (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                desc TEXT NOT NULL DEFAULT '', play_ids_json TEXT NOT NULL DEFAULT '[]');
+            CREATE TABLE world_folders (
+                id TEXT PRIMARY KEY, world_id TEXT NOT NULL, parent_id TEXT,
+                name TEXT NOT NULL, sort INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE world_maps (map_id TEXT PRIMARY KEY, world_id TEXT NOT NULL, folder_id TEXT);
+            """
+        )
+        await conn.execute("INSERT INTO worlds VALUES('default','默认世界','','[]')")
+        await conn.execute(
+            "INSERT INTO maps(id, name, spawn_row, spawn_col) "
+            "VALUES('legacy_map','旧图',0,0)"
+        )
+        await conn.execute(
+            "INSERT INTO world_maps(map_id, world_id, folder_id) "
+            "VALUES('legacy_map','default',NULL)"
+        )
+        await conn.execute(
+            "INSERT INTO locations(map_id, row, col, name) VALUES('legacy_map',0,0,'旧广场')"
+        )
+        await conn.commit()
+        await conn.close()
+
+        engine = WorldEngine(WorldStore(db))
+        await engine.initialize()
+        try:
+            # 旧数据完好，且补列后序号可用
+            assert engine.map_world("legacy_map") == "default"
+            assert engine.store.map_sort["legacy_map"] == 0
+            assert engine.get_location("legacy_map", 0, 0).name == "旧广场"
+            # 补列后排序功能正常：新文件夹排到已有条目之后
+            folder = await engine.create_folder("default", "新组")
+            assert folder.sort == 1
+            await engine.reorder_tree(
+                "default",
+                None,
+                [
+                    {"type": "folder", "id": folder.id},
+                    {"type": "map", "id": "legacy_map"},
+                ],
+            )
+            assert engine.list_folders("default")[0].id == folder.id
+            assert engine.store.map_sort["legacy_map"] == 1
+        finally:
+            await engine.terminate()
+
+        # 二次打开（列已存在）仍然幂等
+        again = WorldEngine(WorldStore(db))
+        await again.initialize()
+        try:
+            assert again.store.map_sort["legacy_map"] == 1
+        finally:
+            await again.terminate()
+
+    _run(fn())
+
+
 def test_admin_folders_list_carries_sort_and_map_meta(tmp_path):
     """侧栏/树需要的元数据：文件夹 sort、地图 folder_id + sort。"""
 
@@ -601,3 +689,59 @@ def test_admin_folders_list_carries_sort_and_map_meta(tmp_path):
         assert all("sort" in m for m in wa["maps"])
 
     _run(_admin_scenario(tmp_path, fn))
+
+
+# ---------- 写路径的输入校验（审查补漏：组织树相关入口此前不校验名称） ----------
+
+
+def test_tree_names_and_world_ids_are_validated(tmp_path):
+    """空 id / 空名称必须在**内核**被拒（UI 挡了不算，API 是公开边界）。"""
+
+    async def fn():
+        engine = await _engine(tmp_path)
+        try:
+            for bad in ("", "   ", None):
+                try:
+                    await engine.create_world(bad, "名字")
+                except WorldError as e:
+                    assert "世界 id" in str(e)
+                else:
+                    raise AssertionError(f"空世界 id 居然被接受：{bad!r}")
+                try:
+                    await engine.create_world("w_ok", bad)
+                except WorldError as e:
+                    assert "世界名称" in str(e)
+                else:
+                    raise AssertionError(f"空世界名居然被接受：{bad!r}")
+            world = await engine.create_world("w_ok", "正常世界")
+            assert world.name == "正常世界"
+
+            for bad in ("", "  "):
+                try:
+                    await engine.create_folder("w_ok", bad)
+                except WorldError as e:
+                    assert "文件夹名称" in str(e)
+                else:
+                    raise AssertionError(f"空文件夹名居然被接受：{bad!r}")
+            folder = await engine.create_folder("w_ok", " 正常组 ")
+            assert folder.name == "正常组"  # 顺手 strip
+
+            try:
+                await engine.rename_folder(folder.id, "")
+            except WorldError as e:
+                assert "文件夹名称" in str(e)
+            else:
+                raise AssertionError("空文件夹名居然能改名成功")
+            try:
+                await engine.update_world("w_ok", name="  ")
+            except WorldError as e:
+                assert "世界名称" in str(e)
+            else:
+                raise AssertionError("空世界名居然能改名成功")
+            # 不传 name = 不变（None 表示"不改"）
+            same = await engine.update_world("w_ok", desc="改描述")
+            assert same.name == "正常世界" and same.desc == "改描述"
+        finally:
+            await engine.terminate()
+
+    _run(fn())

@@ -1591,6 +1591,8 @@ class WorldEngine:
     ) -> World:
         """新建世界（D15：id = 玩法包激活集合配置边界）。"""
         async with self._lock:
+            world_id = _clean_required(world_id, "世界 id")
+            name = _clean_required(name, "世界名称")
             try:
                 return await self.store.create_world(
                     world_id, name, desc=desc, play_ids=play_ids
@@ -1608,6 +1610,8 @@ class WorldEngine:
     ) -> World:
         """更新世界（名称/描述/激活玩法包集合；None = 不变）。"""
         async with self._lock:
+            if name is not None:
+                name = _clean_required(name, "世界名称")
             try:
                 return await self.store.update_world(
                     world_id, name=name, desc=desc, play_ids=play_ids
@@ -1773,6 +1777,7 @@ class WorldEngine:
     ) -> WorldFolder:
         """新建组织文件夹（parent 必须同世界；None = 世界根）。"""
         async with self._lock:
+            name = _clean_required(name, "文件夹名称")
             try:
                 return await self.store.create_folder(
                     world_id, name, parent_id=parent_id, sort=_clean_sort(sort)
@@ -1782,6 +1787,7 @@ class WorldEngine:
 
     async def rename_folder(self, folder_id: str, name: str) -> None:
         async with self._lock:
+            name = _clean_required(name, "文件夹名称")
             try:
                 await self.store.rename_folder(folder_id, name)
             except KeyError as e:
@@ -2500,7 +2506,7 @@ class WorldEngine:
         - 同图目标（``map_id`` 空或等于源地图）→ 重写为"新地图自己"，副本内自洽；
         - 跨图目标（显式指向别的地图）→ 原样保留（那是作者写的跨图连线）；
         - 身份化实体（玩家）**不复制**——人是人，不是布景；
-        - 归属默认跟随源地图（同世界同组织节点，紧挨着原件）。
+        - 归属默认跟随源地图（同世界同组织节点，排到该节点末尾）。
         """
         async with self._lock:
             src = self.store.maps.get(map_id)
@@ -2528,6 +2534,7 @@ class WorldEngine:
                 }
             )
             await self.store.save_map(dup)
+            cloned_locs = []
             for loc in [
                 x for x in self.store.loc_by_pos.values() if x.map_id == map_id
             ]:
@@ -2538,24 +2545,29 @@ class WorldEngine:
                         for t in path.targets:
                             if t.map_id in ("", map_id):
                                 t.map_id = ""  # 同图目标 → 落到副本自己
-                await self.store.save_location(cloned)
+                cloned_locs.append(cloned)
+            # 批量单事务写：复制是引擎锁内的大批量路径，逐行提交会卡住整个世界
+            await self.store.save_locations(cloned_locs)
             if with_entities:
+                cloned_entities = []
                 for e in list(self.store.entities.values()):
                     if e.map_id != map_id or e.kind in IDENTITY_KINDS:
                         continue
-                    clone = Entity(
-                        id=uuid.uuid4().hex,
-                        map_id=new_map_id,
-                        row=e.row,
-                        col=e.col,
-                        kind=e.kind,
-                        name=e.name,
-                        desc=e.desc,
-                        attrs=copy.deepcopy(e.attrs),
-                        state=copy.deepcopy(e.state),
-                        last_active_ts=0.0,
+                    cloned_entities.append(
+                        Entity(
+                            id=uuid.uuid4().hex,
+                            map_id=new_map_id,
+                            row=e.row,
+                            col=e.col,
+                            kind=e.kind,
+                            name=e.name,
+                            desc=e.desc,
+                            attrs=copy.deepcopy(e.attrs),
+                            state=copy.deepcopy(e.state),
+                            last_active_ts=0.0,
+                        )
                     )
-                    await self.store.save_entity(clone)
+                await self.store.save_entities(cloned_entities)
             # 归属：默认与源地图同世界同节点
             target_world = (
                 self.store.map_world.get(map_id) if world_id is _UNSET else world_id
