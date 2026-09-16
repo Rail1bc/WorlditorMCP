@@ -370,9 +370,18 @@ async def _views(request: Request) -> Response:
     """视图列表（D7：前端路由初始化共用；元数据无敏感信息，免认证）。
 
     登录页也要用（决定是否显示"无视图"提示），故不做档位限制。
+    D15/v0.3.0：已登录时按**调用者所在世界**过滤——该世界未启用的玩法包，
+    它的视图 tab 不出现（与工具面过滤同一套判断）。
     """
     engine = request.app.state.world_engine
-    return JSONResponse({"views": engine.list_views()})
+    info = _identity_of(request.scope)
+    entity_id = info.entity_id if info is not None else ""
+    views = [
+        v
+        for v in engine.list_views()
+        if engine.play_active_for_entity(entity_id, v.get("play_id", ""))
+    ]
+    return JSONResponse({"views": views})
 
 
 async def _meta(request: Request) -> Response:

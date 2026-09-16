@@ -116,8 +116,11 @@ class WorlditorPlayAPI:
 
         玩法包生成自己的界面数据后调用——其他包注入的部件 UI（如背包面板
         注入角色卡）在此展开；返回注入后的 UiBlock（或 None）。
+
+        D15/v0.3.0：按**当前调用者所在世界**过滤——注入方玩法包在该世界未
+        启用时，其部件不出现（无身份上下文时不过滤）。
         """
-        return await self._engine.apply_ui_hooks(block)
+        return await self._engine.apply_ui_hooks(block, entity_id=self.caller())
 
     # ---------- 只读 ----------
 

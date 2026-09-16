@@ -3,7 +3,8 @@
     <h2 class="head">
       地图编辑器
       <code class="dim">{{ mapId || "未选择" }}</code>
-      <button class="btn btn-ghost" @click="goBack">← 返回世界页</button>
+      <code v-if="worldId" class="dim">· {{ worldId }}</code>
+      <button class="btn btn-ghost" @click="goBack">← 地图列表</button>
     </h2>
     <p v-if="error" class="error-text">{{ error }}</p>
 
@@ -219,6 +220,7 @@ const dirLabel = { up: "北↑", right: "东→", down: "南↓", left: "西←"
 
 const maps = ref([]);
 const mapId = ref("");
+const worldId = ref(""); // 该地图所属世界（侧栏上下文 + 返回目标）
 const meta = reactive({ name: "", visible: "public", spawn_row: 0, spawn_col: 0, timezone: "" });
 const locations = ref([]);
 const entities = ref([]);
@@ -299,6 +301,15 @@ async function loadDetail() {
       spawn_col: data.map.spawn_col,
       timezone: data.map.timezone || "",
     });
+    // 世界上下文：让侧栏世界下拉跟随这张地图的归属（深链接/直接打开也对上）
+    worldId.value = data.map.world_id || "";
+    if (worldId.value) {
+      window.dispatchEvent(
+        new CustomEvent("worlditor:select-world", {
+          detail: { world_id: worldId.value },
+        })
+      );
+    }
     locations.value = data.locations || [];
     entities.value = data.entities || [];
     templates.value = (await apiGet("/admin/templates")).templates || [];
@@ -552,7 +563,9 @@ function openMap(id) {
 }
 
 function goBack() {
-  location.hash = "#/admin/worlds";
+  location.hash = worldId.value
+    ? `#/admin/world/${encodeURIComponent(worldId.value)}/maps`
+    : "#/admin/maps";
 }
 
 onMounted(async () => {

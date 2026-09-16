@@ -107,6 +107,17 @@ def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
             entity_id = _entity_id(ctx)
         except McpAuthError as e:
             return _result({"text": str(e)})
+        # 世界激活过滤（D15/v0.3.0）：工具所属玩法包在**调用者所在世界**未启用
+        # → 该能力在这个世界不存在（而不是"调用出错"）
+        if not engine.play_active_for_entity(entity_id, binding.play_id):
+            world = engine.get_world(engine.entity_world(entity_id))
+            where = f"「{world.name}」" if world is not None else "当前世界"
+            return _result(
+                {
+                    "text": f"{where}未启用该玩法包（{binding.play_id}），"
+                    "这个能力在本世界不可用：换个世界，或让管理员在世界设置里启用。"
+                }
+            )
         token = _caller_entity.set(entity_id)
         try:
             # 引擎锁内执行（DESIGN §2.4：handler 锁内执行；任务级可重入）

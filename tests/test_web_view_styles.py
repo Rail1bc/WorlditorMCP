@@ -93,14 +93,40 @@ def test_admin_sidebar_hosts_play_pages_group():
     assert "玩法包管理页" in panel
     assert "worlditor_admin_pages_open" in panel  # 收起状态记忆
     assert "worlditor:plays-changed" in panel  # 注册表变化实时刷新
-    assert 'class="group-body"' in panel
+    assert "visiblePages" in panel  # 按当前世界的激活集合过滤
 
 
-def test_plays_page_no_longer_lists_admin_pages():
-    """玩法包详情页不列管理页；管理页自身无「返回玩法包」按钮（v0.2.1）。"""
-    plays = (_WEBUI / "pages" / "admin" / "PlaysPage.vue").read_text(encoding="utf-8")
-    assert "play-pages" not in plays  # 不再拉管理页清单
-    assert '{ key: "pages"' not in plays  # 页签里没有「管理页」
+def test_admin_sidebar_is_world_scoped():
+    """管理端侧栏 = 通用管理 + 世界下拉 + 该世界的玩法包/地图（v0.3.0）。
+
+    多世界治理：选中世界决定下面看什么；侧栏世界来自 localStorage，
+    路由带世界（#/admin/world/{id}/plays|maps）。
+    """
+    panel = (_WEBUI / "components" / "AdminPanel.vue").read_text(encoding="utf-8")
+    assert "通用管理" in panel
+    assert "worlditor_admin_world" in panel  # 选中世界本地记忆
+    assert "#/admin/world/" in panel  # 世界上下文路由
+    assert "worlditor:select-world" in panel  # 地图编辑器回填世界上下文
+    assert "WorldPlaysPage" in panel and "WorldMapsPage" in panel
+    # 旧的世界列表页 / 全局玩法包页已并入世界上下文
+    assert not (_WEBUI / "pages" / "admin" / "WorldsPage.vue").exists()
+    assert not (_WEBUI / "pages" / "admin" / "PlaysPage.vue").exists()
+
+
+def test_world_pages_toggle_activation_and_own_maps():
+    """世界玩法包页：全部/自定义二态 + 本世界开关；世界地图页：建图即归属。"""
+    plays = (_WEBUI / "pages" / "admin" / "WorldPlaysPage.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "play_ids" in plays  # 世界激活集合
+    assert "全部启用" in plays and "自定义" in plays
+    assert "本世界" in plays
+    assert "play-pages" not in plays  # 不再拉管理页清单（入口在侧栏）
+    maps = (_WEBUI / "pages" / "admin" / "WorldMapsPage.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "assign-map" in maps  # 建图/归属
+    assert "未归属世界" in maps  # 孤儿地图提示 + 一键归属
     host = (_WEBUI / "pages" / "admin" / "PlayPageHost.vue").read_text(encoding="utf-8")
     assert "返回玩法包" not in host
 

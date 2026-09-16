@@ -70,7 +70,7 @@ from .model import (
     parse_path,
     parse_text_schedule,
 )
-from .store import WorldStore
+from .store import DEFAULT_WORLD_ID, WorldStore
 
 logger = logging.getLogger("worlditor")
 
@@ -975,8 +975,17 @@ class WorldEngine:
             return await self._dispatch_locked(name, *args, **kwargs)
 
     async def _dispatch_locked(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        """分派表主体（调用方持锁；见 _dispatch_primitive）。"""
+        """分派表主体（调用方持锁；见 _dispatch_primitive）。
+
+        D15 世界过滤：覆盖者/过滤器所属玩法包在**行为主体所在世界**未激活时
+        视为不存在（回落内核默认实现）——"给某世界停用一个包 = 该世界失去
+        对应行为"，其他世界不受影响。
+        """
+        params = _primitive_params(name, args, kwargs)
+        world_id = self.entity_world(params.get("entity_id") or "")
         ov = self._primitive_overrides.get(name)
+        if ov is not None and not self._world_play_active(world_id, ov.play_id):
+            ov = None  # 覆盖者不在本世界 → 回到默认实现
         if ov is not None:
             if ov.handler is None:
                 raise WorldError(f"该能力已被禁用（{ov.play_id}）")
@@ -994,9 +1003,12 @@ class WorldEngine:
                     "[worlditor] 原语覆盖 handler 异常：%s (%s)", name, ov.play_id
                 )
                 raise WorldError("原语执行出错，请稍后再试") from None
-        filters = self._primitive_filters.get(name)
+        filters = [
+            f
+            for f in self._primitive_filters.get(name) or []
+            if self._world_play_active(world_id, f.play_id)
+        ]
         if filters:
-            params = _primitive_params(name, args, kwargs)
             for f in filters:
                 api = self._play_apis.get(f.play_id)
                 result = await self._invoke(f.filter, api, **params)
@@ -1145,7 +1157,9 @@ class WorldEngine:
 
     # ---------- 界面扩展（B9：ui_hook before/after/replace 递归展开） ----------
 
-    async def apply_ui_hooks(self, block: Any | None) -> Any | None:
+    async def apply_ui_hooks(
+        self, block: Any | None, *, entity_id: str | None = None
+    ) -> Any | None:
         """把玩法包注册的界面钩子应用到界面块（递归展开子块）。
 
         before/after：注入子块；replace：整体替换目标块（provider 返回的
@@ -1154,14 +1168,18 @@ class WorldEngine:
 
         Args:
             block: UiBlock 或 None。
+            entity_id: 查看者实体（D15：注入方在该实体所在世界未启用 → 不注入；
+                None = 不做世界过滤，供无身份场景使用）。
 
         Returns:
             展开后的 UiBlock；``block`` 为 None 时返回 None。
         """
         async with self._lock:
-            return await self._apply_ui_hooks_locked(block)
+            return await self._apply_ui_hooks_locked(block, entity_id)
 
-    async def _apply_ui_hooks_locked(self, block: Any | None) -> Any | None:
+    async def _apply_ui_hooks_locked(
+        self, block: Any | None, entity_id: str | None = None
+    ) -> Any | None:
         """钩子展开主体（调用方持锁；见 apply_ui_hooks）。"""
         from .model import UiBlock
 
@@ -1170,13 +1188,15 @@ class WorldEngine:
         if not isinstance(block, UiBlock):
             return block
         # 1. 先递归展开子块
-        block.blocks = await self._expand_children(block.blocks)
+        block.blocks = await self._expand_children(block.blocks, entity_id)
         # 2. 本块钩子
         before: list[UiBlock] = []
         after: list[UiBlock] = []
         replaced: UiBlock | None = None
         for position in ("before", "after", "replace"):
             for binding in self._ui_hooks.get((block.kind, position), []):
+                if not self.play_active_for_entity(entity_id, binding.play_id):
+                    continue  # 注入方不在查看者所在世界 → 不注入（D15）
                 api = self._play_apis.get(binding.play_id)
                 try:
                     injected = await self._invoke(binding.provider, api, block)
@@ -1201,18 +1221,20 @@ class WorldEngine:
         if replaced is not None:
             # replace：整体替换；新块的子块递归展开（自身 replace 钩子不再
             # 应用，防 A 的 replace 又返回 A 的循环）
-            replaced.blocks = await self._expand_children(replaced.blocks)
+            replaced.blocks = await self._expand_children(replaced.blocks, entity_id)
             return replaced
         block.blocks = before + block.blocks + after
         return block
 
-    async def _expand_children(self, blocks: list) -> list:
+    async def _expand_children(
+        self, blocks: list, entity_id: str | None = None
+    ) -> list:
         """递归展开一组子块（None 剔除）。"""
         from .model import UiBlock
 
         expanded: list[UiBlock] = []
         for child in blocks:
-            child = await self.apply_ui_hooks(child)
+            child = await self.apply_ui_hooks(child, entity_id=entity_id)
             if child is not None:
                 expanded.append(child)
         return expanded
@@ -1286,13 +1308,32 @@ class WorldEngine:
         return self._world_play_active(world_id, play_id)
 
     def _world_play_active(self, world_id: str | None, play_id: str) -> bool:
-        """世界激活集合判断：世界不存在或 play_ids 为空 = 全部激活（D15）。"""
+        """世界激活集合判断：世界不存在或 play_ids 为空 = 全部激活（D15）。
+
+        未归属世界的地图按**默认世界**算（`_world_for_activation`）——世界是
+        数据边界，"没有归属"不等于"没有规则"。
+        """
+        world_id = self._world_for_activation(world_id)
         if world_id is None:
             return True
         world = self.store.worlds.get(world_id)
         if world is None or not world.play_ids:
             return True
         return play_id in world.play_ids
+
+    def _world_for_activation(self, world_id: str | None) -> str | None:
+        """激活判定用的世界：未归属（None）→ 默认世界；默认世界不存在 → None。"""
+        if world_id is not None:
+            return world_id
+        return DEFAULT_WORLD_ID if DEFAULT_WORLD_ID in self.store.worlds else None
+
+    def play_active_for_entity(self, entity_id: str | None, play_id: str) -> bool:
+        """该实体所在世界是否启用了某玩法包（D15；世界未知 = 放行）。
+
+        工具面/视图面按**调用者**所在世界过滤，原语与 kind 行为按**行为主体**
+        所在世界过滤——都收敛到这一个判断上。
+        """
+        return self._world_play_active(self.entity_world(entity_id or ""), play_id)
 
     async def _append_log(self, event: str, args: tuple) -> None:
         """事件写入 world_log（历史/回放数据源；on_tick 不写）。"""
@@ -1906,11 +1947,16 @@ class WorldEngine:
         return None
 
     def _is_blocking(self, e: Entity) -> bool:
-        """阻挡判定：state 可动态覆盖 kind 声明（门开/关由玩法包写 state）。"""
+        """阻挡判定：state 可动态覆盖 kind 声明（门开/关由玩法包写 state）。
+
+        D15：声明该 kind 的玩法包在实体所在世界未激活 → 视为不存在（不阻挡）。
+        """
         if STATE_BLOCK_MOVE in e.state:
             return bool(e.state[STATE_BLOCK_MOVE])
         spec = self._kind_specs.get(e.kind)
-        return bool(spec and spec.block_move)
+        if spec is None or not spec.block_move:
+            return False
+        return self._world_play_active(self.store.map_world.get(e.map_id), spec.play_id)
 
     def _build_scene(self, entity: Entity) -> SceneView:
         loc = self.store.loc_by_pos.get(entity.pos_key())
@@ -2023,21 +2069,29 @@ class WorldEngine:
             # G18：ui_hook 注入——交互弹窗渲染前服务端展开（WebUI 零改动；
             # 注入块随 on_interact 事件同步进 SSE payload）
             if result.ui is not None:
-                result.ui = await self.apply_ui_hooks(result.ui)
+                result.ui = await self.apply_ui_hooks(result.ui, entity_id=entity_id)
             await self._emit("on_interact", req, result)
             if item_id is not None:
                 await self._emit("on_item_used", entity, item_id, req.args, result)
             return result
 
     def available_actions(self, target_id: str) -> list[str]:
-        """实体可用动作（C3：kind 声明 ∪ 全局注册表；未实现的声明剔除）。"""
+        """实体可用动作（C3：kind 声明 ∪ 全局注册表；未实现的声明剔除）。
+
+        D15：动作提供方在**目标所在世界**未激活 → 不出现在可用动作里
+        （与 engine.interact 的拒绝判定同源，避免"菜单里有、点了说没有"）。
+        """
         target = self.store.entities.get(target_id)
         if target is None:
             raise WorldError(f"实体不存在：{target_id}")
         spec = self._kind_specs.get(target.kind)
         declared = set(spec.interactions) if spec else set()
+        world_id = self.store.map_world.get(target.map_id)
         return sorted(
-            a for a in (declared | set(self._interactions)) if a in self._interactions
+            a
+            for a in (declared | set(self._interactions))
+            if a in self._interactions
+            and self._world_play_active(world_id, self._interactions[a].play_id)
         )
 
     def list_actions(self, target_id: str) -> list[MenuButton]:
