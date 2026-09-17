@@ -185,14 +185,15 @@ def test_confirm_host_is_mounted_globally():
 
 
 def test_editor_is_split_into_panels():
-    """编辑器拆成多个面板（D24）；出口编辑是独立组件（G24 的修复落点）。"""
+    """编辑器拆成多视图 + 多面板（D24）；出口编辑是独立组件（G24 的修复落点）。"""
     editor_dir = _WEBUI / "components" / "editor"
     for name in (
         "MapGrid.vue",
         "TilePanel.vue",
+        "TileEntities.vue",
         "ConnectionPanel.vue",
-        "EntityPanel.vue",
-        "TemplatePanel.vue",
+        "EntityManager.vue",
+        "TemplateManager.vue",
         "TagPicker.vue",
         "FieldForm.vue",
     ):
@@ -203,12 +204,46 @@ def test_editor_is_split_into_panels():
     for comp in (
         "MapGrid",
         "TilePanel",
+        "TileEntities",
         "ConnectionPanel",
-        "EntityPanel",
-        "TemplatePanel",
+        "EntityManager",
+        "TemplateManager",
     ):
         assert comp in page, f"编辑器没有用上 {comp}"
     assert "askDiff" in page  # 整对象替换前必须过差异预览（D23）
+
+
+def test_editor_has_three_switchable_views():
+    """三个可切换视图（地图编辑 / 实体 / 模板）——一次只专注一件事。"""
+    page = (_WEBUI / "pages" / "admin" / "MapEditorPage.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "地图编辑" in page and "TABS" in page and "gotoTab" in page
+    assert "100vh" in page  # 壳高 = 视口内 → 地图视图不纵向滚动
+    grid = (_WEBUI / "components" / "editor" / "MapGrid.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "onWheel" in grid and "fit" in grid  # 滚轮缩放 + 适应窗口
+    assert "beginPan" in grid  # 拖拽平移
+
+
+def test_entity_manager_scales_and_is_tile_scoped():
+    """实体视图按"上千实体"设计：筛选/排序/分页 + 只看某地块 + 从地块进实体管理。"""
+    manager = (_WEBUI / "components" / "editor" / "EntityManager.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "pageSize" in manager and "pager" in manager  # 分页
+    assert "tileOnly" in manager and "tileFilter" in manager  # 只看某地块
+    assert "kindFilter" in manager and "tagFilter" in manager and "sort" in manager
+    tile_ents = (_WEBUI / "components" / "editor" / "TileEntities.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "本格实体" in tile_ents
+    page = (_WEBUI / "pages" / "admin" / "MapEditorPage.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "primaryEntities" in page and "manageTileEntities" in page
+    assert "locateEntity" in page  # 实体列表 → 回地图定位
 
 
 def test_diff_preview_layer_is_wired():
@@ -231,8 +266,8 @@ def test_connection_editor_is_structured():
 
 
 def test_entity_panel_renders_schema_and_tags():
-    """实体面板：按声明渲染字段（FieldForm）+ 标签组合（TagPicker）+ 合并能力展示。"""
-    panel = (_WEBUI / "components" / "editor" / "EntityPanel.vue").read_text(
+    """实体管理：按声明渲染字段（FieldForm）+ 标签组合（TagPicker）+ 合并能力展示。"""
+    panel = (_WEBUI / "components" / "editor" / "EntityManager.vue").read_text(
         encoding="utf-8"
     )
     assert "FieldForm" in panel and "TagPicker" in panel

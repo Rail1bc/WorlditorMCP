@@ -1,13 +1,15 @@
 <template>
-  <section class="card">
+  <section class="card editor-shell">
     <div class="head">
       <h2>
-        地图编辑器
+        地图
         <code class="dim">{{ mapId || "未选择" }}</code>
         <code v-if="worldId" class="dim">· {{ worldId }}</code>
+        <span class="dim">{{ meta.name }}</span>
       </h2>
       <button class="btn btn-ghost" @click="goBack">← 地图列表</button>
     </div>
+
     <p v-if="error" class="error-text">{{ error }}</p>
 
     <div v-if="!mapId" class="picker">
@@ -15,42 +17,27 @@
     </div>
 
     <template v-else>
-      <!-- 地图元信息 -->
-      <div class="map-meta">
-        <label class="field">
-          名称
-          <input v-model="meta.name" />
-        </label>
-        <label class="field">
-          可见性
-          <select v-model="meta.visible">
-            <option value="public">public（所有人可见）</option>
-            <option value="private">private（在场玩家可见）</option>
-          </select>
-        </label>
-        <label class="field">
-          出生点
-          <span class="pos-inputs">
-            <input v-model.number="meta.spawn_row" type="number" /> ×
-            <input v-model.number="meta.spawn_col" type="number" />
-          </span>
-        </label>
-        <label class="field">
-          时区
-          <input v-model="meta.timezone" placeholder="Asia/Shanghai" />
-        </label>
-        <button class="btn" @click="saveMeta">保存地图信息</button>
-        <button class="btn btn-danger" @click="removeMap">删除地图</button>
-      </div>
+      <!-- 三个视图：一次只专注一件事 -->
+      <nav class="tabs">
+        <button
+          v-for="t in TABS"
+          :key="t.key"
+          class="tab"
+          :class="{ on: tab === t.key }"
+          @click="gotoTab(t.key)"
+        >
+          <span class="icon">{{ t.icon }}</span>{{ t.title }}
+          <span v-if="t.key === 'entities'" class="count">{{ entities.length }}</span>
+          <span v-else-if="t.key === 'templates'" class="count">{{ templates.length }}</span>
+        </button>
+        <span class="grow" />
+        <code class="dim">{{ locationCount }} 地块</code>
+      </nav>
 
-      <p class="dim">
-        实体声明体系（v0.5）：类型决定基底，**标签叠加能力**——同一张图上放什么都行，
-        编辑器不依赖任何玩法包（没装的类型也照样能写，只是没有行为）。
-      </p>
-
-      <!-- 编辑器主体：网格 + 侧栏 -->
-      <div class="editor">
+      <!-- ① 地图编辑：可视化面板占主区，不纵向滚动 -->
+      <div v-if="tab === 'map'" class="view map-view">
         <MapGrid
+          ref="grid"
           :locations="locations"
           :entities="entities"
           :selection="selection"
@@ -58,7 +45,6 @@
           @pick="onPick"
           @rect="onRectSelect"
         />
-
         <aside class="side">
           <TilePanel
             :tile="primaryTile"
@@ -68,8 +54,14 @@
             @move="moveTile"
             @remove="removeTile"
             @save-template="saveTemplate"
-            @apply-template="applyTemplate"
+            @apply-template="applyTemplateAt"
             @pick-pos="onPickPos"
+          />
+          <TileEntities
+            :entities="primaryEntities"
+            @open="openInEntityView"
+            @remove="removeEntity"
+            @manage="manageTileEntities"
           />
           <ConnectionPanel
             v-if="primaryTile"
@@ -83,32 +75,73 @@
         </aside>
       </div>
 
-      <!-- 剪贴板 / 多选 -->
-      <div v-if="selection.length" class="clip">
+      <!-- ② 实体：列表 + 详情（按上千实体设计） -->
+      <div v-else-if="tab === 'entities'" class="view">
+        <EntityManager
+          ref="entityManager"
+          :entities="entities"
+          :kinds="kinds"
+          :entity-templates="entityTemplates"
+          :tile-filter="entityTileFilter"
+          @create="createEntity"
+          @update="updateEntity"
+          @remove="removeEntity"
+          @save-template="saveEntityTemplate"
+          @locate="locateEntity"
+        />
+      </div>
+
+      <!-- ③ 模板 -->
+      <div v-else class="view">
+        <TemplateManager
+          :templates="templates"
+          :primary="primary"
+          @remove="removeTemplate"
+          @apply="applyTemplateFrom"
+        />
+      </div>
+
+      <!-- 剪贴板 / 多选（只在地图视图出现） -->
+      <div v-if="tab === 'map' && selection.length" class="clip">
         <span>已选 {{ selection.length }} 格（{{ selectedWithTile }} 格有地块）</span>
         <button class="btn" :disabled="!selectedWithTile" @click="copySelection">复制</button>
         <button class="btn" :disabled="!clipboard" title="粘贴到当前主选格（已存在的格子跳过）" @click="pasteClipboard">
           粘贴
         </button>
-        <span v-if="clipboard" class="dim">
-          剪贴板：{{ clipboard.tiles.length }} 个地块（锚点 {{ clipboard.anchor.row }},{{ clipboard.anchor.col }}）
-        </span>
+        <span v-if="clipboard" class="dim">剪贴板：{{ clipboard.tiles.length }} 个地块</span>
         <button class="btn btn-ghost" @click="selection = []">取消选择</button>
       </div>
 
-      <EntityPanel
-        ref="entityPanel"
-        :entities="entities"
-        :kinds="kinds"
-        :entity-templates="entityTemplates"
-        :place-at="primary || { row: 0, col: 0 }"
-        @create="createEntity"
-        @update="updateEntity"
-        @remove="removeEntity"
-        @save-template="saveTemplate"
-      />
-
-      <TemplatePanel :templates="templates" @remove="removeTemplate" />
+      <!-- 地图信息（默认收起，给可视化面板让位） -->
+      <details class="map-meta">
+        <summary>地图信息与危险操作</summary>
+        <div class="meta-row">
+          <label class="field">
+            名称
+            <input v-model="meta.name" />
+          </label>
+          <label class="field">
+            可见性
+            <select v-model="meta.visible">
+              <option value="public">public（所有人可见）</option>
+              <option value="private">private（在场玩家可见）</option>
+            </select>
+          </label>
+          <label class="field">
+            出生点
+            <span class="pos-inputs">
+              <input v-model.number="meta.spawn_row" type="number" /> ×
+              <input v-model.number="meta.spawn_col" type="number" />
+            </span>
+          </label>
+          <label class="field">
+            时区
+            <input v-model="meta.timezone" placeholder="Asia/Shanghai" />
+          </label>
+          <button class="btn" @click="saveMeta">保存地图信息</button>
+          <button class="btn btn-danger" @click="removeMap">删除地图</button>
+        </div>
+      </details>
     </template>
   </section>
 </template>
@@ -120,13 +153,20 @@ import { askConfirm } from "../../confirm";
 import { askDiff, diffFields } from "../../diff";
 import MapGrid from "../../components/editor/MapGrid.vue";
 import TilePanel from "../../components/editor/TilePanel.vue";
+import TileEntities from "../../components/editor/TileEntities.vue";
 import ConnectionPanel from "../../components/editor/ConnectionPanel.vue";
-import EntityPanel from "../../components/editor/EntityPanel.vue";
-import TemplatePanel from "../../components/editor/TemplatePanel.vue";
+import EntityManager from "../../components/editor/EntityManager.vue";
+import TemplateManager from "../../components/editor/TemplateManager.vue";
 
 const DIR_KEYS = ["up", "right", "down", "left"];
+const TABS = [
+  { key: "map", title: "地图编辑", icon: "🗺" },
+  { key: "entities", title: "实体", icon: "🧍" },
+  { key: "templates", title: "模板", icon: "🧩" },
+];
 
 const mapId = ref("");
+const tab = ref("map");
 const worldId = ref("");
 const meta = reactive({ name: "", visible: "public", spawn_row: 0, spawn_col: 0, timezone: "" });
 const locations = ref([]);
@@ -138,20 +178,26 @@ const error = ref("");
 const selection = ref([]);
 const primary = ref(null);
 const clipboard = ref(null);
-const entityPanel = ref(null);
+const grid = ref(null);
+const entityManager = ref(null);
+// 从地图视图"管理本格实体"跳过来时带的过滤条件
+const entityTileFilter = ref(null);
 
+const locationCount = computed(() => locations.value.length);
 const locationTemplates = computed(() => templates.value.filter((t) => t.scope === "location"));
 const entityTemplates = computed(() => templates.value.filter((t) => t.scope === "entity"));
 const primaryTile = computed(() => {
   if (!primary.value) return null;
   return locations.value.find((l) => l.row === primary.value.row && l.col === primary.value.col) || null;
 });
+const primaryEntities = computed(() => {
+  if (!primary.value) return [];
+  return entities.value.filter((e) => e.row === primary.value.row && e.col === primary.value.col);
+});
 const selectedWithTile = computed(
   () => selection.value.filter((key) => Boolean(tileAtKey(key))).length
 );
-const locationKeys = computed(() =>
-  locations.value.map((l) => `${mapId.value}:${l.row}:${l.col}`)
-);
+const locationKeys = computed(() => locations.value.map((l) => `${mapId.value}:${l.row}:${l.col}`));
 
 function tileAtKey(key) {
   const [row, col] = key.split(":").map(Number);
@@ -161,6 +207,8 @@ function tileAtKey(key) {
 function syncFromHash() {
   const parts = location.hash.replace(/^#/, "").split("/").filter(Boolean);
   mapId.value = parts[2] || "";
+  const next = parts[3] || "map";
+  tab.value = TABS.some((t) => t.key === next) ? next : "map";
 }
 
 // ---------- 加载 ----------
@@ -199,30 +247,52 @@ async function loadDetail() {
         ? { ...primary.value }
         : null;
     }
-    selection.value = selection.value.filter((key) =>
-      key.split(":").length === 2 ? true : false
-    );
   } catch (e) {
     error.value = e.message;
   }
+}
+
+// ---------- 视图切换 ----------
+
+function gotoTab(key) {
+  tab.value = key;
+  const suffix = key === "map" ? "" : `/${key}`;
+  history.replaceState(null, "", `#/admin/maps/${encodeURIComponent(mapId.value)}${suffix}`);
+}
+
+function openInEntityView(entity) {
+  gotoTab("entities");
+  entityManager.value?.focus(entity.id);
+}
+
+function manageTileEntities() {
+  if (!primary.value) return;
+  entityTileFilter.value = { ...primary.value };
+  gotoTab("entities");
+}
+
+function locateEntity(entity) {
+  primary.value = { row: entity.row, col: entity.col };
+  selection.value = [`${entity.row}:${entity.col}`];
+  entityTileFilter.value = { row: entity.row, col: entity.col };
+  gotoTab("map");
 }
 
 // ---------- 网格选择 ----------
 
 function onPick(cell, mods) {
   primary.value = { row: cell.row, col: cell.col };
-  const key = cell.key;
   if (mods.ctrl) {
     const set = new Set(selection.value);
-    if (set.has(key)) set.delete(key);
-    else set.add(key);
+    if (set.has(cell.key)) set.delete(cell.key);
+    else set.add(cell.key);
     selection.value = [...set];
   } else if (mods.shift && selection.value.length) {
     const set = new Set(selection.value);
-    set.add(key);
+    set.add(cell.key);
     selection.value = [...set];
   } else {
-    selection.value = [key];
+    selection.value = [cell.key];
   }
 }
 
@@ -234,7 +304,6 @@ function onRectSelect(keys) {
   }
 }
 
-/** 直接输入坐标（包围盒之外/负数也能去；空格直接新建）。 */
 function onPickPos({ row, col }) {
   if (!Number.isInteger(row) || !Number.isInteger(col)) return;
   primary.value = { row, col };
@@ -330,7 +399,7 @@ async function removeTile() {
   }
 }
 
-// ---------- 出口（结构化，D23；diff 预览挡住 G24 那种静默损坏） ----------
+// ---------- 出口（结构化，D23；diff 挡住 G24 那种静默损坏） ----------
 
 function labelText(label) {
   if (!label) return "";
@@ -382,25 +451,18 @@ async function saveConnection(dir, payload) {
 // ---------- 复制 / 粘贴（E1） ----------
 
 function copySelection() {
+  const rows = selection.value.map((k) => Number(k.split(":")[0]));
+  const cols = selection.value.map((k) => Number(k.split(":")[1]));
+  const anchor = { row: Math.min(...rows), col: Math.min(...cols) };
   const tiles = selection.value
     .map((key) => tileAtKey(key))
     .filter(Boolean)
-    .map((l) => ({
-      dr: l.row - Math.min(...selection.value.map((k) => Number(k.split(":")[0]))),
-      dc: l.col - Math.min(...selection.value.map((k) => Number(k.split(":")[1]))),
-      loc: l,
-    }));
+    .map((l) => ({ dr: l.row - anchor.row, dc: l.col - anchor.col, loc: l }));
   if (!tiles.length) {
     error.value = "选中的格子里没有地块";
     return;
   }
-  clipboard.value = {
-    anchor: {
-      row: Math.min(...selection.value.map((k) => Number(k.split(":")[0]))),
-      col: Math.min(...selection.value.map((k) => Number(k.split(":")[1]))),
-    },
-    tiles,
-  };
+  clipboard.value = { anchor, tiles };
   error.value = "";
 }
 
@@ -476,7 +538,7 @@ async function createEntity(payload) {
     await loadDetail();
   } catch (e) {
     error.value = e.message;
-    entityPanel.value?.setError(e.message);
+    entityManager.value?.setError(e.message);
   }
 }
 
@@ -499,6 +561,7 @@ async function updateEntity(entity, patch) {
       tags: "标签",
       attrs: "attrs（玩法数据）",
       state: "state（动态状态）",
+      kind: "类型",
     }),
   });
   if (!ok) return;
@@ -542,6 +605,21 @@ async function saveTemplate(payload) {
   }
 }
 
+function saveEntityTemplate(entity) {
+  return saveTemplate({
+    id: `entity_${entity.kind}_${Date.now().toString(36)}`,
+    name: `${entity.name}（模板）`,
+    data: {
+      kind: entity.kind,
+      tags: [...(entity.tags || [])],
+      name: entity.name,
+      desc: entity.desc || "",
+      attrs: { ...(entity.attrs || {}) },
+      state: { ...(entity.state || {}) },
+    },
+  });
+}
+
 async function removeTemplate(t) {
   const ok = await askConfirm({
     title: "删除模板",
@@ -558,8 +636,8 @@ async function removeTemplate(t) {
   }
 }
 
-async function applyTemplate(templateId) {
-  const pos = primary.value || { row: 0, col: 0 };
+async function applyTemplateAt(templateId, row, col) {
+  const pos = row !== undefined && col !== undefined ? { row, col } : primary.value || { row: 0, col: 0 };
   const ok = await askConfirm({
     title: "套用地块模板",
     text: `把模板套用到 (${pos.row}, ${pos.col})？`,
@@ -574,9 +652,14 @@ async function applyTemplate(templateId) {
       col: pos.col,
     });
     await loadDetail();
+    if (tab.value !== "map") gotoTab("map");
   } catch (e) {
     error.value = e.message;
   }
+}
+
+function applyTemplateFrom({ templateId, row, col }) {
+  return applyTemplateAt(templateId, row, col);
 }
 
 // ---------- 地图本身 ----------
@@ -626,11 +709,16 @@ onMounted(async () => {
     if (mapId.value !== prev) {
       primary.value = null;
       selection.value = [];
+      entityTileFilter.value = null;
       if (mapId.value) await loadDetail();
     }
   });
   if (mapId.value) {
     await loadDetail();
+    if (tab.value === "map") {
+      // 首次进入把整图放进视野
+      setTimeout(() => grid.value?.fit(), 120);
+    }
   } else {
     location.hash = "#/admin/maps";
   }
@@ -638,48 +726,113 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* 编辑器壳：视口内布局，地图视图不纵向滚动 */
+.editor-shell {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 60px);
+  min-height: 520px;
+  overflow: hidden;
+}
 .head {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 .head h2 {
   margin: 0;
-}
-.map-meta {
   display: flex;
+  align-items: baseline;
+  gap: 8px;
   flex-wrap: wrap;
-  gap: 10px;
-  align-items: flex-end;
-  margin: 10px 0;
 }
-.editor {
+.tabs {
   display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 8px 0;
+  border-bottom: 1px solid var(--bg-3);
+  padding-bottom: 4px;
+  flex-shrink: 0;
+}
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 7px 14px;
+  border-radius: 8px 8px 0 0;
+}
+.tab:hover {
+  color: var(--text);
+}
+.tab.on {
+  color: var(--text);
+  font-weight: 600;
+  background: var(--bg-2);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.tab .icon {
+  font-size: 15px;
+}
+.tab .count {
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px solid var(--bg-3);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+.grow {
+  flex: 1;
+}
+.view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.map-view {
   gap: 12px;
-  align-items: flex-start;
-  margin-top: 10px;
 }
 .side {
   width: 380px;
   flex-shrink: 0;
+  overflow: auto;
   border-left: 1px solid var(--bg-3);
   padding-left: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 70vh;
-  overflow: auto;
 }
 .clip {
   display: flex;
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-  margin-top: 10px;
-  padding: 8px 10px;
+  margin-top: 8px;
+  padding: 6px 10px;
   border: 1px solid var(--accent);
   border-radius: 8px;
   font-size: 13px;
+  flex-shrink: 0;
+}
+.map-meta {
+  flex-shrink: 0;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.map-meta summary {
+  cursor: pointer;
+  padding: 4px 0;
+}
+.meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  padding: 8px 0;
 }
 .field {
   display: flex;
@@ -690,7 +843,7 @@ onMounted(async () => {
 }
 .field input,
 .field select {
-  padding: 7px 9px;
+  padding: 6px 9px;
   border-radius: 8px;
   border: 1px solid var(--bg-3);
   background: var(--bg);
@@ -711,14 +864,17 @@ onMounted(async () => {
 }
 
 @media (max-width: 1100px) {
-  .editor {
+  .editor-shell {
+    height: auto;
+    min-height: 0;
+  }
+  .map-view {
     flex-direction: column;
   }
   .side {
     width: 100%;
     border-left: none;
     padding-left: 0;
-    max-height: none;
   }
 }
 </style>

@@ -439,7 +439,12 @@ async def _map_detail(request: Request) -> Response:
     locations = [
         location_to_dict(loc) for loc in engine.list_locations() if loc.map_id == map_id
     ]
-    entities = [e.to_dict() for e in engine.list_entities(map_id=map_id)]
+    # 实体带上**合并后的能力**（D19；按该实体所在世界过滤后的真相）——
+    # 编辑器据此展示"挡路/动作/字段"以及未注册/未激活标签，不需要自己重算
+    entities = [
+        {**e.to_dict(), "capabilities": engine.capabilities(e)}
+        for e in engine.list_entities(map_id=map_id)
+    ]
     return JSONResponse(
         {
             "map": {
