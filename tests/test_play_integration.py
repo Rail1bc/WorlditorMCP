@@ -66,7 +66,7 @@ def test_demo_play_loaded(tmp_path):
     async def fn(engine: WorldEngine, loader: PlayLoader):
         plays = await loader.load_all()
         assert [p.play_id for p in plays] == [PLAY_ID]
-        assert set(engine._kind_specs) == {"merchant", "sign", "door"}
+        assert set(engine._tag_specs) == {"merchant", "sign", "door"}
         assert set(engine._interactions) >= {
             "talk",
             "trade",

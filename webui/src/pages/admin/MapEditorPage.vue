@@ -1,14 +1,15 @@
 <template>
   <section class="card">
-    <h2 class="head">
-      地图编辑器
-      <code class="dim">{{ mapId || "未选择" }}</code>
-      <code v-if="worldId" class="dim">· {{ worldId }}</code>
+    <div class="head">
+      <h2>
+        地图编辑器
+        <code class="dim">{{ mapId || "未选择" }}</code>
+        <code v-if="worldId" class="dim">· {{ worldId }}</code>
+      </h2>
       <button class="btn btn-ghost" @click="goBack">← 地图列表</button>
-    </h2>
+    </div>
     <p v-if="error" class="error-text">{{ error }}</p>
 
-    <!-- 未选地图：地图总览页负责选择（v0.4.0 起 #/admin/maps 是跨世界总览） -->
     <div v-if="!mapId" class="picker">
       <p class="dim">没有指定地图——正在跳转到「全部地图」…</p>
     </div>
@@ -42,154 +43,72 @@
         <button class="btn btn-danger" @click="removeMap">删除地图</button>
       </div>
 
+      <p class="dim">
+        实体声明体系（v0.5）：类型决定基底，**标签叠加能力**——同一张图上放什么都行，
+        编辑器不依赖任何玩法包（没装的类型也照样能写，只是没有行为）。
+      </p>
+
       <!-- 编辑器主体：网格 + 侧栏 -->
       <div class="editor">
-        <div class="grid-wrap">
-          <div class="grid" :style="{ gridTemplateColumns: `repeat(${cols}, 64px)` }">
-            <button
-              v-for="cell in gridCells"
-              :key="cell.row + ':' + cell.col"
-              class="cell"
-              :class="{ empty: !cell.loc, on: sel && sel.row === cell.row && sel.col === cell.col }"
-              @click="select(cell)"
-            >
-              <template v-if="cell.loc">
-                <span class="cell-name">{{ shortName(cell.loc.name) }}</span>
-                <span class="cell-dirs">{{ dirMarks(cell.loc.connections) }}</span>
-                <span v-if="cell.entities.length" class="cell-badge">
-                  {{ cell.entities.length }}
-                </span>
-              </template>
-              <span v-else class="cell-add" title="点击新建地块">＋</span>
-            </button>
-          </div>
-          <p class="dim">
-            行 {{ minRow }}..{{ maxRow }} × 列 {{ minCol }}..{{ maxCol }}（点空白格新建地块，
-            点已有地块编辑）
-          </p>
-        </div>
+        <MapGrid
+          :locations="locations"
+          :entities="entities"
+          :selection="selection"
+          :primary="primary"
+          @pick="onPick"
+          @rect="onRectSelect"
+        />
 
         <aside class="side">
-          <template v-if="sel">
-            <h3>
-              地块 ({{ sel.row }}, {{ sel.col }})
-              <button
-                v-if="sel.loc"
-                class="btn btn-danger"
-                @click="removeLocation(sel)"
-              >
-                删除地块
-              </button>
-            </h3>
-            <label class="field">
-              名称
-              <input v-model="locForm.name" placeholder="地块名称" />
-            </label>
-            <label class="field">
-              描述（纯文本或分时段 JSON）
-              <textarea
-                v-model="locForm.description"
-                rows="3"
-                placeholder="如：小镇广场，人来人往。"
-              ></textarea>
-            </label>
-            <button class="btn" @click="saveLocation">保存地块</button>
-
-            <!-- 连接 -->
-            <h4>四向连接</h4>
-            <div v-for="(slot, dir) in connForm" :key="dir" class="conn-card">
-              <label class="conn-head">
-                <input type="checkbox" v-model="slot.enabled" />
-                {{ dirLabel[dir] }}
-              </label>
-              <div v-for="(p, i) in slot.paths" :key="i" class="conn-path">
-                <input v-model="p.label" placeholder="路径文案（可选）" />
-                <input
-                  v-model="p.targetsText"
-                  placeholder="目标 row,col（分号分隔）"
-                />
-                <label class="mini-label">
-                  <input type="checkbox" v-model="p.reveal_target" /> 揭示
-                </label>
-                <button class="mini-btn danger" @click="slot.paths.splice(i, 1)">×</button>
-              </div>
-              <button class="mini-btn" @click="slot.paths.push(newPath())">
-                ＋ 添加路径
-              </button>
-            </div>
-            <button v-if="sel.loc" class="btn" @click="saveConnections">保存连接</button>
-          </template>
-          <p v-else class="dim">点击网格中的地块进行编辑；空白格 = 在此坐标新建</p>
+          <TilePanel
+            :tile="primaryTile"
+            :pos="primary || { row: 0, col: 0 }"
+            :templates="locationTemplates"
+            @save-meta="saveTileMeta"
+            @move="moveTile"
+            @remove="removeTile"
+            @save-template="saveTemplate"
+            @apply-template="applyTemplate"
+            @pick-pos="onPickPos"
+          />
+          <ConnectionPanel
+            v-if="primaryTile"
+            :tile="primaryTile"
+            :map-id="mapId"
+            :maps="maps"
+            :location-keys="locationKeys"
+            @save="saveConnection"
+            @invalid="error = $event"
+          />
         </aside>
       </div>
 
-      <!-- 实体管理 -->
-      <div class="block">
-        <h3>实体（{{ entities.length }}）</h3>
-        <div class="inline-form">
-          <input v-model="nf.kind" placeholder="kind（如 merchant）" />
-          <input v-model="nf.name" placeholder="名称" />
-          <input v-model="nf.desc" placeholder="描述（可选）" />
-          <span class="dim">
-            @ ({{ nf.row }}, {{ nf.col }})
-            <button class="mini-btn" @click="nf.row = sel?.row ?? 0; nf.col = sel?.col ?? 0">
-              用选中格
-            </button>
-          </span>
-          <button class="btn" @click="createEntity">放置</button>
-        </div>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th>kind</th>
-              <th>位置</th>
-              <th>动作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="e in entities" :key="e.id">
-              <td>
-                <input class="mini" v-model="e.name" @change="saveEntityName(e)" />
-              </td>
-              <td>{{ e.kind }}</td>
-              <td class="dim">{{ e.map_id }} ({{ e.row }}, {{ e.col }})</td>
-              <td class="ops">
-                <button
-                  class="btn btn-ghost"
-                  @click="locate(e)"
-                >
-                  定位
-                </button>
-                <button class="btn btn-danger" @click="removeEntity(e)">删除</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      <!-- 剪贴板 / 多选 -->
+      <div v-if="selection.length" class="clip">
+        <span>已选 {{ selection.length }} 格（{{ selectedWithTile }} 格有地块）</span>
+        <button class="btn" :disabled="!selectedWithTile" @click="copySelection">复制</button>
+        <button class="btn" :disabled="!clipboard" title="粘贴到当前主选格（已存在的格子跳过）" @click="pasteClipboard">
+          粘贴
+        </button>
+        <span v-if="clipboard" class="dim">
+          剪贴板：{{ clipboard.tiles.length }} 个地块（锚点 {{ clipboard.anchor.row }},{{ clipboard.anchor.col }}）
+        </span>
+        <button class="btn btn-ghost" @click="selection = []">取消选择</button>
       </div>
 
-      <!-- 模板管理 -->
-      <div class="block">
-        <h3>模板（{{ templates.length }}）</h3>
-        <div class="inline-form">
-          <input v-model="nt.id" placeholder="模板 id" />
-          <input v-model="nt.name" placeholder="模板名" />
-          <input v-model="nt.data" placeholder='data JSON（如 {"name":"X"}）' />
-          <button class="btn" @click="createTemplate">创建</button>
-        </div>
-        <table class="table">
-          <tbody>
-            <tr v-for="t in templates" :key="t.id">
-              <td><code>{{ t.id }}</code></td>
-              <td>{{ t.name }}</td>
-              <td class="dim"><code>{{ JSON.stringify(t.data) }}</code></td>
-              <td class="ops">
-                <button class="btn btn-danger" @click="removeTemplate(t)">删除</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <EntityPanel
+        ref="entityPanel"
+        :entities="entities"
+        :kinds="kinds"
+        :entity-templates="entityTemplates"
+        :place-at="primary || { row: 0, col: 0 }"
+        @create="createEntity"
+        @update="updateEntity"
+        @remove="removeEntity"
+        @save-template="saveTemplate"
+      />
+
+      <TemplatePanel :templates="templates" @remove="removeTemplate" />
     </template>
   </section>
 </template>
@@ -198,75 +117,63 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../api";
 import { askConfirm } from "../../confirm";
+import { askDiff, diffFields } from "../../diff";
+import MapGrid from "../../components/editor/MapGrid.vue";
+import TilePanel from "../../components/editor/TilePanel.vue";
+import ConnectionPanel from "../../components/editor/ConnectionPanel.vue";
+import EntityPanel from "../../components/editor/EntityPanel.vue";
+import TemplatePanel from "../../components/editor/TemplatePanel.vue";
 
 const DIR_KEYS = ["up", "right", "down", "left"];
-const dirLabel = { up: "北↑", right: "东→", down: "南↓", left: "西←" };
 
 const mapId = ref("");
-const worldId = ref(""); // 该地图所属世界（侧栏上下文 + 返回目标）
+const worldId = ref("");
 const meta = reactive({ name: "", visible: "public", spawn_row: 0, spawn_col: 0, timezone: "" });
 const locations = ref([]);
 const entities = ref([]);
 const templates = ref([]);
+const kinds = ref([]);
+const maps = ref([]);
 const error = ref("");
-const sel = ref(null);
-const locForm = reactive({ name: "", description: "" });
-const connForm = reactive({});
-const nf = reactive({ kind: "", name: "", desc: "", row: 0, col: 0 });
-const nt = reactive({ id: "", name: "", data: "" });
-const gridSpan = 12; // 空地图默认网格跨度
+const selection = ref([]);
+const primary = ref(null);
+const clipboard = ref(null);
+const entityPanel = ref(null);
+
+const locationTemplates = computed(() => templates.value.filter((t) => t.scope === "location"));
+const entityTemplates = computed(() => templates.value.filter((t) => t.scope === "entity"));
+const primaryTile = computed(() => {
+  if (!primary.value) return null;
+  return locations.value.find((l) => l.row === primary.value.row && l.col === primary.value.col) || null;
+});
+const selectedWithTile = computed(
+  () => selection.value.filter((key) => Boolean(tileAtKey(key))).length
+);
+const locationKeys = computed(() =>
+  locations.value.map((l) => `${mapId.value}:${l.row}:${l.col}`)
+);
+
+function tileAtKey(key) {
+  const [row, col] = key.split(":").map(Number);
+  return locations.value.find((l) => l.row === row && l.col === col) || null;
+}
 
 function syncFromHash() {
   const parts = location.hash.replace(/^#/, "").split("/").filter(Boolean);
   mapId.value = parts[2] || "";
 }
 
-const minRow = computed(() =>
-  locations.value.length ? Math.min(...locations.value.map((l) => l.row)) : 0
-);
-const maxRow = computed(() =>
-  locations.value.length ? Math.max(...locations.value.map((l) => l.row)) : gridSpan - 1
-);
-const minCol = computed(() =>
-  locations.value.length ? Math.min(...locations.value.map((l) => l.col)) : 0
-);
-const maxCol = computed(() =>
-  locations.value.length ? Math.max(...locations.value.map((l) => l.col)) : gridSpan - 1
-);
-const cols = computed(() => maxCol.value - minCol.value + 1);
-
-const gridCells = computed(() => {
-  const byPos = {};
-  for (const l of locations.value) byPos[`${l.row}:${l.col}`] = l;
-  const out = [];
-  for (let r = minRow.value; r <= maxRow.value; r++) {
-    for (let c = minCol.value; c <= maxCol.value; c++) {
-      const loc = byPos[`${r}:${c}`] || null;
-      const ents = loc
-        ? entities.value.filter((e) => e.row === r && e.col === c)
-        : [];
-      out.push({ row: r, col: c, loc, entities: ents });
-    }
-  }
-  return out;
-});
-
-function shortName(name) {
-  return name.length > 5 ? name.slice(0, 5) + "…" : name;
-}
-
-function dirMarks(conns) {
-  return DIR_KEYS.map((d) => (conns[d]?.enabled ? "●" : "○")).join("");
-}
-
-function newPath() {
-  return { label: "", targetsText: "", reveal_target: true };
-}
+// ---------- 加载 ----------
 
 async function loadDetail() {
   error.value = "";
   try {
-    const data = await apiGet(`/admin/maps/${mapId.value}`);
+    const [data, kindData, tmpl, mapList] = await Promise.all([
+      apiGet(`/admin/maps/${mapId.value}`),
+      apiGet("/admin/kinds"),
+      apiGet("/admin/templates"),
+      apiGet("/admin/maps"),
+    ]);
     Object.assign(meta, {
       name: data.map.name,
       visible: data.map.visible,
@@ -274,110 +181,197 @@ async function loadDetail() {
       spawn_col: data.map.spawn_col,
       timezone: data.map.timezone || "",
     });
-    // 世界上下文：让侧栏世界下拉跟随这张地图的归属（深链接/直接打开也对上）
     worldId.value = data.map.world_id || "";
     if (worldId.value) {
       window.dispatchEvent(
-        new CustomEvent("worlditor:select-world", {
-          detail: { world_id: worldId.value },
-        })
+        new CustomEvent("worlditor:select-world", { detail: { world_id: worldId.value } })
       );
     }
     locations.value = data.locations || [];
     entities.value = data.entities || [];
-    templates.value = (await apiGet("/admin/templates")).templates || [];
-    sel.value = null;
+    kinds.value = kindData.kinds || [];
+    templates.value = tmpl.templates || [];
+    maps.value = mapList.maps || [];
+    if (primary.value) {
+      primary.value = locations.value.some(
+        (l) => l.row === primary.value.row && l.col === primary.value.col
+      )
+        ? { ...primary.value }
+        : null;
+    }
+    selection.value = selection.value.filter((key) =>
+      key.split(":").length === 2 ? true : false
+    );
   } catch (e) {
     error.value = e.message;
   }
 }
 
-function select(cell) {
-  sel.value = cell;
-  if (cell.loc) {
-    locForm.name = cell.loc.name;
-    locForm.description = descToText(cell.loc.description);
-    for (const d of DIR_KEYS) {
-      const slot = cell.loc.connections[d] || { enabled: false, paths: [] };
-      connForm[d] = {
-        enabled: !!slot.enabled,
-        paths: (slot.paths || []).map((p) => ({
-          label: p.label || "",
-          targetsText: (p.targets || [])
-            .map((t) => `${t.row},${t.col}`)
-            .join("; "),
-          reveal_target: p.reveal_target,
-        })),
-      };
-    }
+// ---------- 网格选择 ----------
+
+function onPick(cell, mods) {
+  primary.value = { row: cell.row, col: cell.col };
+  const key = cell.key;
+  if (mods.ctrl) {
+    const set = new Set(selection.value);
+    if (set.has(key)) set.delete(key);
+    else set.add(key);
+    selection.value = [...set];
+  } else if (mods.shift && selection.value.length) {
+    const set = new Set(selection.value);
+    set.add(key);
+    selection.value = [...set];
   } else {
-    locForm.name = "";
-    locForm.description = "";
-    for (const d of DIR_KEYS) connForm[d] = { enabled: false, paths: [newPath()] };
+    selection.value = [key];
   }
 }
+
+function onRectSelect(keys) {
+  selection.value = keys;
+  if (keys.length) {
+    const [row, col] = keys[0].split(":").map(Number);
+    primary.value = { row, col };
+  }
+}
+
+/** 直接输入坐标（包围盒之外/负数也能去；空格直接新建）。 */
+function onPickPos({ row, col }) {
+  if (!Number.isInteger(row) || !Number.isInteger(col)) return;
+  primary.value = { row, col };
+  selection.value = [`${row}:${col}`];
+}
+
+// ---------- 地块 ----------
 
 function descToText(desc) {
   if (!desc) return "";
   if (typeof desc === "string") return desc;
-  // 分时段结构：单时段单条 → 纯文本；否则 JSON
   const periods = desc.periods || [];
-  if (
-    periods.length === 1 &&
-    periods[0].items?.length === 1
-  ) {
+  if (periods.length === 1 && periods[0].items?.length === 1) {
     return periods[0].items[0].text || "";
   }
   return JSON.stringify(desc, null, 2);
 }
 
-function descToPayload(text) {
-  if (!text.trim()) return null;
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed && typeof parsed === "object") return parsed;
-    return text;
-  } catch {
-    return text;
-  }
-}
-
-async function saveLocation() {
+async function saveTileMeta(payload) {
+  const before = primaryTile.value
+    ? { name: primaryTile.value.name, description: descToText(primaryTile.value.description) }
+    : { name: "", description: "" };
+  const after = { name: payload.name, description: descToText(payload.description) };
+  const ok = await askDiff({
+    title: primaryTile.value ? "保存地块" : "新建地块",
+    detail: `坐标 (${primary.value.row}, ${primary.value.col})`,
+    changes: primaryTile.value
+      ? diffFields(before, after, { name: "名称", description: "描述" })
+      : [
+          { label: "名称", before: "（无地块）", after: after.name },
+          { label: "描述", before: "", after: after.description },
+        ],
+  });
+  if (!ok) return;
   try {
     await apiPost("/admin/locations", {
       map_id: mapId.value,
-      row: sel.value.row,
-      col: sel.value.col,
-      name: locForm.name,
-      description: descToPayload(locForm.description),
+      row: primary.value.row,
+      col: primary.value.col,
+      name: payload.name,
+      description: payload.description,
     });
     await loadDetail();
-    select({
-      row: sel.value.row,
-      col: sel.value.col,
-      loc: locations.value.find(
-        (l) => l.row === sel.value.row && l.col === sel.value.col
-      ),
-      entities: [],
-    });
   } catch (e) {
     error.value = e.message;
   }
 }
 
-async function removeLocation(cell) {
+async function moveTile({ row, col }) {
+  const from = primary.value;
+  const ok = await askConfirm({
+    title: "移动地块",
+    text: `把 (${from.row}, ${from.col}) 移到 (${row}, ${col})？`,
+    detail: "全图指向它的连接目标与它上面的实体一起搬；目标格已有地块时会被拒绝。",
+  });
+  if (!ok) return;
+  try {
+    await apiPost("/admin/locations/move", {
+      map_id: mapId.value,
+      row: from.row,
+      col: from.col,
+      to_row: row,
+      to_col: col,
+    });
+    primary.value = { row, col };
+    selection.value = [`${row}:${col}`];
+    await loadDetail();
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
+async function removeTile() {
+  const tile = primaryTile.value;
   const ok = await askConfirm({
     title: "删除地块",
     danger: true,
-    text: `删除地块 (${cell.row}, ${cell.col})「${cell.loc.name}」？`,
+    text: `删除地块 (${tile.row}, ${tile.col})「${tile.name}」？`,
     detail: "其上实体一并删除，指向它的连接目标会被清理。有玩家在场时会被拒绝。",
   });
   if (!ok) return;
   try {
     await apiDelete("/admin/locations", {
       map_id: mapId.value,
-      row: cell.row,
-      col: cell.col,
+      row: tile.row,
+      col: tile.col,
+    });
+    selection.value = [];
+    primary.value = null;
+    await loadDetail();
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
+// ---------- 出口（结构化，D23；diff 预览挡住 G24 那种静默损坏） ----------
+
+function labelText(label) {
+  if (!label) return "";
+  if (typeof label === "string") return label;
+  const periods = label.periods || [];
+  if (periods.length === 1 && periods[0].items?.length === 1) return periods[0].items[0].text || "";
+  return `（分时段 ${periods.length} 段）`;
+}
+
+function slotText(slot) {
+  if (!slot) return "（无）";
+  const paths = slot.paths || [];
+  if (!slot.enabled) return `未启用（已配置 ${paths.length} 条路径）`;
+  if (!paths.length) return "已启用但没有路径";
+  return paths
+    .map((p, i) => {
+      const targets = (p.targets || [])
+        .map((t) => `${t.map_id || "本图"}(${t.row},${t.col})×${t.weight ?? 1}`)
+        .join(" ");
+      const label = labelText(p.label);
+      return `#${i + 1} ${targets}${label ? ` 「${label}」` : ""}`;
+    })
+    .join(" ｜ ");
+}
+
+async function saveConnection(dir, payload) {
+  const before = primaryTile.value?.connections?.[dir] || null;
+  const ok = await askDiff({
+    title: `保存出口：${dir}`,
+    detail: `地块 (${primary.value.row}, ${primary.value.col}) —— 只覆盖这一个方向，其余方向不动`,
+    changes: [{ label: dir, before: slotText(before), after: slotText(payload) }],
+  });
+  if (!ok) return;
+  try {
+    await apiPost("/admin/connections", {
+      map_id: mapId.value,
+      row: primary.value.row,
+      col: primary.value.col,
+      direction: dir,
+      enabled: payload.enabled,
+      paths: payload.paths,
     });
     await loadDetail();
   } catch (e) {
@@ -385,46 +379,207 @@ async function removeLocation(cell) {
   }
 }
 
-async function saveConnections() {
-  try {
-    for (const d of DIR_KEYS) {
-      const slot = connForm[d];
-      await apiPost("/admin/connections", {
-        map_id: mapId.value,
-        row: sel.value.row,
-        col: sel.value.col,
-        direction: d,
-        enabled: slot.enabled,
-        paths: slot.paths
-          .filter((p) => p.targetsText.trim())
-          .map((p) => ({
-            label: p.label || null,
-            reveal_target: p.reveal_target,
-            targets: p.targetsText
-              .split(/[;,，]/)
-              .map((s) => s.trim())
-              .filter(Boolean)
-              .map((s) => {
-                const [r, c] = s.split(",").map((v) => parseInt(v, 10));
-                return { row: r, col: c };
-              })
-              .filter((t) => Number.isInteger(t.row) && Number.isInteger(t.col)),
-          })),
-      });
+// ---------- 复制 / 粘贴（E1） ----------
+
+function copySelection() {
+  const tiles = selection.value
+    .map((key) => tileAtKey(key))
+    .filter(Boolean)
+    .map((l) => ({
+      dr: l.row - Math.min(...selection.value.map((k) => Number(k.split(":")[0]))),
+      dc: l.col - Math.min(...selection.value.map((k) => Number(k.split(":")[1]))),
+      loc: l,
+    }));
+  if (!tiles.length) {
+    error.value = "选中的格子里没有地块";
+    return;
+  }
+  clipboard.value = {
+    anchor: {
+      row: Math.min(...selection.value.map((k) => Number(k.split(":")[0]))),
+      col: Math.min(...selection.value.map((k) => Number(k.split(":")[1]))),
+    },
+    tiles,
+  };
+  error.value = "";
+}
+
+async function pasteClipboard() {
+  const clip = clipboard.value;
+  if (!clip || !primary.value) return;
+  const anchor = primary.value;
+  const plan = [];
+  const skipped = [];
+  for (const item of clip.tiles) {
+    const row = anchor.row + item.dr;
+    const col = anchor.col + item.dc;
+    if (tileAtKey(`${row}:${col}`)) {
+      skipped.push(`(${row}, ${col})`);
+      continue;
     }
+    plan.push({ row, col, loc: item.loc, dr: row - item.loc.row, dc: col - item.loc.col });
+  }
+  const ok = await askConfirm({
+    title: "粘贴地块",
+    text: `将在 (${anchor.row}, ${anchor.col}) 粘贴 ${plan.length} 个地块？`,
+    detail: skipped.length
+      ? `已存在的 ${skipped.length} 格会跳过：${skipped.join("、")}。同图出口按位移一起搬，跨图出口原样保留。`
+      : "同图出口按位移一起搬，跨图出口原样保留。",
+    confirmText: "粘贴",
+  });
+  if (!ok || !plan.length) return;
+  try {
+    for (const p of plan) {
+      await apiPost("/admin/locations", {
+        map_id: mapId.value,
+        row: p.row,
+        col: p.col,
+        name: p.loc.name,
+        description: p.loc.description,
+      });
+      for (const dir of DIR_KEYS) {
+        const slot = p.loc.connections?.[dir];
+        if (!slot || !slot.enabled) continue;
+        const paths = (slot.paths || []).map((path) => ({
+          label: path.label || null,
+          reveal_target: path.reveal_target,
+          targets: (path.targets || []).map((t) =>
+            t.map_id
+              ? { map_id: t.map_id, row: t.row, col: t.col, weight: t.weight }
+              : { row: t.row + p.dr, col: t.col + p.dc, weight: t.weight }
+          ),
+        }));
+        await apiPost("/admin/connections", {
+          map_id: mapId.value,
+          row: p.row,
+          col: p.col,
+          direction: dir,
+          enabled: true,
+          paths,
+        });
+      }
+    }
+    selection.value = plan.map((p) => `${p.row}:${p.col}`);
+    primary.value = { row: plan[0].row, col: plan[0].col };
     await loadDetail();
-    select({
-      row: sel.value.row,
-      col: sel.value.col,
-      loc: locations.value.find(
-        (l) => l.row === sel.value.row && l.col === sel.value.col
-      ),
-      entities: [],
-    });
+  } catch (e) {
+    error.value = e.message;
+    await loadDetail();
+  }
+}
+
+// ---------- 实体 ----------
+
+async function createEntity(payload) {
+  try {
+    await apiPost("/admin/entities", { map_id: mapId.value, ...payload });
+    await loadDetail();
+  } catch (e) {
+    error.value = e.message;
+    entityPanel.value?.setError(e.message);
+  }
+}
+
+async function updateEntity(entity, patch) {
+  const before = {
+    name: entity.name,
+    desc: entity.desc,
+    tags: (entity.tags || []).join("、"),
+    attrs: entity.attrs,
+    state: entity.state,
+  };
+  const after = { ...before, ...patch, tags: (patch.tags || []).join("、") };
+  if (!("kind" in patch) || patch.kind === entity.kind) delete after.kind;
+  const ok = await askDiff({
+    title: `保存实体「${entity.name}」`,
+    detail: "attrs/state/tags 是整体替换（旧值→新值如下）",
+    changes: diffFields(before, after, {
+      name: "名称",
+      desc: "描述",
+      tags: "标签",
+      attrs: "attrs（玩法数据）",
+      state: "state（动态状态）",
+    }),
+  });
+  if (!ok) return;
+  try {
+    await apiPatch(`/admin/entities/${entity.id}`, patch);
+    await loadDetail();
   } catch (e) {
     error.value = e.message;
   }
 }
+
+async function removeEntity(entity) {
+  const ok = await askConfirm({
+    title: "删除实体",
+    danger: true,
+    text: `删除实体「${entity.name}」（${entity.kind}）？`,
+    detail: (entity.tags || []).length ? `标签：${entity.tags.join("、")}` : "",
+  });
+  if (!ok) return;
+  try {
+    await apiDelete(`/admin/entities/${entity.id}`);
+    await loadDetail();
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
+// ---------- 模板 ----------
+
+async function saveTemplate(payload) {
+  try {
+    await apiPost("/admin/templates", {
+      id: payload.id,
+      name: payload.name,
+      scope: payload.scope || (payload.data?.kind ? "entity" : "location"),
+      data: payload.data,
+    });
+    await loadDetail();
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
+async function removeTemplate(t) {
+  const ok = await askConfirm({
+    title: "删除模板",
+    danger: true,
+    text: `删除模板「${t.name}」？`,
+    detail: "模板是全局的（不跟地图），删除后其他地方也不再能用它。",
+  });
+  if (!ok) return;
+  try {
+    await apiDelete(`/admin/templates/${t.id}`);
+    await loadDetail();
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
+async function applyTemplate(templateId) {
+  const pos = primary.value || { row: 0, col: 0 };
+  const ok = await askConfirm({
+    title: "套用地块模板",
+    text: `把模板套用到 (${pos.row}, ${pos.col})？`,
+    detail: "同图出口按放置位置平移，跨图出口原样复制；目标格已有地块时会被拒绝。",
+  });
+  if (!ok) return;
+  try {
+    await apiPost("/admin/templates/apply", {
+      template_id: templateId,
+      map_id: mapId.value,
+      row: pos.row,
+      col: pos.col,
+    });
+    await loadDetail();
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
+// ---------- 地图本身 ----------
 
 async function saveMeta() {
   try {
@@ -435,6 +590,7 @@ async function saveMeta() {
       spawn_col: meta.spawn_col,
       timezone: meta.timezone || null,
     });
+    await loadDetail();
   } catch (e) {
     error.value = e.message;
   }
@@ -456,92 +612,6 @@ async function removeMap() {
   }
 }
 
-async function createEntity() {
-  try {
-    await apiPost("/admin/entities", {
-      kind: nf.kind,
-      map_id: mapId.value,
-      row: nf.row,
-      col: nf.col,
-      name: nf.name,
-      desc: nf.desc,
-    });
-    nf.kind = "";
-    nf.name = "";
-    nf.desc = "";
-    await loadDetail();
-  } catch (e) {
-    error.value = e.message;
-  }
-}
-
-async function saveEntityName(e) {
-  try {
-    await apiPatch(`/admin/entities/${e.id}`, { name: e.name });
-  } catch (err) {
-    error.value = err.message;
-  }
-}
-
-async function removeEntity(e) {
-  const ok = await askConfirm({
-    title: "删除实体",
-    danger: true,
-    text: `删除实体「${e.name}」（${e.kind}）？`,
-  });
-  if (!ok) return;
-  try {
-    await apiDelete(`/admin/entities/${e.id}`);
-    await loadDetail();
-  } catch (err) {
-    error.value = err.message;
-  }
-}
-
-function locate(e) {
-  // 定位实体所在格
-  const target = e;
-  const found = gridCells.value.find(
-    (c) => c.row === target.row && c.col === target.col
-  );
-  if (found) select(found);
-}
-
-async function createTemplate() {
-  let data = {};
-  try {
-    data = nt.data.trim() ? JSON.parse(nt.data) : {};
-  } catch {
-    error.value = "模板 data 不是合法 JSON";
-    return;
-  }
-  try {
-    await apiPost("/admin/templates", { id: nt.id, name: nt.name, data });
-    nt.id = "";
-    nt.name = "";
-    nt.data = "";
-    templates.value = (await apiGet("/admin/templates")).templates || [];
-  } catch (e) {
-    error.value = e.message;
-  }
-}
-
-async function removeTemplate(t) {
-  const ok = await askConfirm({
-    title: "删除模板",
-    danger: true,
-    text: `删除模板「${t.name}」？`,
-    detail: "模板是全局的（不跟地图），删除后其他地图也不再能用它。",
-  });
-  if (!ok) return;
-  try {
-    await apiDelete(`/admin/templates/${t.id}`);
-    templates.value = (await apiGet("/admin/templates")).templates || [];
-  } catch (e) {
-    error.value = e.message;
-  }
-}
-
 function goBack() {
   location.hash = worldId.value
     ? `#/admin/world/${encodeURIComponent(worldId.value)}/maps`
@@ -554,13 +624,14 @@ onMounted(async () => {
     const prev = mapId.value;
     syncFromHash();
     if (mapId.value !== prev) {
+      primary.value = null;
+      selection.value = [];
       if (mapId.value) await loadDetail();
     }
   });
   if (mapId.value) {
     await loadDetail();
   } else {
-    // 没带地图 id → 去跨世界总览页选
     location.hash = "#/admin/maps";
   }
 });
@@ -572,130 +643,43 @@ onMounted(async () => {
   align-items: center;
   gap: 10px;
 }
-.picker {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.page-entry {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--bg-3);
-  border-radius: var(--radius);
-  background: var(--bg-2);
-  color: var(--text);
-  cursor: pointer;
-  font-size: 14px;
+.head h2 {
+  margin: 0;
 }
 .map-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   align-items: flex-end;
-  margin-bottom: 12px;
+  margin: 10px 0;
 }
 .editor {
   display: flex;
   gap: 12px;
   align-items: flex-start;
-}
-.grid-wrap {
-  flex: 1;
-  min-width: 0;
-  overflow: auto;
-}
-.grid {
-  display: grid;
-  gap: 3px;
-  width: max-content;
-}
-.cell {
-  width: 64px;
-  height: 64px;
-  border: 1px solid var(--bg-3);
-  border-radius: 8px;
-  background: var(--bg-2);
-  color: var(--text);
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  padding: 2px;
-  font-size: 15px;
-  position: relative;
-}
-.cell.empty {
-  background: transparent;
-  border-style: dashed;
-  color: var(--text-dim);
-}
-.cell.on {
-  border-color: var(--accent);
-}
-.cell-name {
-  font-size: 10px;
-  line-height: 1.1;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cell-dirs {
-  font-size: 9px;
-  color: var(--text-dim);
-  letter-spacing: 1px;
-}
-.cell-badge {
-  position: absolute;
-  top: 2px;
-  right: 3px;
-  background: var(--accent-dim);
-  border-radius: 8px;
-  font-size: 10px;
-  padding: 0 4px;
-  color: #fff;
+  margin-top: 10px;
 }
 .side {
-  width: 300px;
+  width: 380px;
   flex-shrink: 0;
   border-left: 1px solid var(--bg-3);
   padding-left: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: 70vh;
+  overflow: auto;
 }
-.side h3,
-.side h4 {
-  margin: 4px 0;
+.clip {
   display: flex;
-  justify-content: space-between;
+  gap: 8px;
   align-items: center;
-}
-.conn-card {
-  border: 1px solid var(--bg-3);
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
   border-radius: 8px;
-  padding: 6px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.conn-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   font-size: 13px;
-}
-.conn-path {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  border-left: 2px solid var(--bg-3);
-  padding-left: 6px;
 }
 .field {
   display: flex;
@@ -705,10 +689,8 @@ onMounted(async () => {
   color: var(--text-dim);
 }
 .field input,
-.field textarea,
-.field select,
-.inline-form input {
-  padding: 8px 10px;
+.field select {
+  padding: 7px 9px;
   border-radius: 8px;
   border: 1px solid var(--bg-3);
   background: var(--bg);
@@ -723,51 +705,12 @@ onMounted(async () => {
 .pos-inputs input {
   width: 70px;
 }
-.inline-form {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-  margin-bottom: 8px;
-}
-.block {
-  margin-top: 14px;
-  border-top: 1px solid var(--bg-3);
-  padding-top: 8px;
-}
-.mini {
-  padding: 4px 6px;
-  border-radius: 6px;
-  border: 1px solid var(--bg-3);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 12px;
-}
-.mini-btn {
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0 4px;
-}
-.mini-btn.danger {
-  color: var(--danger);
-}
-.mini-label {
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--text-dim);
-}
 .dim {
   color: var(--text-dim);
   font-size: 13px;
 }
 
-/* 窄屏：编辑器纵向堆叠，侧栏全宽 */
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .editor {
     flex-direction: column;
   }
@@ -775,9 +718,7 @@ onMounted(async () => {
     width: 100%;
     border-left: none;
     padding-left: 0;
-  }
-  .grid-wrap {
-    overflow-x: auto;
+    max-height: none;
   }
 }
 </style>

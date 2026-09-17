@@ -184,6 +184,76 @@ def test_confirm_host_is_mounted_globally():
     assert "askConfirm" in confirm and "settleConfirm" in confirm
 
 
+def test_editor_is_split_into_panels():
+    """编辑器拆成多个面板（D24）；出口编辑是独立组件（G24 的修复落点）。"""
+    editor_dir = _WEBUI / "components" / "editor"
+    for name in (
+        "MapGrid.vue",
+        "TilePanel.vue",
+        "ConnectionPanel.vue",
+        "EntityPanel.vue",
+        "TemplatePanel.vue",
+        "TagPicker.vue",
+        "FieldForm.vue",
+    ):
+        assert (editor_dir / name).exists(), f"缺少编辑器组件 {name}"
+    page = (_WEBUI / "pages" / "admin" / "MapEditorPage.vue").read_text(
+        encoding="utf-8"
+    )
+    for comp in (
+        "MapGrid",
+        "TilePanel",
+        "ConnectionPanel",
+        "EntityPanel",
+        "TemplatePanel",
+    ):
+        assert comp in page, f"编辑器没有用上 {comp}"
+    assert "askDiff" in page  # 整对象替换前必须过差异预览（D23）
+
+
+def test_diff_preview_layer_is_wired():
+    """保存前差异预览（D23 / G24 防线）：diff.js + DiffModal + App.vue 挂载。"""
+    assert (_WEBUI / "diff.js").exists()
+    assert (_WEBUI / "components" / "DiffModal.vue").exists()
+    diff = (_WEBUI / "diff.js").read_text(encoding="utf-8")
+    assert "askDiff" in diff and "diffFields" in diff
+    assert "DiffModal" in (_WEBUI / "App.vue").read_text(encoding="utf-8")
+
+
+def test_connection_editor_is_structured():
+    """出口编辑不得回到"目标 row,col 文本框"（那正是 G24 丢 map_id/权重的根因）。"""
+    conn = (_WEBUI / "components" / "editor" / "ConnectionPanel.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "targetsText" not in conn  # 旧的纯文本目标框已废弃
+    assert "weight" in conn and "map_id" in conn  # 目标带地图与权重
+    assert "complex" in conn  # 分时段文案有 JSON 模式，不再被 String(dict) 毁掉
+
+
+def test_entity_panel_renders_schema_and_tags():
+    """实体面板：按声明渲染字段（FieldForm）+ 标签组合（TagPicker）+ 合并能力展示。"""
+    panel = (_WEBUI / "components" / "editor" / "EntityPanel.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "FieldForm" in panel and "TagPicker" in panel
+    assert "合并后的能力" in panel  # A4：让管理员看见并集结果
+    fields = (_WEBUI / "components" / "editor" / "FieldForm.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "未声明字段" in fields  # 未声明字段走原始 JSON 兜底（A2/D23）
+    assert "attrs" in fields and "state" in fields  # 两个数据袋分开标注
+
+
+def test_map_grid_supports_multi_select_and_arrows():
+    """网格：多选 / 框选 / 出口方向箭头（D24 的 E1/E2）。"""
+    grid = (_WEBUI / "components" / "editor" / "MapGrid.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "rect" in grid  # 框选
+    assert "dirArrow" in grid  # 出口方向箭头
+    assert "ctrlKey" in grid  # Ctrl 多选
+
+
 def test_view_components_use_no_hardcoded_light_colors():
     """视图组件不得硬编码浅色（否则暗色主题下白底/白底白字）。"""
     files = _view_component_files()

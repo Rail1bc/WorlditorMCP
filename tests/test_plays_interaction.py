@@ -64,7 +64,7 @@ def test_interaction_play_loaded(tmp_path):
     async def fn(engine, loader):
         plays = await loader.load_all()
         assert INTERACTION_ID in [p.play_id for p in plays]
-        kinds = dict(engine._kind_specs)  # noqa: SLF001
+        kinds = dict(engine._tag_specs)  # noqa: SLF001
         assert set(kinds) == {"merchant", "sign", "door"}
         assert kinds["door"].block_move is True
         interactions = set(engine._interactions)  # noqa: SLF001

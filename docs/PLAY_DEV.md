@@ -98,11 +98,13 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
   | 交互动作 | 不可用，动作菜单里也不列 |
   | 事件订阅 | 不触发（on_tick 例外，始终触发） |
   | 原语覆盖/过滤器 | 不生效 → 回落内核默认实现 |
-  | kind（block_move/动作） | 不挡路、不声明动作 |
+  | 标签/类型声明（block_move/动作/字段） | **逐标签过滤**（D21）：你声明的标签不参与并集——不挡路、不声明动作、不贡献字段 |
+  | 实体模板（`register_entity_template`） | 不出现在管理端模板列表 |
   | ui_hook 注入 | 不注入 |
   > 写包须知：**不要假设自己的工具在任何世界都能调用**（尤其跨世界共享的
   > agent）；也不要依赖"自己的过滤器一定生效"——按世界启停是管理员的权利。
   > 需要"所有世界都必须有"的能力，用**全局层**（`enable`，管理端高级操作）。
+  > **标签同理**：你声明的标签只在启用了你的包的世界里贡献能力（D21）。
   未归属世界的地图按**默认世界**的激活集合算（不会逃逸过滤）。
 - **数据隔离**：`api.kv_*` 的 namespace = 本包 id（或 `世界id:包id` 双层）——
   不同玩法包互不可见；同包跨世界各自状态
@@ -119,9 +121,12 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 |---|---|
 | `register_item_def(item, fields=[])` | 物品类型定义（内核注册表；同 id 覆盖更新） |
 | `add_item_fields(item_id, fields)` | 向已有物品类型追加字段（D9） |
-| `register_entity_kind(kind, block_move, interactions, tick, label, fields, categories)` | 实体类型元数据；`interactions` = 该 kind 默认可用的动作名 |
-| `add_kind_fields(kind, fields)` / `add_category_fields(category, fields)` | 向 kind / 分类追加字段（D9/D10） |
-| `list_kinds(category=None)` | kind 列表（含字段 schema），分类过滤 |
+| `register_entity_kind(kind, block_move, interactions, label, fields, categories, tags=())` | 实体类型；`interactions` = 该类型默认可用的动作名。**D18：等价于注册一条隐式同名标签**，`tags` 是该类型**预设**的额外标签（"类型 A = {A, C}" → `tags=("C",)`） |
+| `register_entity_tag(tag, label, block_move, interactions, fields, categories)` | 注册一条**标签**（与类型共用一个命名空间）；实体挂上它即获得这里声明的一切 |
+| `register_entity_type(kind, tags=(), ...)` | `register_entity_kind` 的同义名（"类型只是预设"读起来更顺） |
+| `add_tag_fields(tag, fields)` / `add_kind_fields(kind, fields)` / `add_category_fields(category, fields)` | 向标签 / 分类追加字段（D9/D10）。**D18 起语义是"所有带该标签的实体"**（旧名保留） |
+| `list_kinds(category=None)` | 类型 + 标签清单（字段 schema / 来源包 / 是否隐式 / 预设标签），分类过滤 |
+| `capabilities(entity)` | 某实体合并后的能力：`tags / active_tags / inactive_tags / unknown_tags / block_move / interactions / fields` |
 | `register_interaction(action, handler, label)` | 全局交互动作；`async (api, req) -> InteractionResult` |
 | `register_world_event(event, handler, interval=0)` | 事件订阅；on_tick 必须给 interval（秒） |
 | `register_ui_component(name, web_entry)` / `register_ui_hook(block_kind, position, provider)` | 自定义界面组件 / UiBlock 注入（before/after/replace） |
@@ -154,7 +159,8 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `set_data(entity_id, name, value)` / `get_data(entity_id, name)` | 字段原语（**可被覆盖/禁用**，D11）；读写容器 = attrs，与 `set_attrs` 同容器 |
 | `interact(entity_id, target_id, action, args, item_id)` | 交互（**可被覆盖/禁用**） |
 | `emit(event, data, log=False)` | 自定义事件（SSE 推送；`log=True` 写 world_log） |
-| `place_entity(kind, map_id, row, col, ...)` / `remove_entity(id)` | 实体生命周期（D14；身份化实体不可 remove） |
+| `place_entity(kind, map_id, row, col, ..., tags=[...])` / `remove_entity(id)` | 实体生命周期（D14；身份化实体不可 remove）。`tags` = 实例级标签（D18），如 `place_entity("slime", ..., tags=["spawner"])` |
+| `set_tags(entity_id, tags)` | 整体替换实例标签（"给玩家加一个刷怪笼标签"）——**基底 kind 不在其中**（身份/类型是治理域，D20） |
 | `set_state(entity_id, patch)` / `get_state(entity_id)` | 实体 state（门开/关、动态状态） |
 | `call_service(play_id, name, **params)` | 跨包服务调用（§6） |
 | `call_default_primitive(name, *args, **kwargs)` | super 通道：显式调内核默认实现（覆盖者前置/后置用） |
@@ -162,6 +168,14 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 ### 地图编辑（D14：内容治理归玩法包/用户）
 
 `update_location(map_id, row, col, **kwargs)` / `update_connection(map_id, row, col, direction, **kwargs)` / `create_map(map_id, name, ...)` / `delete_map(map_id)`（图上玩家在场拒绝，G2）/ `save_template(template)` / `delete_template(template_id)`
+
+**模板（D22：地块与实体共用一个"模板"概念）**：
+- `register_entity_template(template_id, name, data, label="")` —— 注册本包自带的**实体模板**
+  （内存注册表，随包卸载消失）；`data = {kind, tags[], name, desc, attrs, state}`。
+  管理端本地模板落库，两边合并成一个选择列表（`list_templates("entity")`，同 id 本地优先）。
+- `list_templates(scope=None)` —— 模板清单（`source` 标明 `play` / `local`）。
+- `apply_location_template(template_id, map_id, row, col)` —— 套用地块模板：
+  **同图目标按相对偏移平移、跨图目标原样复制**，目标格已有地块则拒绝。
 
 **世界包导入内容时**：`assign_map(map_id, world_id, folder_id=None, sort=None)` 把地图
 归属到世界与组织节点（`sort` = 该节点内的序号，文件夹与地图**共用一个序号空间**，

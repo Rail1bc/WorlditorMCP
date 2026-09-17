@@ -13,7 +13,7 @@
     </div>
     <p class="dim">
       组织树是纯管理维度（不影响玩法）。拖到文件夹上 = 放进去；拖到行之间 = 同级排序；
-      地图的地块/实体在编辑器里改。
+      也可用行内 ▲▼（或聚焦行后 Alt+↑/↓）排序；地图的地块/实体在编辑器里改。
     </p>
 
     <!-- 新建地图 -->
@@ -88,11 +88,14 @@
           :style="{ paddingLeft: 6 + row.depth * 18 + 'px' }"
           :data-row="row.type + ':' + row.id"
           :data-depth="row.depth"
+          tabindex="0"
           draggable="true"
           @dragstart="onDragStart($event, row)"
           @dragend="onDragEnd"
           @dragover="onDragOver($event, row)"
           @drop.stop="onDrop($event, row)"
+          @keydown.alt.up.prevent="nudge(row, -1)"
+          @keydown.alt.down.prevent="nudge(row, 1)"
           @click="focusId = row.id"
         >
           <!-- 文件夹 -->
@@ -108,6 +111,8 @@
             <InlineEdit :value="row.name" @save="renameFolder(row, $event)" />
             <span class="dim">{{ childrenOf(row.id).length }} 项</span>
             <span class="row-ops">
+              <button class="mini-btn" title="上移（Alt+↑）" @click.stop="nudge(row, -1)">▲</button>
+              <button class="mini-btn" title="下移（Alt+↓）" @click.stop="nudge(row, 1)">▼</button>
               <button class="mini-btn" @click.stop="startFolderDraft(row.id)">＋子文件夹</button>
               <button class="mini-btn danger" @click.stop="removeFolder(row)">删除</button>
             </span>
@@ -131,6 +136,8 @@
               ⚠ {{ lintOf(row.id).counts.error }} 错 / {{ lintOf(row.id).counts.warn }} 警
             </button>
             <span class="row-ops">
+              <button class="mini-btn" title="上移（Alt+↑）" @click.stop="nudge(row, -1)">▲</button>
+              <button class="mini-btn" title="下移（Alt+↓）" @click.stop="nudge(row, 1)">▼</button>
               <button class="mini-btn" @click.stop="openMap(row.id)">编辑</button>
               <button class="mini-btn" @click.stop="startMove(row)">移动</button>
               <button class="mini-btn" @click.stop="startCopy(row)">复制</button>
@@ -694,6 +701,17 @@ function isDescendant(candidateId, ancestorId) {
   return false;
 }
 
+/** 上移/下移一位（X3：拖拽之外的键盘与按钮替代，可访问性）。 */
+async function nudge(row, delta) {
+  const siblings = childrenOf(row.parent_id);
+  const index = siblings.findIndex((n) => n.id === row.id && n.type === row.type);
+  if (index < 0) return;
+  if (delta < 0 && index === 0) return;
+  if (delta > 0 && index >= siblings.length - 1) return;
+  // placeDragged 的 index 是"原列表里的插入位"，向下要跳过自己占的那一格
+  await placeDragged(row.parent_id, delta < 0 ? index - 1 : index + 2, row.type, row.id);
+}
+
 function nodeOf(type, id) {
   if (type === "folder") {
     const f = folders.value.find((x) => x.id === id);
@@ -703,10 +721,13 @@ function nodeOf(type, id) {
   return m ? { type, id, parent_id: m.folder_id || null } : null;
 }
 
-/** 把正在拖的条目放到 parentId 的第 index 位（跨容器先搬家，再统一重排序号）。 */
-async function placeDragged(parentId, index) {
-  const type = dragType.value;
-  const id = dragId.value;
+/** 把正在拖的条目放到 parentId 的第 index 位（跨容器先搬家，再统一重排序号）。
+
+``typeArg``/``idArg`` 用于非拖拽调用（行内 ▲▼、键盘排序）——拖拽时留空即取当前拖拽项。
+*/
+async function placeDragged(parentId, index, typeArg, idArg) {
+  const type = typeArg || dragType.value;
+  const id = idArg || dragId.value;
   const me = nodeOf(type, id);
   dragId.value = "";
   dragType.value = "";

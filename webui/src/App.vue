@@ -48,6 +48,8 @@
 
   <!-- 全局确认层（替代原生 confirm；原生弹窗在 iframe/沙箱里会被浏览器屏蔽） -->
   <ConfirmHost />
+  <!-- 保存前差异预览（G24 防线：整对象替换的写操作必须先看见旧→新） -->
+  <DiffModal />
 </template>
 
 <script setup>
@@ -59,6 +61,7 @@ import { store } from "./store";
 import AuthPage from "./pages/AuthPage.vue";
 import AdminPanel from "./components/AdminPanel.vue";
 import ConfirmHost from "./components/ConfirmHost.vue";
+import DiffModal from "./components/DiffModal.vue";
 import UiBlockRenderer from "./components/UiBlockRenderer.vue";
 
 const route = ref(location.hash.replace(/^#/, "") || "");

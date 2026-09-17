@@ -24,6 +24,7 @@ from .world import WorldError
 from .world.identity import IdentityError
 from .world.mcp.http import AuthMiddleware, _identity_of, _play_web
 from .world.model import location_to_dict
+from .world.store import DEFAULT_WORLD_ID
 
 
 def _require_admin(request: Request) -> None:
@@ -460,14 +461,50 @@ async def _map_detail(request: Request) -> Response:
 
 
 async def _templates_list(request: Request) -> Response:
-    """模板列表（GET /admin/templates：复制预设）。"""
+    """模板列表（GET /admin/templates[?scope=location|entity]：复制预设，D22）。
+
+    实体模板 = 玩法包注册（内存，随包卸载消失）+ 管理端本地（落库），合并返回，
+    ``source`` 标明来源（play / local）。
+    """
     _require_admin(request)
+    scope = request.query_params.get("scope")
+    return JSONResponse({"templates": _engine(request).list_templates(scope)})
+
+
+async def _template_apply(request: Request) -> Response:
+    """套用地块模板到指定坐标（D22：同图目标平移、跨图目标原样）。"""
+    _require_admin(request)
+    data = await _json_body(request)
+    try:
+        loc = await _engine(request).apply_location_template(
+            str(data.get("template_id") or ""),
+            str(data.get("map_id") or ""),
+            int(data.get("row") or 0),
+            int(data.get("col") or 0),
+        )
+    except WorldError as e:
+        return _err(e)
+    return _ok({"map_id": loc.map_id, "row": loc.row, "col": loc.col, "name": loc.name})
+
+
+# ---------- 实体类型 / 标签清单（D18 / D25：管理端名词表） ----------
+
+
+async def _kinds(request: Request) -> Response:
+    """类型 + 标签清单（编辑器下拉与标签勾选的数据源）。
+
+    含 label / 字段 schema / 分类 / **来源包** / **是否隐式**（来自 kind 注册）/
+    预设标签。``?category=`` 过滤（D10 精准选取）。
+    """
+    _require_admin(request)
+    category = request.query_params.get("category")
+    engine = _engine(request)
+    kinds = engine.list_kinds(category)
     return JSONResponse(
         {
-            "templates": [
-                {"id": t.id, "name": t.name, "data": t.data}
-                for t in _engine(request).store.templates.values()
-            ]
+            "kinds": kinds,
+            "types": [k for k in kinds if k["implicit"]],
+            "tags": [k for k in kinds if not k["implicit"]],
         }
     )
 
@@ -584,13 +621,22 @@ async def _map_move(request: Request) -> Response:
 
 
 async def _lint(request: Request) -> Response:
-    """地图体检（全量或单张：``?map_id=``）。"""
+    """地图体检（全量或单张：``?map_id=``；``?world_id=`` 只看某个世界的地图）。"""
     _require_admin(request)
     engine = _engine(request)
     map_id = request.query_params.get("map_id")
     try:
         if map_id:
             return JSONResponse({"maps": [engine.lint_map(map_id)]})
+        world_id = request.query_params.get("world_id")
+        if world_id is not None:
+            map_ids = engine.list_world_maps(world_id)
+            # 未归属世界的地图按默认世界算（与激活过滤同源）
+            if world_id == DEFAULT_WORLD_ID:
+                map_ids = map_ids + [
+                    m for m in engine.store.maps if engine.map_world(m) is None
+                ]
+            return JSONResponse(engine.lint_maps(map_ids))
         return JSONResponse(engine.lint_maps())
     except WorldError as e:
         return _err(e)
@@ -642,6 +688,26 @@ async def _location_delete(request: Request) -> Response:
     return _ok()
 
 
+async def _location_move(request: Request) -> Response:
+    """移动地块（D24/E4：`engine.move_location` 内核早有，这里接上管理端）。
+
+    原子重写自身坐标 + 全图指向旧坐标的连接目标 + 其上实体位置。
+    """
+    _require_admin(request)
+    data = await _json_body(request)
+    try:
+        loc = await _engine(request).move_location(
+            str(data.get("map_id") or ""),
+            int(data.get("row") or 0),
+            int(data.get("col") or 0),
+            int(data.get("to_row") or 0),
+            int(data.get("to_col") or 0),
+        )
+    except WorldError as e:
+        return _err(e)
+    return _ok({"map_id": loc.map_id, "row": loc.row, "col": loc.col})
+
+
 async def _connection_update(request: Request) -> Response:
     _require_admin(request)
     data = await _json_body(request)
@@ -669,11 +735,12 @@ async def _template_create(request: Request) -> Response:
             id=str(data.get("id") or ""),
             name=str(data.get("name") or ""),
             data=json.loads(json.dumps(data.get("data") or {})),
+            scope=str(data.get("scope") or "location"),
         )
         await _engine(request).save_template(template)
     except WorldError as e:
         return _err(e)
-    return _ok({"id": template.id})
+    return _ok({"id": template.id, "scope": template.scope})
 
 
 async def _template_delete(request: Request) -> Response:
@@ -698,18 +765,19 @@ async def _entity_create(request: Request) -> Response:
             desc=str(data.get("desc") or ""),
             attrs=data.get("attrs"),
             state=data.get("state"),
+            tags=data.get("tags"),
         )
     except WorldError as e:
         return _err(e)
-    return _ok({"id": entity.id})
+    return _ok({"id": entity.id, "tags": list(entity.tags)})
 
 
 async def _entity_update(request: Request) -> Response:
-    """实体编辑（PATCH；body 未提供的字段不变；attrs/state 整体替换）。"""
+    """实体编辑（PATCH；未提供的字段不变；attrs/state/tags 整体替换）。"""
     _require_admin(request)
     data = await _json_body(request)
     want: dict[str, Any] = {}
-    for key in ("name", "desc", "attrs", "state"):
+    for key in ("name", "desc", "attrs", "state", "tags", "kind"):
         if key in data:
             want[key] = data[key]
     try:
@@ -718,7 +786,7 @@ async def _entity_update(request: Request) -> Response:
         )
     except WorldError as e:
         return _err(e)
-    return _ok({"id": entity.id})
+    return _ok({"id": entity.id, "tags": list(entity.tags)})
 
 
 async def _entity_delete(request: Request) -> Response:
@@ -803,9 +871,12 @@ def build_admin_app(
         Route("/admin/lint", _lint),
         Route("/admin/locations", _location_upsert, methods=["POST"]),
         Route("/admin/locations", _location_delete, methods=["DELETE"]),
+        Route("/admin/locations/move", _location_move, methods=["POST"]),
         Route("/admin/connections", _connection_update, methods=["POST"]),
         Route("/admin/templates", _template_create, methods=["POST"]),
         Route("/admin/templates", _templates_list),
+        Route("/admin/templates/apply", _template_apply, methods=["POST"]),
+        Route("/admin/kinds", _kinds),
         Route(
             "/admin/templates/{template_id}",
             _template_delete,

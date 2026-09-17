@@ -20,6 +20,7 @@ from .model import (
     ScenePath,
     SceneView,
     ShortCircuit,
+    TagSpec,
     Target,
     TextSchedule,
     UiBlock,
@@ -31,6 +32,7 @@ from .model import (
     entity_from_row,
     item_db_row,
     item_from_row,
+    parse_tags,
 )
 from .store import DEFAULT_MAP_ID, WorldStore
 
@@ -49,6 +51,7 @@ __all__ = [
     "ScenePath",
     "SceneView",
     "ShortCircuit",
+    "TagSpec",
     "Target",
     "TextSchedule",
     "UiBlock",
@@ -63,4 +66,5 @@ __all__ = [
     "entity_from_row",
     "item_db_row",
     "item_from_row",
+    "parse_tags",
 ]

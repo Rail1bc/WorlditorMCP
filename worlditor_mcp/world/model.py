@@ -484,15 +484,28 @@ class SceneView:
 
 @dataclass
 class WorldTemplate:
-    """地块模板：复制预设，非继承。data 为模板负载 dict。
+    """模板（D22：地块与实体共用一个"模板"概念，用 scope 区分）。
 
-    目标存储策略：**同图目标存方向相对偏移**（{dr, dc}，放置时按地块位置平移）；
-    **跨图目标存绝对 map_id+坐标**（{map_id, row, col}）原样复制。
+    - ``scope="location"``：地块预设（复制预设，非继承）。目标存储策略：
+      **同图目标存方向相对偏移**（{dr, dc}，放置时按地块位置平移）；
+      **跨图目标存绝对 map_id+坐标**（{map_id, row, col}）原样复制。
+    - ``scope="entity"``：实体预设。data = ``{kind, tags[], name, desc, attrs, state}``
+      （套用后仍可改）；玩法包注册的实体模板在内存注册表（随包卸载消失），
+      管理端本地模板落这张表。
     """
 
     id: str
     name: str
     data: dict[str, Any]
+    scope: str = "location"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "data": self.data,
+            "scope": self.scope,
+        }
 
 
 # ---------- 世界与组织（D15） ----------
@@ -560,25 +573,34 @@ class Entity:
 
     attrs 为玩法数据（hp/exp/gold/equipped...），state 为实体状态
     （门开/关、库存、血量...），内核都不解释，由玩法包自管。
+
+    **标签（D18）**：``kind`` 是基底类型（预设/标志位），``tags`` 为实例级标签，
+    两者一起决定实体的能力（有效标签 = 基底 kind + 类型预设标签 + 实例 tags，
+    能力 = 各标签并集，见 engine 的能力解析）。
     """
 
     id: str  # uuid4 hex（B5）
     map_id: str
     row: int
     col: int
-    kind: str  # player / agent（内置）或玩法包注册的 kind
+    kind: str  # 基底类型；player 为内置身份类型（IDENTITY_KINDS），或玩法包注册的名字
     name: str
     desc: str = ""
     attrs: dict = field(default_factory=dict)
     state: dict = field(default_factory=dict)
     user_id: str | None = None  # 身份化实体：账户/实例标识（联邦预留）
     last_active_ts: float = 0.0  # 在线状态（动作/SSE 活动维护）
+    tags: list[str] = field(default_factory=list)  # 实例级标签（D18，有序、去重）
 
     def pos_key(self) -> tuple[str, int, int]:
         return (self.map_id, self.row, self.col)
 
     def is_identity(self) -> bool:
-        """身份化实体（可认证绑定、不可被玩法包移除、位置持久化）。"""
+        """身份化实体（可认证绑定、不可被玩法包移除、位置持久化）。
+
+        D20：**只看基底 kind**——标签里出现 ``player`` 不改变身份，
+        所以不存在"删掉标签就绕过身份保护"的路径。
+        """
         return self.kind in IDENTITY_KINDS
 
     def to_dict(self) -> dict[str, Any]:
@@ -594,6 +616,7 @@ class Entity:
             "state": self.state,
             "user_id": self.user_id,
             "last_active_ts": self.last_active_ts,
+            "tags": list(self.tags),
         }
 
     @staticmethod
@@ -628,7 +651,27 @@ class Entity:
             last_active_ts=value.get("last_active_ts", 0.0)
             if isinstance(value.get("last_active_ts"), (int, float))
             else 0.0,
+            tags=parse_tags(value.get("tags")),
         )
+
+
+def parse_tags(value: Any) -> list[str]:
+    """实体标签解析（D18）：非字符串 / 空串丢弃，去重保序。
+
+    **去重保序**很重要——标签顺序参与字段覆盖优先级（D19），不能随便排序。
+    """
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        return []
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        tag = item.strip()
+        if tag and tag not in out:
+            out.append(tag)
+    return out
 
 
 # ---------- 物品（定义与持有分离） ----------
@@ -686,25 +729,41 @@ class ItemDef:
 # ---------- 实体 kind 注册（玩法包扩展点） ----------
 
 
-@dataclass
-class EntityKindSpec:
-    """玩法包注册的实体 kind 元数据（register_entity_kind）。
+# ---------- 标签 / 类型注册（玩法包扩展点，D18 / D25） ----------
 
-    block_move 为内核级物理规则（移动阻挡）；interactions 为该 kind 默认可用的
-    动作名列表（C3：可用动作 = kind 声明 ∪ 全局注册表）；tick 为行为状态机开关
-    （玩法包同时订阅 on_tick 驱动状态）。label 为 kind 标签文案（B1）。
-    fields 为 kind 声明字段 schema（D9：{name,label,type,default?}，UI 通用渲染）；
-    categories 为分类标签（D10：宽松，无需预注册）。
+
+@dataclass
+class TagSpec:
+    """标签的能力声明（D18：``register_entity_kind`` 与 ``register_entity_tag`` 共用）。
+
+    **类型与标签共用一个命名空间**：``register_entity_kind("door", ...)`` 等价于注册
+    一个名为 ``door`` 的标签（``implicit=True``）——所以能力解析只有一条路径：
+    实体有效标签 = 基底 kind + 类型预设标签 + 实例 tags，能力 = 各标签并集（D19）。
+
+    字段语义：
+    - ``block_move``：内核级物理规则（移动阻挡）。**任一标签为真即阻挡**——
+      标签写 False 想表达的是"对某些实体开放"，那该用过滤器/state，而不是抵消
+      别人的 True；
+    - ``interactions``：该标签默认可用的动作名（C3：可用动作 = 标签声明 ∪ 全局注册表）；
+    - ``label``：文案（B1）；
+    - ``play_id``：声明者——能力面按**世界激活**逐个标签过滤（D21）；
+    - ``fields``：标签声明字段 schema（D9：{name,label,type,default?}，UI 通用渲染）；
+    - ``categories``：分类标签（D10：宽松，无需预注册）；
+    - ``implicit``：来自 kind 注册（True）还是显式标签注册（False）——只影响展示。
     """
 
-    kind: str
+    tag: str
     block_move: bool = False
     interactions: tuple[str, ...] = ()
-    tick: bool = False
     label: str = ""
     play_id: str = ""
     fields: list[dict] = field(default_factory=list)
     categories: tuple[str, ...] = ()
+    implicit: bool = False
+
+
+# 旧名（v0.2–v0.4，kind 时代）：D18 起 kind 只是"隐式同名标签"，保留别名供外部引用
+EntityKindSpec = TagSpec
 
 
 # ---------- 交互协议（玩法与 UI 之间的契约） ----------
@@ -855,6 +914,7 @@ def entity_db_row(entity: Entity) -> tuple:
         _dump_json(entity.attrs),
         _dump_json(entity.state),
         entity.last_active_ts,
+        _dump_json(entity.tags),
     )
 
 
@@ -873,6 +933,7 @@ def entity_from_row(row: Any) -> Entity | None:
             "attrs": _load_json(row["attrs_json"], {}),
             "state": _load_json(row["state_json"], {}),
             "last_active_ts": row["last_active_ts"],
+            "tags": _load_json(row["tags_json"], []),
         }
     )
 

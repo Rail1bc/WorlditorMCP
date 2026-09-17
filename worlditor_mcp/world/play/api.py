@@ -52,38 +52,97 @@ class WorlditorPlayAPI:
         *,
         block_move: bool = False,
         interactions: tuple[str, ...] = (),
-        tick: bool = False,
         label: str | None = None,
         fields: list[dict] | None = None,
         categories: tuple[str, ...] = (),
+        tags: tuple[str, ...] = (),
     ) -> None:
-        """注册实体 kind 元数据（label 为 kind 标签文案，B1）。
+        """注册实体类型（D18：等价于注册一条**隐式同名标签** + 预设标签）。
 
-        fields 为 kind 声明字段 schema（{name,label,type,default?}，D9）；
-        categories 为分类标签（D10，宽松无需预注册）。
+        Args:
+            label: 文案（B1），也是放置实体时未给名字的默认名。
+            fields: 字段 schema（{name,label,type,default?}，D9）。
+            categories: 分类标签（D10，宽松无需预注册）。
+            tags: 该类型**预设**的额外标签——"类型 A = {A, C}" 就写
+                ``register_entity_kind("A", tags=("C",))``。
         """
         self._engine.register_entity_kind(
             kind,
             block_move=block_move,
             interactions=interactions,
-            tick=tick,
             label=label or "",
+            play_id=self.play_id,
+            fields=fields,
+            categories=categories,
+            tags=tags,
+        )
+
+    def register_entity_type(
+        self,
+        kind: str,
+        *,
+        tags: tuple[str, ...] = (),
+        label: str | None = None,
+        block_move: bool = False,
+        interactions: tuple[str, ...] = (),
+        fields: list[dict] | None = None,
+        categories: tuple[str, ...] = (),
+    ) -> None:
+        """注册"类型 = 标签预设"（D18；``register_entity_kind`` 的同义名，更好读）。"""
+        self.register_entity_kind(
+            kind,
+            block_move=block_move,
+            interactions=interactions,
+            label=label,
+            fields=fields,
+            categories=categories,
+            tags=tags,
+        )
+
+    def register_entity_tag(
+        self,
+        tag: str,
+        *,
+        label: str | None = None,
+        block_move: bool = False,
+        interactions: tuple[str, ...] = (),
+        fields: list[dict] | None = None,
+        categories: tuple[str, ...] = (),
+    ) -> None:
+        """注册一条标签（D18：能力由标签承载；与类型共用一个命名空间）。
+
+        实体挂上这条标签即可获得这里声明的一切（能力 = 各标签并集，D19）——
+        "给玩家再组合一个刷怪笼标签"就是这么来的。
+        """
+        self._engine.register_entity_tag(
+            tag,
+            label=label or "",
+            block_move=block_move,
+            interactions=interactions,
             play_id=self.play_id,
             fields=fields,
             categories=categories,
         )
 
+    def add_tag_fields(self, tag: str, fields: list[dict]) -> None:
+        """向已有标签追加字段（D18：**所有带该标签的实体**都获得这些字段）。"""
+        self._engine.add_tag_fields(tag, fields, play_id=self.play_id)
+
     def add_kind_fields(self, kind: str, fields: list[dict]) -> None:
-        """向已有 kind 追加字段（D9：玩法包 B 给其他包的 kind 加字段）。"""
+        """``add_tag_fields`` 的旧名（语义随 D18 扩张为"按标签"，见其文档）。"""
         self._engine.add_kind_fields(kind, fields, play_id=self.play_id)
 
     def add_category_fields(self, category: str, fields: list[dict]) -> None:
-        """向分类追加字段（该分类全部 kind 生效，D10）。"""
+        """向分类追加字段（该分类全部标签生效，D10）。"""
         self._engine.add_category_fields(category, fields, play_id=self.play_id)
 
     def list_kinds(self, category: str | None = None) -> list[dict]:
-        """kind 列表（含字段 schema 与分类）；category 过滤（D10 精准选取）。"""
+        """类型 + 标签清单（含字段 schema、来源包、是否隐式、预设标签）。"""
         return self._engine.list_kinds(category)
+
+    def capabilities(self, entity) -> dict:
+        """某实体合并后的能力（D19）：标签 / 挡路 / 动作并集 / 字段并集。"""
+        return self._engine.capabilities(entity)
 
     def register_interaction(
         self, action: str, handler, *, label: str | None = None
@@ -363,15 +422,35 @@ class WorlditorPlayAPI:
         desc: str = "",
         attrs: dict | None = None,
         state: dict | None = None,
+        tags: list[str] | tuple[str, ...] | None = None,
     ):
-        """放置实体（spawn；身份化实体不可被 remove，D14）。"""
+        """放置实体（spawn；身份化实体不可被 remove，D14）。
+
+        ``tags`` 为实例级标签（D18）——刷怪笼包要"生成一个带刷怪能力的实体"
+        就是 ``place_entity("slime", ..., tags=["spawner"])``。
+        """
         return await self._engine.place_entity(
-            kind, map_id, row, col, name=name, desc=desc, attrs=attrs, state=state
+            kind,
+            map_id,
+            row,
+            col,
+            name=name,
+            desc=desc,
+            attrs=attrs,
+            state=state,
+            tags=tags,
         )
 
     async def remove_entity(self, entity_id: str) -> None:
         """移除实体（despawn；身份化实体被拒绝，D14）。"""
         await self._engine.remove_entity(entity_id)
+
+    async def set_tags(self, entity_id: str, tags: list[str]) -> None:
+        """整体替换实体的实例标签（D18；"给玩家加一个刷怪笼标签"就走这里）。
+
+        注意：基底 ``kind`` 不在此列——身份/类型是治理域（D20），换 kind 走身份服务。
+        """
+        await self._engine.update_entity(entity_id, tags=list(tags))
 
     # ---------- 地图编辑（D14：地块/连接/地图/模板） ----------
 
@@ -426,6 +505,28 @@ class WorlditorPlayAPI:
 
     async def delete_template(self, template_id: str) -> None:
         await self._engine.delete_template(template_id)
+
+    def register_entity_template(
+        self, template_id: str, name: str, data: dict, *, label: str = ""
+    ) -> None:
+        """注册玩法包自带的实体模板（D22：内存注册表，随包卸载消失）。
+
+        data = ``{kind, tags[], name, desc, attrs, state}``；管理端本地模板落库，
+        两边合并成一个选择列表（``list_templates("entity")``）。
+        """
+        self._engine.register_entity_template(
+            template_id, name, data, play_id=self.play_id, label=label
+        )
+
+    def list_templates(self, scope: str | None = None) -> list[dict]:
+        """模板清单（D22：玩法包注册 + 管理端本地合并）。"""
+        return self._engine.list_templates(scope)
+
+    async def apply_location_template(
+        self, template_id: str, map_id: str, row: int, col: int
+    ):
+        """套用地块模板到 (row, col)（同图目标平移、跨图目标原样；占位则拒绝）。"""
+        return await self._engine.apply_location_template(template_id, map_id, row, col)
 
     async def set_state(self, entity_id: str, patch: dict) -> None:
         await self._engine.set_state(entity_id, patch)

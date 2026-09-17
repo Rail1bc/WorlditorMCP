@@ -11,13 +11,37 @@
             {{ w.name }}（{{ w.id }}）
           </option>
         </select>
+        <button class="btn" @click="showCreate = !showCreate">＋ 新建地图</button>
         <button class="btn btn-ghost" title="刷新" @click="load">↻</button>
       </div>
     </div>
     <p class="dim">
-      地图治理的总视图：归属、体检、批量搬家。组织树（文件夹）在各自世界的「地图」页里编排。
+      地图治理的总视图：归属、体检、批量搬家、建图。组织树（文件夹）在各自世界的「地图」页里编排。
     </p>
     <p v-if="error" class="error-text">{{ error }}</p>
+
+    <!-- 新建地图（X2：跨世界视角下不必先切世界再建图） -->
+    <div v-if="showCreate" class="inline-form">
+      <input v-model="nm.id" placeholder="地图 id（如 arena）" />
+      <input v-model="nm.name" placeholder="名称" />
+      <label class="mini-label">
+        归属
+        <select v-model="nm.world_id" class="mini" @change="nm.folder_id = ''">
+          <option value="">（不归属任何世界）</option>
+          <option v-for="w in worlds" :key="w.id" :value="w.id">{{ w.name }}</option>
+        </select>
+      </label>
+      <label v-if="nm.world_id" class="mini-label">
+        位置
+        <select v-model="nm.folder_id" class="mini">
+          <option value="">世界根</option>
+          <option v-for="f in foldersOfWorld(nm.world_id)" :key="f.id" :value="f.id">
+            {{ f.path }}
+          </option>
+        </select>
+      </label>
+      <button class="btn" :disabled="busy" @click="createMap">创建</button>
+    </div>
 
     <!-- 统计条 -->
     <div class="stats">
@@ -47,8 +71,10 @@
         </select>
       </label>
       <button class="btn" :disabled="busy" @click="applyBatch">应用</button>
+      <span v-if="batchProgress" class="dim">{{ batchProgress }}</span>
       <button class="btn btn-ghost" @click="selected = []">取消选择</button>
     </div>
+    <p v-if="batchResult" class="dim">{{ batchResult }}</p>
 
     <div class="table-wrap">
       <table class="table">
@@ -150,6 +176,10 @@ const selected = ref([]);
 const batch = ref({ world_id: "", folder_id: "" });
 const lintOpen = ref("");
 const busy = ref(false);
+const showCreate = ref(false);
+const nm = ref({ id: "", name: "", world_id: "", folder_id: "" });
+const batchProgress = ref("");
+const batchResult = ref("");
 
 const orphanCount = computed(() => maps.value.filter((m) => !m.world_id).length);
 
@@ -262,14 +292,52 @@ async function applyBatch() {
   }
   busy.value = true;
   error.value = "";
-  try {
-    for (const id of selected.value) {
+  batchResult.value = "";
+  const ids = [...selected.value];
+  const failed = [];
+  let done = 0;
+  // X1：逐张搬家要报进度——中途失败时前面的已经改完了，不能只弹第一条错误
+  for (const id of ids) {
+    batchProgress.value = `已完成 ${done}/${ids.length}…`;
+    try {
       await apiPost(`/admin/maps/${encodeURIComponent(id)}/move`, {
         world_id: target === "__none__" ? null : target,
         folder_id: target === "__none__" ? null : batch.value.folder_id || null,
       });
+      done += 1;
+    } catch (e) {
+      failed.push(`${id}（${e.message}）`);
     }
-    selected.value = [];
+  }
+  batchProgress.value = "";
+  batchResult.value = failed.length
+    ? `已移动 ${done}/${ids.length} 张；失败 ${failed.length} 张：${failed.join("；")}`
+    : `已移动 ${done} 张地图`;
+  selected.value = [];
+  await load();
+  window.dispatchEvent(new CustomEvent("worlditor:worlds-changed"));
+  busy.value = false;
+}
+
+async function createMap() {
+  if (!nm.value.id.trim()) {
+    error.value = "请填写地图 id";
+    return;
+  }
+  busy.value = true;
+  error.value = "";
+  try {
+    await apiPost("/admin/maps", {
+      id: nm.value.id.trim(),
+      name: nm.value.name.trim() || nm.value.id.trim(),
+    });
+    await apiPost(`/admin/maps/${encodeURIComponent(nm.value.id.trim())}/move`, {
+      world_id: nm.value.world_id || null,
+      folder_id: nm.value.world_id ? nm.value.folder_id || null : null,
+    });
+    batchResult.value = `已创建地图 ${nm.value.id}`;
+    nm.value = { id: "", name: "", world_id: nm.value.world_id, folder_id: "" };
+    showCreate.value = false;
     await load();
     window.dispatchEvent(new CustomEvent("worlditor:worlds-changed"));
   } catch (e) {

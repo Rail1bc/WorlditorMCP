@@ -745,3 +745,77 @@ def test_tree_names_and_world_ids_are_validated(tmp_path):
             await engine.terminate()
 
     _run(fn())
+
+
+# ---------- 地块移动（D24/E4：内核早有 move_location，v0.5 接上管理端） ----------
+
+
+def test_admin_location_move_endpoint(tmp_path):
+    """POST /admin/locations/move：坐标迁移 + 全图引用重写 + 已成格拒绝。"""
+
+    async def fn(client, h):
+        # 显式建一条指向 (0,0) 的连接（测试夹具的十字连线是另一套方向约定，
+        # 这里要的是"引用重写"本身，所以自己造引用）
+        r = await client.post(
+            "/admin/connections",
+            json={
+                "map_id": "m1",
+                "row": 0,
+                "col": 1,
+                "direction": "left",
+                "enabled": True,
+                "paths": [{"targets": [{"row": 0, "col": 0, "weight": 2.0}]}],
+            },
+            headers=h,
+        )
+        assert r.status_code == 200, r.text
+
+        # 中央广场 (0,0) 搬到 (-2,0)：自身坐标 + 指向它的连接一起重写
+        r = await client.post(
+            "/admin/locations/move",
+            json={"map_id": "m1", "row": 0, "col": 0, "to_row": -2, "to_col": 0},
+            headers=h,
+        )
+        assert r.status_code == 200, r.text
+        detail = (await client.get("/admin/maps/m1", headers=h)).json()
+        locs = {(loc["row"], loc["col"]): loc for loc in detail["locations"]}
+        assert (-2, 0) in locs and locs[(-2, 0)]["name"] == "中央广场"
+        assert (0, 0) not in locs
+        path = locs[(0, 1)]["connections"]["left"]["paths"][0]
+        assert (path["targets"][0]["row"], path["targets"][0]["col"]) == (-2, 0)
+        assert path["targets"][0]["weight"] == 2.0  # 权重不被顺手抹掉
+        # 目标格被占 → 拒绝
+        r = await client.post(
+            "/admin/locations/move",
+            json={"map_id": "m1", "row": -2, "col": 0, "to_row": 0, "to_col": 1},
+            headers=h,
+        )
+        assert r.status_code == 400, r.text
+
+    _run(_admin_scenario(tmp_path, fn))
+
+
+def test_identity_entity_kind_is_locked(tmp_path):
+    """基底类型可改，但**身份化实体**的类型由身份服务管（D20）——编辑器改不动。"""
+
+    async def fn():
+        engine = await _engine(tmp_path)
+        try:
+            await _world_with_two_maps(engine)
+            npc = await engine.place_entity("merchant", "m1", 0, 0, name="NPC")
+            await engine.update_entity(npc.id, kind="sign")
+            assert npc.kind == "sign"
+            player = await engine.place_entity("player", "m1", 0, 1, name="小明")
+            try:
+                await engine.update_entity(player.id, kind="statue")
+            except WorldError as e:
+                assert "身份服务" in str(e)
+            else:
+                raise AssertionError("玩家基底类型居然能改")
+            # 同名重复设置 = 不报错（幂等）
+            await engine.update_entity(player.id, kind="player")
+            assert player.kind == "player"
+        finally:
+            await engine.terminate()
+
+    _run(fn())

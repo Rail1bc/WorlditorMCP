@@ -1,26 +1,99 @@
 # Changelog
 
-## 未发布（main）
+## v0.5.0（2026-09-17）
 
-v0.4.0 发布后对地图治理做了一轮自查，修掉下面几处（未单独打 tag；会随下一个版本发布）。
+**实体声明体系 + 编辑器重构**：`kind` 从"决定一切的身份标签"退化为**预设的标志位**，
+**能力由标签承载**（一个实体可以既是玩家、又挂刷怪笼标签）；地图编辑器重写为
+**不依赖任何玩法包的世界数据编辑器**，并修掉 G24（连接编辑器会**静默**丢
+跨图目标 / 权重 / 文案）。
 
-### 修复
-- **旧库升级路径此前没有测试**：补 `test_legacy_db_without_sort_column_is_upgraded_in_place`
-  ——用 v0.3.0 的旧表结构（`world_maps` 无 `sort`）建库、塞数据，再交给引擎打开，
-  验证 `_ensure_columns` 原地补列、旧数据完好、排序可用、二次打开幂等。
-  （此前只在"新库"上验证过，"旧 world.db 直接可用"这条承诺等于没测。）
-- **组织树写入口缺输入校验**（内核边界，UI 挡了不算）：`create_world` 空 id / 空名称、
-  `update_world` 改空名称、`create_folder` / `rename_folder` 空名称，此前全部**能写进库**
-  （会产生空 id 的世界、无名文件夹）；现在内核统一 `_clean_required` 拒绝，名称顺手 strip。
-- **地图复制在引擎锁内逐行提交**：`copy_map` 每个地块/实体一次 `commit`，WAL 下每行一次
-  fsync——几千格的地图会把整个世界（tick/移动/所有玩家）卡住数秒。改为
-  `store.save_locations` / `save_entities` **单事务批量写**（`save_location`/`save_entity`
-  退化为单元素调用，行为不变）。
-- CHANGELOG/DESIGN 措辞修正：副本落在同组织节点的**末尾**，不是"紧挨原件"。
+### 新增：实体标签体系（D18–D21 / D25）
+- **`Entity.tags[]`**（有序、去重保序）+ `entities.tags_json` 列（`_ensure_columns`
+  幂等补列，旧 `world.db` 直接可用，`SCHEMA_VERSION` 6）。标签顺序有语义——
+  参与字段覆盖优先级。
+- **类型与标签共用一个命名空间**：`register_entity_kind("door", ...)` 现在就是注册
+  一条**隐式同名标签**（`implicit=True`）——**旧玩法包与全部既有测试零改动**
+  （~60 处 `place_entity("player", …)` / `register_entity_kind` 调用一行没动）。
+- **新 API**：`register_entity_tag(tag, label, block_move, interactions, fields, categories)`
+  声明一条可叠加的能力标签；`register_entity_type(kind, tags=[...])` 表达
+  "类型 = 标签预设"（`A = {A, C}`、`B = {B, C}`，即本次需求的原话）。
+- **`add_tag_fields`**（旧名 `add_kind_fields` 保留）语义扩张为"给**所有带该标签的
+  实体**加字段"——顺手销掉 D9 里"B 包拿字符串改 A 包命名空间"的别扭做法。
+- **能力并集规则**（D19）：`block_move` **任一标签为真即阻挡**（`state["block_move"]`
+  仍是最高的动态覆盖）；`interactions` 并集；`fields` 覆盖顺序**定死** =
+  隐式 kind 标签 → 实例 tags（数组序）→ 分类字段。**不做负标签**（要"去掉"就换
+  kind）；**允许未注册标签**（编辑器可手输，实体照常存在，只是不贡献能力）。
+- **逐标签世界激活过滤**（D21）：标签所属玩法包在某世界未启用 → 该标签不参与并集
+  （没装刷怪笼包的世界里，刷怪笼标签静默失效）。
+- **身份判定只看基底 kind**（D20）：标签里写 `player` 不改变身份，
+  `IDENTITY_KINDS` 的 4 处保护一行未改——"删标签绕过 D14"的路径根本不存在；
+  NPC 升格为可登录角色必须经身份服务换基底 kind。
+- `EntityKindSpec.tick` **死字段已删**（写了从没被读过、`list_kinds` 也不返回）；
+  `EntityKindSpec` 改名 `TagSpec` 并保留旧别名。`list_kinds()` 现在同时返回类型与
+  标签，带**来源包 / 是否隐式 / 预设标签**。
+- `place_entity(..., tags=[...])`、`update_entity(..., tags=/kind=)`、`api.set_tags()`、
+  `api.capabilities(entity)`（合并能力诊断，含 `inactive_tags` / `unknown_tags`）。
 
-### 测试
-- `tests/test_map_governance.py` 增至 **20 条**（新增旧库升级、输入校验两组）；
-  全套 **251 passed**。
+### 新增：模板统一（D22）
+- `templates` 表加 **`scope`**（`location` / `entity`）——解决"地块模板与实体模板
+  撞名"；**地块模板补上"套用"**（语义早在模型注释里写好、一直没实现：
+  同图目标按相对偏移平移、跨图目标原样复制、目标格已被占则拒绝）。
+- **实体模板 = 玩法包注册（内存，随包卸载消失）+ 管理端本地（落库）**，合并成一个
+  选择列表（同 id 本地优先，`source` 标明来源）；负载 `{kind, tags[], name, desc,
+  attrs, state}`，套用后仍可改。不做多实体模板（"房间模板"留待真实需求）。
+
+### 修复：G24 连接编辑器静默损坏数据（D23）
+- **问题**（v0.1 起就存在，实测复现）：在编辑器里打开一个地块再保存，
+  跨图出口的 `map_id` 消失（变成同图、出口变原地打转）、路径权重全被抹成 1.0、
+  路径文案被写成 `"[object Object]"`——**且是循环把 4 个方向全量重写**，
+  改一个方向会毁掉其余三个方向；lint 也抓不到（损坏后的目标地块存在）。
+- **修法**：出口编辑改为**结构化表单**（目标 = 地图下拉 + 坐标 + 权重；
+  文案 = 纯文本或分时段 JSON），并且**凡是整对象替换的保存都先弹差异预览**
+  （旧值→新值，取消即不落盘）——新增全局 `askDiff()` / `DiffModal`（同确认层套路）。
+
+### 新增：编辑器重构（D24）
+- 拆成 **地图网格 / 地块面板 / 出口面板 / 实体面板 / 模板面板**（原 780 行单体组件）。
+- **网格**：多选（Ctrl/⌘）、**框选**（按住拖过格子）、**出口方向箭头**（简版可视化）、
+  右下多留一行一列 + 坐标输入框（包围盒之外与负坐标都能去）。
+- **多选复制粘贴**：复制选中地块（存相对位移）→ 粘贴到锚点，已占格跳过；
+  同图出口按位移搬、跨图出口原样。
+- **移动地块**：接上 `engine.move_location`（内核早有、一直没有入口）——
+  原子重写自身坐标 + 全图指向它的连接 + 其上实体。
+- **实体面板**：类型（可自由输入）+ 标签组合（勾选已声明 / 手输未注册）+ 按声明
+  渲染字段控件（`FieldForm`）+ 未声明字段原始 JSON 兜底 + `attrs`/`state` 分开标注
+  （提示 `block_move`/`invisible` 等内核约定键）+ **合并后的能力预览**（挡路/动作/
+  字段/未激活/未注册标签）。
+- 管理端新增 **`GET /admin/kinds`**（类型 + 标签清单，编辑器下拉与标签勾选的数据源）、
+  `GET /admin/templates?scope=`、`POST /admin/templates/apply`、
+  `POST /admin/locations/move`。
+
+### 顺手项（G23 清单）
+- 批量搬家报进度（"已移动 k/N + 失败清单"，不再只弹第一条错误）；
+- 跨世界总览页可直接**新建地图并归属**；
+- 组织树行内 **▲▼**（或聚焦行 `Alt+↑/↓`）排序——拖拽之外的键盘/按钮替代；
+- `GET /admin/lint?world_id=`：只算本世界的地图（未归属地图算在默认世界）；
+- 编辑器拆分后仍**全程无原生 confirm/prompt/alert**（有测试守着）。
+
+### 变更 / 兼容
+- `register_entity_kind` 去掉 `tick` 参数（死字段）；`EntityKindSpec` → `TagSpec`
+  （旧名保留别名）。**其余全部向后兼容**。
+- `add_kind_fields` 语义扩张（只影响"带该标签的实体"，比原先"kind 精确相等"更符合直觉）。
+- 数据层加两列（`entities.tags_json` / `templates.scope`），旧库自动升级。
+
+### 测试 / 文档
+- 新增 `tests/test_entity_tags.py`（**24 条**）：隐式同名标签、组合（玩家+刷怪笼）、
+  类型预设标签、并集与冲突规则、字段覆盖顺序、未注册标签、身份只看基底 kind、
+  逐标签世界过滤、缓存失效、持久化与解析、模板（相对平移/跨图原样/占位拒绝/
+  两种来源/卸载清理/负载校验）、管理端 `/admin/kinds` 与模板接口。
+- `tests/test_map_governance.py` 增至 **22 条**（新增 `locations/move`、身份类型锁定）；
+  样式守卫增至 **15 条**（编辑器分面板、diff 预览、结构化出口、schema 表单、网格多选）。
+- 浏览器 E2E 新增 `verify_editor_v05.mjs`（**31 项全绿**，含 G24 逐字段回归 +
+  "取消 diff 不落盘"）；`verify_map_governance_ui.mjs` / `verify_world_governance_ui.mjs` /
+  `verify_v2_ui.mjs` 全部回归通过。
+- 共 **282 passed**。
+- 文档：DESIGN §3.1（标签模型与解析规则）、**新增 §4.3.3 编辑器**、决策表
+  **D18–D25**；PLAY_DEV 注册面/动作/模板段全面更新（含逐标签世界过滤的写包须知）；
+  GAPS 的 G21/G22/G23/G24 全部收口。
 
 ## v0.4.0（2026-09-17）
 

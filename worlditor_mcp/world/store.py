@@ -37,8 +37,9 @@ from .model import (
 )
 
 # 表结构版本（沿用 v4 引擎表布局；D13 无迁移逻辑，仅写入 world_meta 记录。
-# v5 = world_maps.sort：组织树内地图与文件夹共用一个排序空间）
-SCHEMA_VERSION = "5"
+# v5 = world_maps.sort：组织树内地图与文件夹共用一个排序空间
+# v6 = entities.tags_json（D18 实体标签）+ templates.scope（D22 模板统一））
+SCHEMA_VERSION = "6"
 DEFAULT_MAP_ID = "default"
 
 # 世界日志保留上限（超出后裁掉最旧记录；防高频事件刷爆库）
@@ -63,7 +64,8 @@ CREATE TABLE IF NOT EXISTS entities (
     user_id TEXT,
     attrs_json TEXT NOT NULL DEFAULT '{}',
     state_json TEXT NOT NULL DEFAULT '{}',
-    last_active_ts REAL NOT NULL DEFAULT 0
+    last_active_ts REAL NOT NULL DEFAULT 0,
+    tags_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS idx_entities_pos ON entities(map_id, row, col);
 CREATE TABLE IF NOT EXISTS items (
@@ -159,7 +161,8 @@ CREATE TABLE IF NOT EXISTS locations (
 CREATE TABLE IF NOT EXISTS templates (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    data_json TEXT NOT NULL
+    data_json TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'location'
 );
 CREATE TABLE IF NOT EXISTS world_meta (
     key TEXT PRIMARY KEY,
@@ -219,11 +222,24 @@ class WorldStore:
         转换，不是不给表加列。
         """
         assert self._conn is not None
-        cur = await self._conn.execute("PRAGMA table_info(world_maps)")
-        cols = {row["name"] for row in await cur.fetchall()}
-        if "sort" not in cols:
+        wanted = {
+            # 表 → {列名: 列定义}
+            "world_maps": {"sort": "INTEGER NOT NULL DEFAULT 0"},
+            "entities": {"tags_json": "TEXT NOT NULL DEFAULT '[]'"},
+        }
+        for table, columns in wanted.items():
+            cur = await self._conn.execute(f"PRAGMA table_info({table})")
+            existing = {row["name"] for row in await cur.fetchall()}
+            for name, ddl in columns.items():
+                if name not in existing:
+                    await self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"
+                    )
+        cur = await self._conn.execute("PRAGMA table_info(templates)")
+        template_cols = {row["name"] for row in await cur.fetchall()}
+        if "scope" not in template_cols:
             await self._conn.execute(
-                "ALTER TABLE world_maps ADD COLUMN sort INTEGER NOT NULL DEFAULT 0"
+                "ALTER TABLE templates ADD COLUMN scope TEXT NOT NULL DEFAULT 'location'"
             )
         await self._conn.commit()
 
@@ -289,6 +305,7 @@ class WorldStore:
                 id=row["id"],
                 name=row["name"],
                 data=json.loads(row["data_json"] or "{}"),
+                scope=row["scope"] or "location",
             )
         cur = await self._conn.execute("SELECT * FROM entities")
         for row in await cur.fetchall():
@@ -460,11 +477,17 @@ class WorldStore:
         self.map_sort.pop(map_id, None)
 
     async def save_template(self, template: WorldTemplate) -> None:
-        """写回 / 新建一个模板。"""
+        """写回 / 新建一个模板（D22：scope = location / entity）。"""
         assert self._conn is not None
         await self._conn.execute(
-            "INSERT OR REPLACE INTO templates(id, name, data_json) VALUES(?, ?, ?)",
-            (template.id, template.name, json.dumps(template.data, ensure_ascii=False)),
+            "INSERT OR REPLACE INTO templates(id, name, data_json, scope) "
+            "VALUES(?, ?, ?, ?)",
+            (
+                template.id,
+                template.name,
+                json.dumps(template.data, ensure_ascii=False),
+                template.scope,
+            ),
         )
         await self._conn.commit()
         self.templates[template.id] = template
@@ -489,8 +512,9 @@ class WorldStore:
             return
         await self._conn.executemany(
             "INSERT OR REPLACE INTO entities("
-            "id, map_id, row, col, kind, name, desc, user_id, attrs_json, state_json, last_active_ts"
-            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "id, map_id, row, col, kind, name, desc, user_id, attrs_json, state_json, "
+            "last_active_ts, tags_json"
+            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [entity_db_row(e) for e in entities],
         )
         await self._conn.commit()

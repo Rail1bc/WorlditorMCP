@@ -66,10 +66,18 @@ def test_entity_from_dict_tolerant():
 
 def test_entity_db_roundtrip():
     e = Entity(
-        id="x", map_id="m", row=1, col=2, kind="player", name="小明", attrs={"a": 1}
+        id="x",
+        map_id="m",
+        row=1,
+        col=2,
+        kind="player",
+        name="小明",
+        attrs={"a": 1},
+        tags=["spawner"],
     )
     row = entity_db_row(e)
     assert row[8] == '{"a": 1}'
+    assert row[11] == '["spawner"]'  # D18：tags_json 是最后一列
 
 
 def test_entity_from_row_fake():
@@ -87,10 +95,13 @@ def test_entity_from_row_fake():
                 "attrs_json": "not-json",
                 "state_json": "",
                 "last_active_ts": 0.0,
+                "tags_json": '["a", "", 3, "a", "b"]',
             }[key]
 
     e = entity_from_row(FakeRow())
     assert e is not None and e.attrs == {} and e.state == {}
+    # D18：标签容错解析——非字符串/空串丢弃、去重保序（顺序参与字段覆盖优先级）
+    assert e.tags == ["a", "b"]
 
 
 def test_item_def_roundtrip():

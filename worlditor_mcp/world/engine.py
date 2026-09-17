@@ -53,7 +53,6 @@ from .model import (
     WORLD_EVENTS,
     ConnectionPath,
     Entity,
-    EntityKindSpec,
     InteractionRequest,
     InteractionResult,
     ItemDef,
@@ -61,6 +60,7 @@ from .model import (
     ScenePath,
     SceneView,
     ShortCircuit,
+    TagSpec,
     Target,
     World,
     WorldFolder,
@@ -70,6 +70,7 @@ from .model import (
     parse_location,
     parse_map,
     parse_path,
+    parse_tags,
     parse_text_schedule,
 )
 from .store import DEFAULT_WORLD_ID, WorldStore
@@ -329,6 +330,151 @@ def _clean_sort(sort: object) -> int | None:
     return int(sort)
 
 
+# ---------- 模板负载（D22：地块与实体共用一个"模板"概念） ----------
+
+TEMPLATE_SCOPES = ("location", "entity")
+
+
+def _template_to_absolute(data: dict, row: int, col: int) -> dict:
+    """模板负载 → parse_location 可吃的绝对坐标形式（锚点 = (row, col)）。
+
+    目标两种写法：``{dr, dc}`` 相对偏移（同图，放置时平移）与
+    ``{map_id, row, col}`` 绝对坐标（跨图，原样复制）。
+    """
+    out: dict[str, Any] = {
+        "map_id": "",
+        "row": row,
+        "col": col,
+        "name": data.get("name"),
+        "description": data.get("description"),
+        "connections": {},
+    }
+    raw = data.get("connections")
+    if isinstance(raw, dict):
+        for direction, slot in raw.items():
+            if direction not in DIRECTIONS or not isinstance(slot, dict):
+                continue
+            paths = []
+            for path in slot.get("paths") or []:
+                if not isinstance(path, dict):
+                    continue
+                targets = []
+                for t in path.get("targets") or []:
+                    if not isinstance(t, dict):
+                        continue
+                    if _is_int(t.get("dr")) and _is_int(t.get("dc")):
+                        targets.append(
+                            {
+                                "row": row + int(t["dr"]),
+                                "col": col + int(t["dc"]),
+                                "weight": t.get("weight", 1.0),
+                            }
+                        )
+                    elif _is_int(t.get("row")) and _is_int(t.get("col")):
+                        item = {
+                            "row": int(t["row"]),
+                            "col": int(t["col"]),
+                            "weight": t.get("weight", 1.0),
+                        }
+                        if isinstance(t.get("map_id"), str) and t["map_id"]:
+                            item["map_id"] = t["map_id"]
+                        targets.append(item)
+                paths.append(
+                    {
+                        "label": path.get("label"),
+                        "reveal_target": path.get("reveal_target", True),
+                        "targets": targets,
+                    }
+                )
+            out["connections"][direction] = {
+                "direction": direction,
+                "enabled": bool(slot.get("enabled")),
+                "paths": paths,
+            }
+    return out
+
+
+def _absolute_to_template(loc: dict) -> dict:
+    """规范地块 dict → 模板负载（同图目标转回相对偏移，锚点在 (0,0)）。"""
+    out: dict[str, Any] = {
+        "name": loc["name"],
+        "description": loc.get("description"),
+        "connections": {},
+    }
+    for direction, slot in loc["connections"].items():
+        paths = []
+        for path in slot["paths"]:
+            targets = []
+            for t in path["targets"]:
+                if t.get("map_id"):
+                    targets.append(
+                        {
+                            "map_id": t["map_id"],
+                            "row": t["row"],
+                            "col": t["col"],
+                            "weight": t["weight"],
+                        }
+                    )
+                else:
+                    targets.append(
+                        {"dr": t["row"], "dc": t["col"], "weight": t["weight"]}
+                    )
+            item: dict[str, Any] = {
+                "reveal_target": path["reveal_target"],
+                "targets": targets,
+            }
+            if path.get("label"):
+                item["label"] = path["label"]
+            paths.append(item)
+        out["connections"][direction] = {"enabled": slot["enabled"], "paths": paths}
+    return out
+
+
+def _location_template_payload(data: Any) -> dict[str, Any]:
+    """地块模板负载规范化（best-effort：能规范就规范，缺 name 留到套用时再报错）。
+
+    这样"先存个空壳模板、之后再填"仍然可行；真正套用时 `parse_location` 会以
+    "地块名称不能为空"拒绝——报错发生在使用点，而不是保存点。
+    """
+    if not isinstance(data, dict):
+        raise WorldError("地块模板 data 必须是对象")
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return dict(data)
+    loc = parse_location(_template_to_absolute(data, 0, 0))
+    return _absolute_to_template(location_to_dict(loc))
+
+
+def _location_from_template(data: dict, map_id: str, row: int, col: int) -> Any:
+    """按放置坐标实例化地块模板（同图目标平移、跨图目标原样）。"""
+    payload = _template_to_absolute(data, row, col)
+    payload["map_id"] = map_id
+    return parse_location(payload)
+
+
+def _entity_template_payload(data: Any) -> dict[str, Any]:
+    """实体模板负载校验 + 规范化（D22：{kind, tags[], name, desc, attrs, state}）。"""
+    if not isinstance(data, dict):
+        raise WorldError("实体模板 data 必须是对象")
+    kind = data.get("kind")
+    if not isinstance(kind, str) or not kind.strip():
+        raise WorldError("实体模板需要 kind（基底类型）")
+    attrs = data.get("attrs")
+    state = data.get("state")
+    if attrs is not None and not isinstance(attrs, dict):
+        raise WorldError("实体模板 attrs 必须是对象")
+    if state is not None and not isinstance(state, dict):
+        raise WorldError("实体模板 state 必须是对象")
+    return {
+        "kind": kind.strip(),
+        "tags": parse_tags(data.get("tags")),
+        "name": str(data.get("name") or "").strip(),
+        "desc": str(data.get("desc") or ""),
+        "attrs": dict(attrs or {}),
+        "state": dict(state or {}),
+    }
+
+
 class WorldEngine:
     """世界底子的唯一权威引擎（插件进程内；事实模型 + 原语 + 注册表 + 事件总线）。"""
 
@@ -345,15 +491,21 @@ class WorldEngine:
         self._clock = clock or (lambda: datetime.now().astimezone())
         self._rand = rand
         # 注册表（玩法包扩展点）
-        self._kind_specs: dict[str, EntityKindSpec] = {}
+        # D18：类型与标签**共用一个命名空间**（_tag_specs）——register_entity_kind
+        # 写入的是"隐式同名标签"，能力解析只有一条路径
+        self._tag_specs: dict[str, TagSpec] = {}
+        # 类型预设标签：register_entity_kind/type(kind, tags=[...]) → kind 自带的额外标签
+        self._type_tags: dict[str, tuple[str, ...]] = {}
+        # D21 规格级能力缓存：(kind, tags...) → 有序 TagSpec 列表（不含世界过滤）
+        self._spec_cache: dict[tuple[str, tuple[str, ...]], tuple[TagSpec, ...]] = {}
         self._interactions: dict[str, _InteractionBinding] = {}
         self._event_bindings: dict[str, list[_EventBinding]] = {
             e: [] for e in WORLD_EVENTS
         }
         self._ui_components: dict[str, str] = {}
         self._ui_hooks: dict[tuple[str, str], list[_UiHookBinding]] = {}
-        # D9/D10 字段设施：kind/分类/物品的追加字段声明（kind 声明字段在 spec.fields）
-        self._kind_fields: dict[str, list[_FieldAppend]] = {}
+        # D9/D10 字段设施：标签/分类/物品的追加字段声明（标签自身字段在 spec.fields）
+        self._tag_fields: dict[str, list[_FieldAppend]] = {}
         self._category_fields: dict[str, list[_FieldAppend]] = {}
         self._item_fields: dict[str, list[_FieldAppend]] = {}
         # 物品定义归属（play_id）：玩法包卸载时清理其注册的物品定义（v0.2.0）
@@ -371,6 +523,8 @@ class WorldEngine:
         self._services: dict[str, dict[str, _ServiceBinding]] = {}
         # 管理页注册表：play_id -> key -> binding（管理端导航 + actions 代理）
         self._admin_pages: dict[str, dict[str, _AdminPageBinding]] = {}
+        # D22 玩法包注册的实体模板（内存：随包卸载消失；与落库的本地模板合并展示）
+        self._play_templates: dict[str, dict] = {}
         # 玩法包 API 实例（PlayLoader attach；handler 调用时按 play_id 取）
         self._play_apis: dict[str, Any] = {}
         # 事件流订阅者（SSE 出口，B11：事件总线序列化推送；队列满丢最旧）
@@ -475,55 +629,153 @@ class WorldEngine:
         *,
         block_move: bool = False,
         interactions: tuple[str, ...] = (),
-        tick: bool = False,
         label: str = "",
         play_id: str = "",
         fields: list[dict] | None = None,
         categories: tuple[str, ...] = (),
+        tags: tuple[str, ...] | list[str] = (),
     ) -> None:
-        """注册实体 kind 元数据（B1 / B8 / C3 / D9 / D10）。
+        """注册实体类型（D18：**就是注册一条隐式同名标签** + 一组预设标签）。
 
-        fields 为 kind 声明字段 schema（{name,label,type,default?}，UI 通用渲染）；
-        categories 为分类标签（宽松，无需预注册）。
-        kind 未注册也可放置实体。
+        v0.5 起 kind 退化为"预设的标志位"：它自身贡献一条名为 kind 的标签
+        （``implicit=True``），再通过 ``tags`` 声明该类型**预设**的额外标签
+        （"类型 A = {A, C}"）。老代码（只传 kind）行为完全不变——能力解析时
+        基底 kind 本来就会作为标签参与并集。
+
+        Args:
+            block_move: 任一标签为真即阻挡（D19）。
+            interactions: 默认可用的动作名（与全局注册表取并集）。
+            label: 文案（B1）；也是放置实体时未给名字的默认名。
+            play_id: 声明者（能力面按世界激活过滤，D21）。
+            fields: 字段 schema（D9，UI 通用渲染）。
+            categories: 分类标签（D10，宽松）。
+            tags: 该类型**预设**的额外标签（D18）。
         """
         kind = _clean_required(kind, "kind")
-        if not isinstance(block_move, bool) or not isinstance(tick, bool):
-            raise WorldError("block_move/tick 必须是布尔值")
+        self._register_tag(
+            kind,
+            block_move=block_move,
+            interactions=interactions,
+            label=label,
+            play_id=play_id,
+            fields=fields,
+            categories=categories,
+            implicit=True,
+        )
+        if kind in self._type_tags or tags:
+            self._type_tags[kind] = parse_tags(tags)
+            self._invalidate_spec_cache()
+
+    def register_entity_type(
+        self,
+        kind: str,
+        *,
+        tags: tuple[str, ...] | list[str] = (),
+        label: str = "",
+        block_move: bool = False,
+        interactions: tuple[str, ...] = (),
+        play_id: str = "",
+        fields: list[dict] | None = None,
+        categories: tuple[str, ...] = (),
+    ) -> None:
+        """注册"类型 = 标签预设"（D18：``register_entity_type("A", tags=["c"])``
+        → 类型 A 的实体自带标签 ``A`` 与 ``c``）。等价于 ``register_entity_kind``，
+        只是名字更贴合"类型只是预设"的模型。
+        """
+        self.register_entity_kind(
+            kind,
+            block_move=block_move,
+            interactions=interactions,
+            label=label,
+            play_id=play_id,
+            fields=fields,
+            categories=categories,
+            tags=tags,
+        )
+
+    def register_entity_tag(
+        self,
+        tag: str,
+        *,
+        label: str = "",
+        block_move: bool = False,
+        interactions: tuple[str, ...] = (),
+        play_id: str = "",
+        fields: list[dict] | None = None,
+        categories: tuple[str, ...] = (),
+    ) -> None:
+        """注册一条标签（D18：能力由标签承载；与类型共用一个命名空间）。"""
+        tag = _clean_required(tag, "标签名")
+        self._register_tag(
+            tag,
+            block_move=block_move,
+            interactions=interactions,
+            label=label,
+            play_id=play_id,
+            fields=fields,
+            categories=categories,
+            implicit=False,
+        )
+
+    def _register_tag(
+        self,
+        tag: str,
+        *,
+        block_move: bool,
+        interactions: tuple[str, ...] | list[str],
+        label: str,
+        play_id: str,
+        fields: list[dict] | None,
+        categories: tuple[str, ...] | list[str],
+        implicit: bool,
+    ) -> None:
+        if not isinstance(block_move, bool):
+            raise WorldError("block_move 必须是布尔值")
         if not isinstance(interactions, (tuple, list)) or not all(
             isinstance(a, str) and a for a in interactions
         ):
             raise WorldError("interactions 必须是动作名列表")
-        self._kind_specs[kind] = EntityKindSpec(
-            kind=kind,
+        self._tag_specs[tag] = TagSpec(
+            tag=tag,
             block_move=block_move,
             interactions=tuple(interactions),
-            tick=tick,
             label=str(label or ""),
             play_id=play_id,
             fields=_validate_fields(fields or []),
             categories=tuple(
                 str(c) for c in categories if isinstance(c, str) and c.strip()
             ),
+            implicit=implicit,
         )
+        self._invalidate_spec_cache()
 
     # ---------- 字段设施（D9 / D10） ----------
+
+    def add_tag_fields(
+        self, tag: str, fields: list[dict], *, play_id: str = ""
+    ) -> None:
+        """向已有标签追加字段（D18：B 包给**任何带该标签的实体**加字段）。
+
+        这就是 v0.4 之前的 ``add_kind_fields``——语义随 D18 扩张：以前只影响
+        ``kind`` 恰好等于该名字的实体，现在影响所有带该标签的实体（含实例标签）。
+        """
+        tag = _clean_required(tag, "标签名")
+        if tag not in self._tag_specs:
+            raise WorldError(f"标签（类型）未注册：{tag}")
+        self._tag_fields.setdefault(tag, []).extend(
+            _FieldAppend(play_id=play_id, field=f) for f in _validate_fields(fields)
+        )
 
     def add_kind_fields(
         self, kind: str, fields: list[dict], *, play_id: str = ""
     ) -> None:
-        """向已有 kind 追加字段（玩法包 B 给其他包的 kind 加字段）。"""
-        kind = _clean_required(kind, "kind")
-        if kind not in self._kind_specs:
-            raise WorldError(f"kind 未注册：{kind}")
-        self._kind_fields.setdefault(kind, []).extend(
-            _FieldAppend(play_id=play_id, field=f) for f in _validate_fields(fields)
-        )
+        """``add_tag_fields`` 的旧名（v0.2–v0.4 的调用点无需改动）。"""
+        self.add_tag_fields(kind, fields, play_id=play_id)
 
     def add_category_fields(
         self, category: str, fields: list[dict], *, play_id: str = ""
     ) -> None:
-        """向分类追加字段（该分类全部 kind 生效；宽松，无需预注册分类）。"""
+        """向分类追加字段（该分类全部标签生效；宽松，无需预注册分类）。"""
         category = _clean_required(category, "分类名")
         self._category_fields.setdefault(category, []).extend(
             _FieldAppend(play_id=play_id, field=f) for f in _validate_fields(fields)
@@ -540,36 +792,130 @@ class WorldEngine:
             _FieldAppend(play_id=play_id, field=f) for f in _validate_fields(fields)
         )
 
-    def effective_fields(self, kind: str) -> list[dict]:
-        """kind 有效字段 = kind 声明 ∪ 追加声明 ∪ 所属分类声明（D10 运行时合并）。"""
-        spec = self._kind_specs.get(kind)
+    def effective_fields(self, tag: str) -> list[dict]:
+        """单个标签的有效字段 = 声明 ∪ 追加声明 ∪ 所属分类声明（D10 运行时合并）。"""
+        return self._merge_fields([tag])
+
+    def effective_fields_for(self, tags: list[str] | tuple[str, ...]) -> list[dict]:
+        """多标签的有效字段（D19 覆盖顺序：列表靠后者优先）。"""
+        return self._merge_fields(list(tags))
+
+    def _merge_fields(self, tags: list[str]) -> list[dict]:
+        """字段合并（D19 顺序）：标签字段（按列表顺序，靠后覆盖）→ 分类字段（最后）。"""
         merged: dict[str, dict] = {}
-        for f in (spec.fields if spec else []) + [
-            a.field for a in self._kind_fields.get(kind, [])
-        ]:
-            merged[f["name"]] = f
-        for category in spec.categories if spec else ():
+        categories: list[str] = []
+        for tag in tags:
+            spec = self._tag_specs.get(tag)
+            if spec is None:
+                continue  # 未注册标签：无行为贡献（D19/R6）
+            for f in spec.fields + [a.field for a in self._tag_fields.get(tag, [])]:
+                merged[f["name"]] = f
+            for category in spec.categories:
+                if category not in categories:
+                    categories.append(category)
+        for category in categories:
             for a in self._category_fields.get(category, []):
                 merged[a.field["name"]] = a.field
         return list(merged.values())
 
     def list_kinds(self, category: str | None = None) -> list[dict]:
-        """kind 列表（含字段 schema 与分类）；category 过滤（D10 精准选取）。"""
+        """类型 + 标签清单（D25：含字段 schema、来源包、是否隐式、预设标签）。
+
+        类型与标签共用一个命名空间，所以这是一张**合并清单**：``implicit=True``
+        的条目来自 ``register_entity_kind``（即"类型"），False 来自
+        ``register_entity_tag``（显式标签）。任何一条都可以当实体基底 kind 用。
+        category 过滤（D10 精准选取）。
+        """
         out = []
-        for kind, spec in self._kind_specs.items():
+        for tag, spec in self._tag_specs.items():
             if category is not None and category not in spec.categories:
                 continue
             out.append(
                 {
-                    "kind": kind,
-                    "label": spec.label or kind,
+                    "kind": tag,  # 兼容旧字段名（= 标签名）
+                    "tag": tag,
+                    "label": spec.label or tag,
                     "block_move": spec.block_move,
                     "interactions": list(spec.interactions),
-                    "fields": self.effective_fields(kind),
+                    "fields": self.effective_fields(tag),
                     "categories": list(spec.categories),
+                    "play_id": spec.play_id,
+                    "implicit": spec.implicit,
+                    "preset_tags": list(self._type_tags.get(tag, ())),
                 }
             )
-        return sorted(out, key=lambda k: k["kind"])
+        return sorted(out, key=lambda k: k["tag"])
+
+    # ---------- 标签能力解析（D18 / D19 / D21） ----------
+
+    def _invalidate_spec_cache(self) -> None:
+        """注册表变动即清空规格缓存（D21：缓存以 (kind, tags) 为键，不含世界）。"""
+        self._spec_cache.clear()
+
+    def entity_tags(self, entity: Entity) -> list[str]:
+        """实体有效标签 = 基底 kind + 类型预设标签 + 实例 tags（去重保序）。"""
+        return parse_tags(
+            [entity.kind, *self._type_tags.get(entity.kind, ()), *entity.tags]
+        )
+
+    def _entity_specs(self, entity: Entity) -> tuple[TagSpec, ...]:
+        """有效标签对应的规格（**不含世界过滤**；规格级缓存，D21/C1）。
+
+        未注册的标签没有规格 → 不贡献任何能力（实体照常存在，D19/R6）。
+        """
+        key = (entity.kind, tuple(entity.tags))
+        cached = self._spec_cache.get(key)
+        if cached is not None:
+            return cached
+        specs = tuple(
+            spec
+            for tag in self.entity_tags(entity)
+            if (spec := self._tag_specs.get(tag)) is not None
+        )
+        self._spec_cache[key] = specs
+        return specs
+
+    def _active_specs(self, entity: Entity) -> tuple[TagSpec, ...]:
+        """按实体**所在世界**过滤后的规格（D21：标签所属包未激活 → 不参与并集）。"""
+        world_id = self.store.map_world.get(entity.map_id)
+        return tuple(
+            spec
+            for spec in self._entity_specs(entity)
+            if not spec.play_id or self._world_play_active(world_id, spec.play_id)
+        )
+
+    def capabilities(self, entity: Entity) -> dict:
+        """实体合并后的能力（D19；管理端/编辑器诊断 + 玩法包自查用）。
+
+        block_move = 任一标签为真；interactions = 并集；fields = 按
+        隐式 kind 标签 → 实例 tags（数组序）→ 分类字段 的顺序合并。
+
+        同时把标签**分三类**报出来，便于编辑器解释"为什么没效果"：
+        ``inactive_tags``（注册了但该世界未激活）、``unknown_tags``（没注册）。
+        （诊断路径不做缓存，热路径走 `_active_specs`。）
+        """
+        world_id = self.store.map_world.get(entity.map_id)
+        active: list[str] = []
+        inactive: list[str] = []
+        unknown: list[str] = []
+        for tag in self.entity_tags(entity):
+            spec = self._tag_specs.get(tag)
+            if spec is None:
+                unknown.append(tag)
+            elif not spec.play_id or self._world_play_active(world_id, spec.play_id):
+                active.append(tag)
+            else:
+                inactive.append(tag)
+        specs = [self._tag_specs[t] for t in active]
+        return {
+            "tags": self.entity_tags(entity),
+            "active_tags": active,
+            "inactive_tags": inactive,
+            "unknown_tags": unknown,
+            "block_move": any(s.block_move for s in specs),
+            "interactions": sorted({a for s in specs for a in s.interactions}),
+            "fields": self.effective_fields_for(active),
+        }
 
     # ---------- MCP 工具注册（D2 / G2） ----------
 
@@ -1114,8 +1460,11 @@ class WorldEngine:
 
         原语分派登记随生命周期清除 → 自动恢复内核默认实现（§2.4 恢复语义）。
         """
-        self._kind_specs = {
-            k: v for k, v in self._kind_specs.items() if v.play_id != play_id
+        self._tag_specs = {
+            k: v for k, v in self._tag_specs.items() if v.play_id != play_id
+        }
+        self._type_tags = {
+            k: v for k, v in self._type_tags.items() if k in self._tag_specs
         }
         self._interactions = {
             k: v for k, v in self._interactions.items() if v.play_id != play_id
@@ -1134,9 +1483,9 @@ class WorldEngine:
             for k, v in self._ui_hooks.items()
             if any(b.play_id != play_id for b in v)
         }
-        self._kind_fields = {
+        self._tag_fields = {
             k: [a for a in v if a.play_id != play_id]
-            for k, v in self._kind_fields.items()
+            for k, v in self._tag_fields.items()
             if any(a.play_id != play_id for a in v)
         }
         self._category_fields = {
@@ -1167,6 +1516,10 @@ class WorldEngine:
         self._views = {k: v for k, v in self._views.items() if v.play_id != play_id}
         self._services.pop(play_id, None)
         self._admin_pages.pop(play_id, None)
+        self._play_templates = {
+            k: v for k, v in self._play_templates.items() if v.get("play_id") != play_id
+        }
+        self._invalidate_spec_cache()
 
     # ---------- 界面扩展（B9：ui_hook before/after/replace 递归展开） ----------
 
@@ -1843,12 +2196,14 @@ class WorldEngine:
         attrs: dict | None = None,
         state: dict | None = None,
         user_id: str | None = None,
+        tags: list[str] | tuple[str, ...] | None = None,
     ) -> Entity:
         """放置实体（地图编辑内容，admin；B8）。
 
         kind 未注册也可放置（宽松：行为缺失而已）；name 缺省取 kind label。
         实体 id 自动生成 uuid4 hex（B5）；``user_id`` 供身份注册绑定账户
-        （B13，仅身份化实体使用）。
+        （B13，仅身份化实体使用）；``tags`` 为实例级标签（D18，可组合出
+        "玩家 + 刷怪笼"这类实体，能力见 D19）。
 
         Raises:
             WorldError: 目标地块不存在 / 参数非法。
@@ -1859,7 +2214,7 @@ class WorldEngine:
             if (map_id, row, col) not in self.store.loc_by_pos:
                 raise WorldError(f"地块不存在：({row}, {col})")
             kind = _clean_required(kind, "kind")
-            spec = self._kind_specs.get(kind)
+            spec = self._tag_specs.get(kind)
             if name is None or not str(name).strip():
                 name = (spec.label if spec and spec.label else kind) if spec else kind
             entity = Entity(
@@ -1874,6 +2229,7 @@ class WorldEngine:
                 state=dict(state or {}),
                 user_id=user_id,
                 last_active_ts=self._now_ts(),
+                tags=parse_tags(tags),
             )
             await self.store.save_entity(entity)
             await self._emit(
@@ -2099,16 +2455,15 @@ class WorldEngine:
         return None
 
     def _is_blocking(self, e: Entity) -> bool:
-        """阻挡判定：state 可动态覆盖 kind 声明（门开/关由玩法包写 state）。
+        """阻挡判定（D19）：``state["block_move"]`` 动态覆盖优先，其次看标签并集。
 
-        D15：声明该 kind 的玩法包在实体所在世界未激活 → 视为不存在（不阻挡）。
+        任一标签声明 block_move 即阻挡（标签写 False 想表达的是"对某些实体开放"，
+        该用过滤器/state，而不是抵消别人的 True）。
+        D21：声明该标签的玩法包在实体所在世界未激活 → 该标签不参与（不阻挡）。
         """
         if STATE_BLOCK_MOVE in e.state:
             return bool(e.state[STATE_BLOCK_MOVE])
-        spec = self._kind_specs.get(e.kind)
-        if spec is None or not spec.block_move:
-            return False
-        return self._world_play_active(self.store.map_world.get(e.map_id), spec.play_id)
+        return any(spec.block_move for spec in self._active_specs(e))
 
     def _build_scene(self, entity: Entity) -> SceneView:
         loc = self.store.loc_by_pos.get(entity.pos_key())
@@ -2188,8 +2543,9 @@ class WorldEngine:
             target = self._require_entity(target_id)
             action = _clean_required(action, "动作")
             if action not in self._interactions:
-                spec = self._kind_specs.get(target.kind)
-                declared = set(spec.interactions) if spec else set()
+                declared = {
+                    a for spec in self._active_specs(target) for a in spec.interactions
+                }
                 if action not in declared:
                     raise WorldError(f"「{target.name}」没有「{action}」这个动作")
                 raise WorldError(f"动作「{action}」尚未实现")
@@ -2228,16 +2584,16 @@ class WorldEngine:
             return result
 
     def available_actions(self, target_id: str) -> list[str]:
-        """实体可用动作（C3：kind 声明 ∪ 全局注册表；未实现的声明剔除）。
+        """实体可用动作（C3：标签声明并集 ∪ 全局注册表；未实现的声明剔除）。
 
-        D15：动作提供方在**目标所在世界**未激活 → 不出现在可用动作里
+        D19：声明 = **全部有效标签的并集**（"玩家 + 刷怪笼"能同时看到两边的动作）。
+        D21：动作提供方在**目标所在世界**未激活 → 不出现在可用动作里
         （与 engine.interact 的拒绝判定同源，避免"菜单里有、点了说没有"）。
         """
         target = self.store.entities.get(target_id)
         if target is None:
             raise WorldError(f"实体不存在：{target_id}")
-        spec = self._kind_specs.get(target.kind)
-        declared = set(spec.interactions) if spec else set()
+        declared = {a for spec in self._active_specs(target) for a in spec.interactions}
         world_id = self.store.map_world.get(target.map_id)
         return sorted(
             a
@@ -2417,10 +2773,23 @@ class WorldEngine:
         desc: object = _UNSET,
         attrs: object = _UNSET,
         state: object = _UNSET,
+        tags: object = _UNSET,
+        kind: object = _UNSET,
     ) -> Entity:
-        """更新实体字段（admin 编辑；attrs/state 整体替换）。"""
+        """更新实体字段（admin 编辑；attrs/state/tags 整体替换）。
+
+        类型（基底 kind）可改，但**身份化实体的类型由身份服务管理**（D20）——
+        编辑器不能把玩家改成别的东西，也不能把别的东西改成玩家。
+        """
         async with self._lock:
             entity = self._require_entity(entity_id)
+            if kind is not _UNSET:
+                new_kind = _clean_required(kind, "类型")
+                if entity.kind in IDENTITY_KINDS and new_kind != entity.kind:
+                    raise WorldError(
+                        "身份化实体的类型由身份服务管理（D20），不能在编辑器里改"
+                    )
+                entity.kind = new_kind
             if name is not _UNSET:
                 entity.name = _clean_required(name, "名称")
             if desc is not _UNSET:
@@ -2433,6 +2802,10 @@ class WorldEngine:
                 if not isinstance(state, dict):
                     raise WorldError("state 必须是对象")
                 entity.state = dict(state)
+            if tags is not _UNSET:
+                if tags is not None and not isinstance(tags, (list, tuple)):
+                    raise WorldError("tags 必须是标签数组")
+                entity.tags = parse_tags(tags)
             await self.store.save_entity(entity)
             await self._emit("on_entity_changed", entity, {"edited": True})
             return entity
@@ -2754,12 +3127,18 @@ class WorldEngine:
         }
 
     async def save_template(self, template: WorldTemplate) -> None:
-        """写回 / 新建模板（地图编辑；D14 玩法包可调）。"""
+        """写回 / 新建模板（地图编辑；D14 玩法包可调；D22 用 scope 区分地块/实体）。"""
         async with self._lock:
             if not isinstance(template.id, str) or not template.id.strip():
                 raise WorldError("模板 id 不能为空")
             if not isinstance(template.name, str) or not template.name.strip():
                 raise WorldError("模板名称不能为空")
+            if template.scope not in TEMPLATE_SCOPES:
+                raise WorldError(f"模板 scope 必须是 {'/'.join(TEMPLATE_SCOPES)}")
+            if template.scope == "location":
+                template.data = _location_template_payload(template.data)
+            else:
+                template.data = _entity_template_payload(template.data)
             await self.store.save_template(template)
             await self._emit(
                 "on_world_edited",
@@ -2777,6 +3156,85 @@ class WorldEngine:
                 "on_world_edited",
                 {"op": "delete_template", "template_id": template_id},
             )
+
+    def list_templates(self, scope: str | None = None) -> list[dict]:
+        """模板清单（D22）：玩法包注册（内存）+ 管理端本地（落库）合并。
+
+        同名 id 时**本地模板优先**（管理员显式存的那份算覆盖）；scope 过滤。
+        """
+        out: dict[str, dict] = {}
+        for entry in self._play_templates.values():
+            if scope is not None and entry["scope"] != scope:
+                continue
+            out[entry["id"]] = dict(entry)
+        for t in self.store.templates.values():
+            if scope is not None and t.scope != scope:
+                continue
+            row = t.to_dict()
+            row["source"] = "local"
+            out[t.id] = row
+        return sorted(out.values(), key=lambda t: (t["scope"], t["name"], t["id"]))
+
+    def register_entity_template(
+        self,
+        template_id: str,
+        name: str,
+        data: dict,
+        *,
+        play_id: str = "",
+        label: str = "",
+    ) -> None:
+        """注册玩法包自带的**实体模板**（D22：内存注册表，随包卸载消失）。
+
+        data 形如 ``{kind, tags[], name, desc, attrs, state}``——套用即"照这个建一个
+        实体"，建完仍可改。管理端本地模板落库、与这里合并成一个选择列表。
+        """
+        template_id = _clean_required(template_id, "模板 id")
+        name = _clean_required(name, "模板名称")
+        self._play_templates[template_id] = {
+            "id": template_id,
+            "name": name,
+            "label": str(label or ""),
+            "scope": "entity",
+            "data": _entity_template_payload(data),
+            "source": "play",
+            "play_id": play_id,
+        }
+
+    async def apply_location_template(
+        self, template_id: str, map_id: str, row: int, col: int
+    ) -> Any:
+        """套用地块模板（D22）：把模板地块复制到 (row, col)。
+
+        目标语义（模型注释里早就写好、一直没实现）：
+        - **同图目标**（存的是 ``{dr, dc}`` 相对偏移）→ 按放置位置平移；
+        - **跨图目标**（存 ``{map_id, row, col}``）→ 原样复制；
+        - 目标坐标处已有地块 → 拒绝（不覆盖用户内容）。
+        """
+        async with self._lock:
+            template = self._find_template(template_id, "location")
+            map_id = self._map_arg(map_id)
+            _check_pos(row, col)
+            if (map_id, row, col) in self.store.loc_by_pos:
+                raise WorldError(f"目标格 ({row}, {col}) 已有地块，请换个位置")
+            loc = _location_from_template(template["data"], map_id, row, col)
+            await self.store.save_location(loc)
+            await self._emit(
+                "on_world_edited",
+                {
+                    "op": "apply_template",
+                    "template_id": template_id,
+                    "pos": [map_id, row, col],
+                },
+            )
+            return loc
+
+    def _find_template(self, template_id: str, scope: str) -> dict:
+        template_id = _clean_required(template_id, "模板 id")
+        for entry in self.list_templates(scope):
+            if entry["id"] == template_id:
+                return entry
+        raise WorldError(f"模板不存在：{template_id}")
 
     async def update_map(
         self,
