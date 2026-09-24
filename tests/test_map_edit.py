@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from world_fixtures import install_demo_world, seed_test_world  # noqa: E402
+from world_fixtures import install_demo_world, schedule, seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import (  # noqa: E402
     WorldEngine,
@@ -46,7 +46,7 @@ def test_create_update_delete_location(tmp_path):
             "on_world_edited", lambda api, what: edited.append(what)
         )
         loc = await engine.create_location(
-            "default", 10, 10, "新地块", description="一片新地。"
+            "default", 10, 10, "新地块", description=schedule("一片新地。")
         )
         assert loc.name == "新地块"
         assert engine.get_location("default", 10, 10) is loc
@@ -132,7 +132,11 @@ def test_map_crud(tmp_path):
 
     async def fn(engine: WorldEngine):
         m = await engine.create_map(
-            "dungeon", "地下城", description="幽暗的地牢。", spawn_row=1, spawn_col=1
+            "dungeon",
+            "地下城",
+            description=schedule("幽暗的地牢。"),
+            spawn_row=1,
+            spawn_col=1,
         )
         assert engine.get_map("dungeon") is m
         with pytest.raises(WorldError, match="已存在"):

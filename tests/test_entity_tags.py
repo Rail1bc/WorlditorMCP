@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 
 import pytest
-from world_fixtures import seed_test_world
+from world_fixtures import schedule, seed_test_world
 
 from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.model import TagSpec, WorldTemplate, parse_tags
@@ -432,13 +432,13 @@ def test_location_template_relative_targets(tmp_path):
                     scope="location",
                     data={
                         "name": "客房",
-                        "description": "一间安静的客房。",
+                        "description": schedule("一间安静的客房。"),
                         "connections": {
                             "up": {
                                 "enabled": True,
                                 "paths": [
                                     {
-                                        "label": "往北",
+                                        "label": schedule("往北"),
                                         "reveal_target": True,
                                         "targets": [{"dr": -1, "dc": 0, "weight": 2.0}],
                                     }

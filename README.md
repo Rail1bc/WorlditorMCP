@@ -4,8 +4,9 @@
 Claude / Cursor / 自建 agent…）都可接入；自带 WebUI——人类玩家登录游玩、
 拥有者经独立管理端口可视化管理（双端口，D16）。
 
-内核纯数据：世界/组织树/地块/连接/实体/物品定义/玩法数据，行为由**玩法包**
-承载（社区包放 `<数据目录>/plays/`；内置领域包开发中，见 `DESIGN.md` §6）。
+内核纯数据：世界/组织树/地块/连接/实体/物品定义/玩法数据，行为与**世界内容**
+都由**玩法包**承载（社区包放 `<数据目录>/plays/`；内置 1 个世界包 + 6 个领域包，
+见 `DESIGN.md` §6）。
 
 ## 快速开始（本地）
 
@@ -47,9 +48,23 @@ ssh -L 6289:127.0.0.1:6289 user@你的服务器
 # 本地浏览器打开 http://127.0.0.1:6289
 ```
 
-- **数据持久化**：数据卷 `worlditor-data`（world.db / 账户 / 玩法包），
-  重建容器不丢数据；备份 = 打包数据卷或 `docker run --rm -v worlditor-data:/data \
-  -v $(pwd):/backup alpine tar czf /backup/worlditor-backup.tgz -C /data .`
+- **数据持久化**：数据卷（world.db / 账户 / 玩法包），重建容器不丢数据。
+  卷名由 compose 管理（实际是 `<项目目录名>_worlditor-data`），**不要自己拼卷名**——
+  按服务备份，容器用哪个卷就是哪个：
+
+  ```bash
+  # 备份（在 compose.yml 所在目录执行；包写到当前目录）
+  docker compose exec worlditor tar czf - -C /data . > worlditor-backup.tgz
+
+  # 恢复（先停服务，恢复完再启动）
+  docker compose stop worlditor
+  docker compose run --rm --no-deps --entrypoint sh worlditor \
+    -c 'tar xzf - -C /data' < worlditor-backup.tgz
+  docker compose start worlditor
+  ```
+
+  > `docker run -v <卷名>:/data` 一旦卷名写错，Docker 会**新建一个空卷**并打出空包，
+  > 而备份看起来"成功"了——按服务走就没有写错卷名的可能。
 
 **更新**（一条命令，数据不丢）：
 
@@ -76,8 +91,19 @@ docker compose pull && docker compose up -d
 | `WORLDITOR_MCP_ALLOWED_ORIGINS` | 空 | MCP Origin 白名单（空 = 按 hosts 派生） |
 | `WORLDITOR_STATIC_DIR` | 自动探测 | WebUI 构建产物目录 |
 
-CLI 参数（`worlditor serve --port 6288 --admin-port 6289 --admin-key xxx`）
-优先于环境变量。
+CLI 参数（`worlditor serve …`）优先于同名环境变量：
+
+| 参数 | 说明 |
+|---|---|
+| `--host` / `--port` | 玩家端口监听地址 / 端口 |
+| `--admin-host` / `--admin-port` | 管理端口监听地址 / 端口（`--admin-port 0` = 关闭管理端口） |
+| `--data-dir` | 数据目录 |
+| `--admin-key` | 管理员注册密钥 |
+| `--auth-mode {open,invite,closed}` | 身份模式 |
+| `--allowed-origins` | CORS 允许来源（逗号分隔） |
+| `--mcp-allowed-hosts` / `--mcp-allowed-origins` | MCP Host / Origin 白名单（逗号分隔） |
+| `--static-dir` | WebUI 构建产物目录 |
+| `--verbose` | 详细日志（DEBUG） |
 
 ## 玩法包
 
@@ -107,6 +133,8 @@ disable/过滤器链，D11/G14）、跨包服务（M3）、spawn/编辑实体与
 - 身份只有一种 `player`：人类玩家与 agent 不作区分（脚本/agent 可用登录页
   「agent / 脚本接入」无密码注册）
 - `docs/PLAY_DEV.md`：玩法包开发指南（API 全量 + 约定 + 示例）
+- `docs/HTTP_API.md`：HTTP 端点参考（玩家端口 + 管理端口：路径 / 档位 / 请求体 / 示例）
+- `docs/NGINX_DEPLOY.md`：域名 + HTTPS 反向代理部署（含双端口暴露边界）
 - `docs/CORE_AUDIT.md`：内核边界审查（零玩法包视角）+ 决策记录 + 待办
 - `DESIGN.md`：设计/协议/路线（唯一权威）
 - `GAPS.md`：平台缺口清单（历史与观察项）
@@ -114,7 +142,7 @@ disable/过滤器链，D11/G14）、跨包服务（M3）、spawn/编辑实体与
 ## 开发
 
 ```bash
-uv sync                  # 或 pip install -e ".[dev]"
+uv sync --extra dev       # 或 pip install -e ".[dev]"（dev extra 才带 pytest/ruff）
 pytest                   # 全量测试
 ruff check . && ruff format --check .
 cd webui && npm install && npm run build   # 前端构建（dist 提交跟踪）

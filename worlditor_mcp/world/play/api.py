@@ -25,10 +25,25 @@ class WorlditorPlayAPI:
     def register_item_def(
         self, item: ItemDef, *, fields: list[dict] | None = None
     ) -> None:
-        """注册物品定义（持久化；同 id 覆盖更新）；fields 为字段 schema（D9）。"""
+        """注册物品定义（持久化；同 id 覆盖更新）；fields 为字段 schema（D9）。
+
+        **包代码声明**用这个——包停用/整体卸载时会随之清理（重新启用即恢复）。
+        管理页让管理员增删改的定义属于**用户数据**，用 ``save_item_def``。
+        """
         if fields:
             item.fields = list(item.fields or []) + list(fields)
         self._engine.register_item_def(item, play_id=self.play_id)
+
+    def save_item_def(self, item: ItemDef, *, fields: list[dict] | None = None) -> None:
+        """保存**用户数据**形态的物品定义（管理页用；v0.5.2）。
+
+        与 ``register_item_def`` 的区别只在生命周期：标了用户数据的定义，
+        包停用/整体卸载时**不会被删**（否则管理员手工维护的物品会在停一下包
+        之后永久消失）；真卸载（删包目录）仍会一并清掉。
+        """
+        if fields:
+            item.fields = list(item.fields or []) + list(fields)
+        self._engine.register_item_def(item, play_id=self.play_id, user_data=True)
 
     def add_item_fields(self, item_id: str, fields: list[dict]) -> None:
         """向已有物品类型追加字段（D9）。"""

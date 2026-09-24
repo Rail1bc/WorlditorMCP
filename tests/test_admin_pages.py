@@ -289,6 +289,61 @@ def test_builtin_items_admin_page_endpoint(tmp_path):
     _run(_scenario_builtin(tmp_path, fn))
 
 
+def test_disable_keeps_admin_item_defs(tmp_path):
+    """G31（v0.5.2）：停用 items 包只清代码声明，管理页建的物品定义必须留下。
+
+    原先 disable/uninstall 不区分来源全删：管理员手工维护的物品定义会在
+    "停一下包"之后永久消失（与 DESIGN §4.3"disable 保留数据"直接矛盾）。
+    """
+
+    async def fn(admin_client, play_client, identity, engine, loader):
+        import aiosqlite
+
+        h = {"Authorization": f"Bearer {await _admin_token(identity)}"}
+        # 管理员建一条自定义物品（走管理页 action，即"用户数据"形态）
+        resp = await admin_client.post(
+            "/admin/play-pages/worlditor_play_items/items/create",
+            json={"id": "gold_ore", "name": "金矿石"},
+            headers=h,
+        )
+        assert resp.status_code == 200, resp.text
+        assert engine.store.items.get("gold_ore") is not None
+
+        # 依赖拓扑：interaction/social/starter 都依赖 items，按叶子→根依次停用
+        for dependent in (
+            "worlditor_play_social",
+            "worlditor_play_player",
+            "worlditor_play_interaction",
+            "worlditor_play_starter",
+        ):
+            resp = await admin_client.post(
+                f"/admin/plays/{dependent}/disable", headers=h
+            )
+            assert resp.status_code == 200, resp.text
+        resp = await admin_client.post(
+            "/admin/plays/worlditor_play_items/disable", headers=h
+        )
+        assert resp.status_code == 200, resp.text
+
+        # 代码声明（apple）随包卸载；用户数据（gold_ore）内存与库都要在
+        assert engine.store.items.get("apple") is None
+        assert engine.store.items.get("gold_ore") is not None
+        async with aiosqlite.connect(tmp_path / "world.db") as conn:
+            cur = await conn.execute("SELECT id FROM items")
+            ids = {row[0] for row in await cur.fetchall()}
+        assert "gold_ore" in ids, f"停用后用户物品定义应从库里消失：{ids}"
+
+        # 重新启用 → 代码声明回来，用户数据不受影响
+        resp = await admin_client.post(
+            "/admin/plays/worlditor_play_items/enable", headers=h
+        )
+        assert resp.status_code == 200, resp.text
+        assert engine.store.items.get("apple") is not None
+        assert engine.store.items.get("gold_ore") is not None
+
+    _run(_scenario_builtin(tmp_path, fn))
+
+
 # ---------- 管理端地图/模板读端点 ----------
 
 

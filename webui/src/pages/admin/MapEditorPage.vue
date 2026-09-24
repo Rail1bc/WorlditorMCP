@@ -151,6 +151,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../api";
 import { askConfirm } from "../../confirm";
 import { askDiff, diffFields } from "../../diff";
+import { scheduleToJson } from "../../textSchedule.js";
 import MapGrid from "../../components/editor/MapGrid.vue";
 import TilePanel from "../../components/editor/TilePanel.vue";
 import TileEntities from "../../components/editor/TileEntities.vue";
@@ -240,13 +241,14 @@ async function loadDetail() {
     kinds.value = kindData.kinds || [];
     templates.value = tmpl.templates || [];
     maps.value = mapList.maps || [];
-    if (primary.value) {
-      primary.value = locations.value.some(
-        (l) => l.row === primary.value.row && l.col === primary.value.col
-      )
-        ? { ...primary.value }
-        : null;
-    }
+    // 选中格：侧栏（地块面板）始终按一个**具体坐标**工作，所以 primary 不能是
+    // null——初次打开落到该图出生点，切图时同理（v0.5.2 之前初次打开 primary 为
+    // null，而面板按 `primary || {row:0,col:0}` 渲染 → 点"在此新建地块"会读
+    // null.row 抛异常，界面毫无提示）。坐标已失效（如刚被删）也保留坐标，
+    // 就地重建即可。
+    primary.value = primary.value
+      ? { ...primary.value }
+      : { row: Number(meta.spawn_row) || 0, col: Number(meta.spawn_col) || 0 };
   } catch (e) {
     error.value = e.message;
   }
@@ -313,23 +315,25 @@ function onPickPos({ row, col }) {
 // ---------- 地块 ----------
 
 function descToText(desc) {
-  if (!desc) return "";
-  if (typeof desc === "string") return desc;
-  const periods = desc.periods || [];
-  if (periods.length === 1 && periods[0].items?.length === 1) {
-    return periods[0].items[0].text || "";
-  }
-  return JSON.stringify(desc, null, 2);
+  // 差异预览与编辑框用同一份结构化表示（v0.5.2 统一格式，没有纯文本那条路）
+  return scheduleToJson(desc);
 }
 
 async function saveTileMeta(payload) {
+  const pos = primary.value;
+  if (!pos) {
+    // 兜底（正常路径下 primary 在 loadDetail 后必有值）：明确报错，别让
+    // 面板静默什么都不做，也别让 null 直接抛在控制台里
+    error.value = "请先在地图上选择一个坐标（或在地块面板里填坐标）";
+    return;
+  }
   const before = primaryTile.value
     ? { name: primaryTile.value.name, description: descToText(primaryTile.value.description) }
     : { name: "", description: "" };
   const after = { name: payload.name, description: descToText(payload.description) };
   const ok = await askDiff({
     title: primaryTile.value ? "保存地块" : "新建地块",
-    detail: `坐标 (${primary.value.row}, ${primary.value.col})`,
+    detail: `坐标 (${pos.row}, ${pos.col})`,
     changes: primaryTile.value
       ? diffFields(before, after, { name: "名称", description: "描述" })
       : [
@@ -341,8 +345,8 @@ async function saveTileMeta(payload) {
   try {
     await apiPost("/admin/locations", {
       map_id: mapId.value,
-      row: primary.value.row,
-      col: primary.value.col,
+      row: pos.row,
+      col: pos.col,
       name: payload.name,
       description: payload.description,
     });
@@ -392,7 +396,9 @@ async function removeTile() {
       col: tile.col,
     });
     selection.value = [];
-    primary.value = null;
+    // 保留坐标（不置 null）：面板继续显示这一格，按钮变成"在此新建地块"，
+    // 想原地重建直接点即可（置 null 会让面板回落到 (0,0) 且点击抛异常）
+    primary.value = { row: tile.row, col: tile.col };
     await loadDetail();
   } catch (e) {
     error.value = e.message;
@@ -402,11 +408,8 @@ async function removeTile() {
 // ---------- 出口（结构化，D23；diff 挡住 G24 那种静默损坏） ----------
 
 function labelText(label) {
-  if (!label) return "";
-  if (typeof label === "string") return label;
-  const periods = label.periods || [];
-  if (periods.length === 1 && periods[0].items?.length === 1) return periods[0].items[0].text || "";
-  return `（分时段 ${periods.length} 段）`;
+  // 差异预览：结构化 JSON 原样比对（v0.5.2 只有这一种格式，压缩成摘要会吞掉改动）
+  return label ? scheduleToJson(label) : "";
 }
 
 function slotText(slot) {

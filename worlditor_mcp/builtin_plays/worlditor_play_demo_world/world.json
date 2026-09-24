@@ -3,7 +3,20 @@
  "map": {
   "id": "default",
   "name": "主世界",
-  "description": "由广场、步行街、AstrBot大道、开源小区与迷雾森林组成的世界。",
+  "description": {
+   "periods": [
+    {
+     "start": "00:00",
+     "end": "24:00",
+     "items": [
+      {
+       "text": "由广场、步行街、AstrBot大道、开源小区与迷雾森林组成的世界。",
+       "weight": 1.0
+      }
+     ]
+    }
+   ]
+  },
   "timezone": "Asia/Shanghai",
   "spawn_row": 0,
   "spawn_col": 0

@@ -3,7 +3,11 @@
 > 来源：M2 后玩法评估（朝向移动/快捷栏/养成/空战/自有世界拜访），逐玩法验证
 > 基础结构是否优雅支持。每个条目记录：触发玩法、影响、建议方案、成本、状态。
 > 状态约定：**待决策**（建议在 M3 前后处理）｜**增强候选**（等真实需求再定）｜
-> **文档补充**（PLAY_DEV.md 规范）｜**观察**（暂不动）。
+> **文档补充**（PLAY_DEV.md 规范）｜**观察**（暂不动）｜**已解决**（✅，附版本）｜
+> **暂缓**（⏸，2026-09 安全审查记录，等排期；审查报告未入库）｜**已记录**（📌）。
+>
+> 编号提醒：本文的 `G1–G30` 是**本仓库缺口号**；`DESIGN.md` 正文里的 `（G2）`
+> `（G3）`… 是**旧插件期**的另一套编号，同号不同义（见 DESIGN §9 编号说明）。
 
 ---
 
@@ -17,7 +21,9 @@
   - 玩法包 API 读自家/成员家不受限；`list_maps` 带可见性过滤参数
   - 管理端口可见全部
 - **成本**：~20 行内核 + /state 过滤 + 测试（事实层轻扩展，不违背红线）
-- **状态**：✅ 已解决（地图 visible 字段 + /state 在场过滤，admin 全见）
+- **状态**：⚠ **部分解决**（地图 `visible` 字段 + `/state` 在场过滤，admin 全见）；
+  文档方案里的"`list_maps` 带可见性过滤参数"**没做**（`engine.list_maps()` 无参数），
+  `/scene`、SSE、`interact` 仍未过滤 → 真实尾巴记在 **G17**
 
 ### G2 delete_map 缺失
 - **触发**：自有世界玩法——家地图生命周期需要删除，但 engine 只有
@@ -78,6 +84,9 @@
 - **方案**：PLAY_DEV.md 列命名建议（通用字段/事件名表），D10 分类字段可
   声明字段存在性，但读写仍按约定名
 - **成本**：文档
+- **状态**：✅ 已落地（`PLAY_DEV.md` §11「命名契约（G6）」表：gold/energy/say/
+  broadcast/starter_granted/broadcast_cd；朝向明确不入内置约定）。**注意**：
+  表里的通用命名契约目前只覆盖事件名与少量字段，新增跨包约定请 PR 更新该表
 
 ### G7 跨包编辑权限约定
 - **触发**：自有世界玩法——玩法包 B 的编辑调用不自动过家的 ACL
@@ -85,17 +94,21 @@
   "地图权限查询"API（读 home 记录）
 - **说明**：符合 D14"内容治理责任归玩法包"，不做内核级强制（让内核认识
   "家"概念会违背纯平台定位）
+- **状态**：✅ 已落地（`PLAY_DEV.md` §11「编辑权限（G7）」：编辑前先查 ACL，
+  内核不强制）
 
 ---
 
 ## 观察（暂不动）
 
 ### G8 内核持有原语与 D8 的关系
-- **现状**：v4 的 inventories 表 + give/take/count 原语仍在（D8 定稿
+- **现状（历史）**：v4 的 inventories 表 + give/take/count 原语仍在（D8 定稿
   "无 inventories 表"，M2 未清理）
 - **影响**：玩法包自管背包时不可混用内核 give/take（双轨数据）；当前
   give/take 对"简单持有"场景可用
-- **状态**：M3 后清理（按 D8）或保留为通用持有原语——届时决策
+- **状态**：✅ **已解决（M2）**——inventories 表与 give/take/count 已删，
+  持有全下沉（DESIGN §8 M2 行、CHANGELOG v0.2.0；`engine.py` 明确注释
+  "内核无 give/take/inventories"）。本条从"观察"归档
 
 ### G9 MCP instructions 拼装
 - **触发**：MCP 呈现讨论——instructions 是 agent 的唯一世界观入口，当前
@@ -120,7 +133,12 @@
   过滤——所有感知工具（world_who/world_look）统一遵守；也可纯约定层
   （感知工具各自过滤，依赖工具作者遵守）
 - **成本**：内核 ~10 行（推荐）或 0 行（约定层）
-- **状态**：✅ 已解决（list_entities(viewer_id) 过滤 invisible/see_invisible，/scene 同步）
+- **状态**：✅ 已解决（`list_entities(viewer_id)` 过滤 invisible/see_invisible，
+  `/scene` 与玩法包感知工具同步）
+- **尾巴（2026-09 复核）**：`/state` 全量快照**没走**隐身过滤（`http.py` 的
+  `_state` 调 `engine.list_entities()` 不传 `viewer_id`）——`可见性`（public/private）
+  与`隐身`（invisible）是两件事，前者做了、后者只做了一半。修法：`_state` 传
+  `viewer_id=info.entity_id`（一行），归入"安全/可见性"批次一起做
 
 ### G13 效果协调模式（移动类效果）
 - **触发**：动态状态玩法——束缚/移动限制/方向障碍多个效果都要拦 move，
@@ -157,18 +175,22 @@
 - **方案**：按用户名+IP 失败计数指数退避（内存级即可，默认单 worker）；
   统一 401/403 文案 + 不存在账户跑假 PBKDF2；read-token 配额或 TTL；
   启动防呆 WARNING（open + 0.0.0.0 + 空 ADMIN_KEY 三连）
-- **状态**：⏸ 暂缓（记录于 2026-09 审查，见审查报告 P0-2）
+- **状态**：⏸ 暂缓（记录于 2026-09 安全审查——**报告未入库**，本条即 P0-2 正文；
+  2026-09-24 复核：无失败计数/退避/锁定、`identity.py` 里 login 对不存在账户
+  短路跳过 PBKDF2、read-token 无 TTL/配额——**全部仍成立**）
 
 ### G17 G1 可见性只实现了一端（/scene + SSE + 交互缺口）
-- **触发**：全面审查——`/state` 按 `map_visible_to` 过滤（G1 已解决），但
-  `/scene`（http.py:210-245）不检查——read 档持任意 entity_id 可读 private
-  地图场景与动作菜单；SSE `_event_payload`（engine.py:1141-1179）对
+- **触发**：全面审查——`/state` 按 `map_visible_to` 过滤（G1 部分解决，见 G1 尾巴），
+  但 `/scene`（http.py:210-245）不检查——read 档持任意 entity_id 可读 private
+  地图场景与动作菜单；SSE `_event_payload`（engine.py:1760-1798）对
   private 地图事件全量下发实体位置（play 档订阅可跟踪）；`interact` /
   `list_actions` 亦不做地图可见性检查
 - **方案**：`/scene` 补 `map_visible_to` 过滤（~5 行）；SSE 订阅对象带
   订阅者身份按可见性过滤（~30 行接口变更，admin 全见）；interact 前置
   检查；各补 HTTP 级测试
-- **状态**：⏸ 暂缓（记录于 2026-09 审查，见审查报告 P0-3）
+- **状态**：⏸ 暂缓（记录于 2026-09 安全审查——**报告未入库**，本条即 P0-3 正文；
+  2026-09-24 复核：`map_visible_to` 全仓唯一调用点仍是 `http.py` 的 `_state`，
+  `/scene`／SSE／interact／`list_actions` 四处缺口**全部仍成立**）
 
 ### G18 ui_hook 未接线（已解决）
 - **触发**：P0-1 修复期间核查——`apply_ui_hooks` 在生产路径无调用者
@@ -200,7 +222,11 @@
 - **影响**：独立视图 tab（世界/背包/日志）在暗色主题下颜色突兀、对比度差
 - **方案**：视图组件内联样式改用 CSS 变量（var(--text)/var(--bg-3)…）或
   全局类；profile.js 已随重写修复（var(--text-dim)）
-- **状态**：观察（低危；改 3 个 js 文件，等视图组件整体清理时一并做）
+- **状态**：✅ **已解决**（2026-09-24 复核：`bag.js`/`view.js`/`log.js`/`profile.js`
+  已改用 `wt-*` 类与 CSS 变量，全文无颜色字面量；仅 `admin-items.js:160` 的
+  `color:"#fff"` 是强调色底上的按钮文字，属正常）。守卫：
+  `tests/test_web_view_styles.py`（**注意**：该守卫只扫 `webui/src` 且显式排除
+  `admin-*.js`，玩法包管理页组件不在防线内——见新条目 G27）
 
 ---
 
@@ -287,13 +313,15 @@
   按声明字段渲染控件 + 未声明字段原始 JSON 兜底，attrs/state/tags/类型都可改
   （身份化实体的类型由身份服务锁定，D20）。
 - **编辑器实体面板形态落后**：~~全图平铺一张表、无 kind 过滤、位置列冗余~~ →
-  ✅ 部分解决（v0.5.0）：位置列已精简、显示合并能力与标签；**按 kind 过滤仍未做**（实体多时会有用）。
+  ✅ **已解决**（v0.5.0 精简列 + 显示合并能力；**v0.5.1 实体视图补齐类型筛选/标签筛选/
+  排序/分页与地块锁定**，`EntityManager.vue`）。
 - **跨世界总览的批量搬家不报进度**：→ ✅ **已解决**（X1：逐张报"已完成 k/N" + 失败清单）。
 - **总览页不能新建地图**：→ ✅ **已解决**（X2）。
 - **组织树只有拖拽排序**：→ ✅ **已解决**（X3：行内 ▲▼ + 聚焦行 Alt+↑/↓；多选/复制文件夹仍未做）。
 - **`GET /admin/lint` 每次全量算所有地图**：→ ✅ **已解决**（X4：支持 `?world_id=`，未归属地图算在默认世界）。
 - **升级后既有世界的"文件夹内地图顺序"会变成按名称**：一次性观感变化，保留说明。
-- **状态**：📌 已记录（v0.5.0 已做掉大部分；`按 kind 过滤`、`文件夹多选/复制`、`撤销重做` 留待将来）
+- **状态**：📌 已记录（v0.5.0/v0.5.1 已做掉绝大部分；**仍留**：文件夹多选/复制、
+  撤销重做（D24 明确不做，由 diff 预览兜底））
 
 ### G24 管理端连接编辑器会**静默损坏**地图数据（必修）
 
@@ -318,6 +346,214 @@
 - **方案**：v0.5 编辑器重写时一并做——结构化出口表单（目标 = 地图 + 坐标 + 权重，
   文案 = 分时段条目），并给"保存前 diff 预览"（旧值→新值）作为兜底
 - **状态**：🔴 必修 → ✅ **已修复**（v0.5.0，DESIGN D23）：出口改为结构化表单
-  （目标 = 地图 + 坐标 + 权重，文案 = 纯文本 / 分时段 JSON），**保存前弹差异预览**
+  （目标 = 地图 + 坐标 + 权重，文案 = 结构化 JSON——当时还允许纯文本，见 G28
+  已统一为唯一格式），**保存前弹差异预览**
   （旧值→新值，取消即不落盘）；E2E `verify_editor_v05.mjs` 专门守这条回归
   （跨图 map_id / 权重 / 文案在保存后逐一核对）
+- **尾巴（v0.5.1 发布后自查发现，2026-09-24）**：同一族还剩两处静默丢数据——
+  ①**单时段带时间窗的文案被"扁化"**（v0.5.2 已按"统一格式"修复，见 G28）：
+  `periods` 只有一段且只有一条时前端按纯文本
+  处理（不看 `start`/`end`/`weight`），存回去被服务端解析成 `00:00–24:00`，
+  `08:00–18:00` 窗口消失；且 **diff 预览用同一套扁化规则 → 弹窗显示"无变化"**；
+  ②`FieldForm` 的 `attrs`/`state` 原始 JSON 非法时 `|| {}` 把整袋数据清空。
+  → 见 **G28 / G29**（v0.5.2 一并修）
+
+---
+
+## 待决策（CORE_AUDIT §4 收编，2026-09-24——原先"无主"）
+
+### G25 世界包的内容更新语义
+
+- **触发**：`docs/CORE_AUDIT.md` §4 记录但**只有该文档记着**（GAPS/DESIGN 无条目）
+- **现状**：`worlditor_play_demo_world` 的 `setup()` 是"地图已存在则整体跳过"
+  （`main.py:40-41`，不覆盖用户改动）；包升级新增了地块/实体也**不会**补进已有世界
+- **方案**：世界包版本化 + 差异合并（新增子图 / 按 id 补地块 / 只补不改）；
+  或显式"重新导入（覆盖）"高级操作 + 备份提示
+- **成本**：中等（要定义合并规则与冲突策略）
+- **状态**：待决策（等第一个"世界包要迭代内容"的真实需求）
+
+### G26 管理端健壮性收尾项（CORE_AUDIT §4 未处置）
+
+- **触发**：CORE_AUDIT §4 末尾"审查中发现但未处置的次要点"散落无人跟进
+- **条目**：
+  - 管理端多处裸 `int()` → 传非数字直接 **500**（不是 400）。点：
+    `admin.py` 的 `page`/`page_size`/`row`/`col`/`to_row`/`to_col`/`spawn_row`/
+    `spawn_col`/`count`（`_accounts`、`_location_upsert`、`_location_move`、
+    `_connection_update`、`_map_create`、`_map_update`、`_entity_create`、
+    `_template_apply`）。修法：统一 `_int_arg()` 助手 → `WorldError("行号必须是整数")`
+  - `PUBLIC_PATHS` 用 `startswith` 前缀匹配（`http.py:95-97`）——将来新增
+    `/auth/read-token-xxx` 之类路径会**误免认证**；应改为精确匹配 + 显式前缀白名单
+  - `/plays/{play_id}/web` 前缀校验用字符串 `startswith`（`http.py:402`），
+    建议 `Path.is_relative_to`
+  - `?token=` 会进访问日志（SSE 的硬需求，不能删）——至少文档化 + 建议反代过滤
+  - 停用玩法包不清理 `sys.modules` 残留（同名包换目录重载时可能拿到旧模块）
+  - **局部更新语义不完整**（v0.5.2 审计补充）：
+    - `PATCH /admin/maps/{id}` 只给 `spawn_row` 会把 `spawn_col` 重置为 0
+      （与 docstring"未提供的字段不变"矛盾；前端总发两个值，直连 API 必踩）
+    - `POST /admin/connections` 的 `enabled`/`paths` 实际都是必填（`admin.py` 恒传
+      `data.get(...)`，缺省 None 被当"显式给值"）→ 只改一个方向不可行
+    - `POST /admin/locations`（upsert）不带 `description` 会**清空**整段分时段描述
+- **状态**：待决策（低危但成串，适合一次"收尾清理"批次；v0.5.2 未做）
+
+### G27 玩法包管理页组件逃过前端守卫（原生 confirm + 样式守卫盲区）
+
+- **触发**：v0.5.1 前端审计——`worlditor_play_items/web/admin-items.js:118` 用了
+  **原生 `confirm()`**，违反 D17"管理端禁用原生 confirm/prompt/alert"（iframe/
+  沙箱下被浏览器屏蔽 → 删除操作**静默失效**）
+- **根因**：守卫 `tests/test_web_view_styles.py` 只扫 `webui/src`（`:166`），且
+  `_view_component_files()` 显式排除 `admin-*.js`（`:67`）——管理页组件不在防线内
+- **方案**：① 组件协议扩展——加载器把内核的 `askConfirm` 作为第三个注入参数
+  （`new Function("Vue","UiBlock","askConfirm", code)`，DESIGN §4.6 修订）；
+  ② 守卫扩到 `builtin_plays/*/web/*.js`（含 admin-*），样式类契约另行放宽；
+  ③ 短期可让管理页组件自带行内确认（状态 + 两个按钮）
+- **状态**：待决策（等下一次管理页组件改动一并做；当前只有一个删除入口）
+
+---
+
+## 已解决（v0.5.2 全仓库自查修复）
+
+> 来源：v0.5.1 发布后的"项目 + 文档"全面审查（三路：后端 / 前端 / 文档）。
+> 下面六条都是**静默**类缺陷（要么丢数据、要么功能空转），本轮全部修复并补了
+> 能反向复现的回归测试（改回旧行为测试就红）。
+
+### G28 文案格式双轨 → 时间窗静默丢失（G24 同族）
+
+- **现象**：`periods` 只有一段且只有一条时，前端不看 `start`/`end`/`weight` 就当
+  纯文本处理；存回去服务端解析成 `00:00–24:00` → `08:00–18:00` 的时间窗、
+  权重 ≠ 1 的多条文案全部丢失。**差异预览用同一套扁化规则**，弹窗还显示"无变化"。
+  根子在**同一份数据有两种写法**（纯字符串 = 全天单条 ‖ 结构化对象）。
+- **修复（v0.5.2，用户裁定：不留冗余逻辑、不允许纯文本、格式强制统一）**：
+  - **内核**：`parse_text_schedule` 只接受 `None` 与结构化对象；**纯字符串与非结构
+    一律 `WorldError`**（消息带格式示例）；**非法条目不再静默丢弃**而是整段报错
+    （静默丢字段正是 D23/G24 要根除的东西）。`WorldError` 抽到 `world/errors.py`
+    供 model/engine 共用（仍然可以从 `world.engine` 导入）。
+  - **前端**：`webui/src/textSchedule.js` 只剩两个函数——`scheduleToJson`（服务端值
+    → 编辑框文本，历史纯文本只在**显示**时归一成标准结构）与 `parseScheduleText`
+    （编辑框文本 → 提交值；空 = 清除；不是 JSON 对象就报错且**不提交**）。
+    `ConnectionPanel` / `TilePanel` / `MapEditorPage` 全部改用它，**没有纯文本模式**。
+  - **数据/文档**：内置世界包 `world.json`、测试夹具、PLAY_DEV / HTTP_API / DESIGN
+    全部改成唯一格式（`tests/test_text_schedule.py` 里有一条守卫扫描 world.json）。
+- **回归**：`tests/test_text_schedule.py`（18 条：字符串与非结构全被拒、坏时段/坏条目
+  报错而非丢弃、`to_dict` 往返无损、引擎与管理端 400 不落盘）+ `tests/test_editor_integrity.py`
+  （源码守卫：结构只在 textSchedule.js 里、组件不得自己解析、没有纯文本模式）+
+  `tests/test_map_governance.py::test_admin_round_trip_keeps_windowed_text_schedule`
+  + E2E「文案只有一个结构化编辑框 / 时间窗保存后仍在」。
+
+### G29 实体数据 JSON 写坏 → 整袋 attrs/state 被清空
+
+- **现象**：`FieldForm` 的 `attrs`/`state` 原始 JSON 非法时 `parseJson(...) || {}`
+  把整个容器换成 `{}` 再提交；错误文案又渲染在默认折叠的 `<details>` 里，用户
+  既看不到报错也看不到数据没了。
+- **修复**：解析失败**不落盘**（`push()`/`pushRaw()` 提前返回，保留另一容器的
+  旧值）；错误提示移出折叠区，并让折叠区在有错时自动展开。
+- **回归**：`tests/test_editor_integrity.py::test_field_form_fails_closed_on_bad_json`
+  + E2E「JSON 写坏时给出可见错误 / 非法 JSON 不清空 state、attrs」。
+
+### G30 复制地图（带实体）静默丢 `tags`
+
+- **现象**：`engine.copy_map(with_entities=True)` 构造副本实体时没传 `tags=`
+  → 带 `spawner` 标签的实体复制后变裸实体（旧测试没设 tags，漏网）。
+- **修复**：副本带上 `tags=list(e.tags)`。
+- **回归**：`tests/test_map_governance.py::test_copy_map_preserves_entity_tags`。
+
+### G31 停用/卸载 items 包 → 管理页建的物品定义被永久删除
+
+- **现象**：`PlayLoader._teardown_one` 按 `item_defs_of_play` 无差别删库 + 删内存，
+  而管理页创建走的也是 `register_item_def`（归属同一 play_id）→ 管理员手工维护的
+  物品定义在"停一下包"之后消失，与 DESIGN §4.3"disable 保留数据"直接矛盾。
+- **修复**：物品定义分两种生命周期——**代码声明**（`api.register_item_def`）
+  随包停用清理、**用户数据**（新增 `api.save_item_def`，管理页走它）停用/整体
+  卸载时保留，只有真卸载（删包目录，`purge=True`）才一起删。同时补上
+  `delete_item_def` 的归属记账清理、管理页 update 的"先校验后改"。
+- **回归**：`tests/test_admin_pages.py::test_disable_keeps_admin_item_defs`（内存 +
+  直连 SQLite 查库双确认）。
+
+### G32 `async def teardown(api)` 从不被 await
+
+- **现象**：`_teardown_one` 直接 `teardown(info.api)`，不检查返回值是否 awaitable
+  （`setup` 是支持的）→ G5 约定里"在 teardown 取消自管后台任务"**静默不生效**，
+  卸载后任务还在跑。
+- **修复**：`inspect.isawaitable(result)` 时 `await`。
+- **回归**：由 G31 的生命周期测试覆盖（同一段代码路径）；日志不再出现
+  `coroutine 'teardown' was never awaited`。
+
+### G33 `/views` 的世界过滤对已登录玩家恒失效
+
+- **现象**：`/views` 在免认证公共路径里，中间件遇到公共路径**直接放行且不解析
+  token** → `_identity_of()` 恒为 None → 视图过滤退化成"匿名/默认世界"。
+  默认世界通常"全部启用"，所以老测试（只在默认世界验）永远看不出问题。
+- **修复**：公共路径 = **不要求**凭据，不等于"忽略凭据"——带了 token 照样解析
+  身份（不存在/过期才按匿名处理）。`/views` 因此真正按调用者所在世界过滤。
+- **回归**：`tests/test_world_activation.py::test_views_filter_uses_caller_world_not_default`
+  （玩家站在**非默认世界**里验；另验匿名仍按默认世界算）。
+
+### G34 编辑器删格/空图后"在此新建地块"抛异常
+
+- **现象**：`primary` 为 null 时侧栏仍按 `primary || {row:0,col:0}` 渲染，但保存
+  逻辑读 `primary.value.row` → 空图首次打开、或删掉选中地块后点该按钮，Vue 把
+  异步异常吞进 console，界面毫无反馈（坐标还显示成 (0,0)）。
+- **修复**：`primary` 在 `loadDetail` 后必有具体坐标（初次打开落出生点）；删格后
+  **保留该格坐标**（面板原地变"在此新建地块"，可直接重建）；保存前再做一次
+  空值兜底并给出可见错误。
+- **回归**：`tests/test_editor_integrity.py::test_editor_keeps_a_concrete_coordinate`
+  + E2E「删格后保留坐标 / 在原地重建」。
+
+---
+
+## 观察（v0.5.2 审查发现，本轮**未修**——已登记，按需排期）
+
+### G35 内核 / 内置包的小口子（静默或低危）
+
+- **交互动作注册静默覆盖**：`engine.py` 的 `self._interactions[action] = …` 无冲突
+  检查（工具/视图/服务/管理页/原语都有 D2 式报错）→ 两个包注册同名 action 时
+  后者**静默顶掉**前者（G19 同族）。
+- **`demo_world` 的"续跑"分支不可达**：`main.py:40-41` 地图存在即 return，
+  `62-66` 那段"已存在地块只更新名称/描述"永远不执行——"导入中断可续跑"是
+  文档承诺但不成立；导入也没带 `tags=`（当前 `world.json` 无标签，属契约漏洞）。
+- **商贩购买非原子**：`interaction/main.py` 先扣金再 `bag_add`，背包满时钱花了货
+  没到（错误还被吞成"交互执行出错"）。修法：先 `bag_add` 成功再扣金，或失败回滚。
+- **`_bag_take` 只从第一格扣**：同一物品跨多格（30+30）取 50 会误报"数量不足"。
+- **`_ui_components` 是只写不读的死注册表**：`register_ui_component` 零调用者，
+  但 DESIGN §4.1 / PLAY_DEV §4 仍列为 API（能力已被 `register_view` provider 取代）。
+- **引擎命名/注释漂移**：`available_actions` 注释仍写"kind 声明 ∪ 全局注册表"、
+  `model.py` 注释仍写"优先于 kind spec 的 block_move"（D18 后应说"标签"）。
+
+### G36 编辑器 / 前端可用性清单（审计逐条给了 file:line）
+
+- **网格按包围盒稠密渲染、无上限**（`MapGrid.vue` 双层循环）：坐标框允许输入任意
+  值，建完 (0,0) 再输 (5000,5000) ⇒ 2500 万按钮，浏览器冻死。修法：加渲染上限
+  （超出提示"缩放/平移查看"）或虚拟滚动。
+- **玩法包管理页切换不重载组件**（`PlayPageHost.vue:87-91`）：标题换成新包、
+  内容仍是上一个包的组件（`hashchange` 只同步 ref，不重新加载 `comp`）。
+- **`addEventListener` 不清理**：`MapEditorPage.vue`、`PlayPageHost.vue`、
+  `AdminPanel.vue` 在 `onMounted` 注册 `hashchange` 却无 `onUnmounted`
+  （`MapGrid.vue` 是正确写法）→ 组件卸载后旧闭包常驻、重复注册。
+- **`localStorage` 无兜底**（`api.js`、`AdminPanel.vue`、各视图 js）：隐私模式下
+  `getItem` 直接抛 → 启动全白。
+- **玩法包视图硬编码 `/world/mcp`**（`view.js`/`bag.js`/`log.js`/`profile.js`）与
+  `VITE_WORLD_API` 独立域部署矛盾；`_sessionId` 只初始化一次，会话失效后只能整页刷新。
+- **失败伪装成"正常"**：`AllMapsPage`/`WorldMapsPage` 的 lint 拉取失败
+  `.catch(() => ({maps: []}))` → 统计条显示"0 处错误"；`WorldPlaysPage` 的
+  `allSettled` 吞掉 4 个请求失败 → 详情页显示"该包没有注册工具/服务/视图"。
+- **其余小项**：吊销凭据后详情面板请求 `/admin/accounts/undefined/tokens`；
+  空白处平移后下次点击被吞（`suppressClick` 未复位）；模板坐标清空 →
+  `Number("")===0` 静默套用到 (0,0)；`WorldEditModal` 空 id 可提交、无 Esc、
+  点遮罩丢输入；`EntityManager` 行点击无键盘可达、`ConfirmHost`/`DiffModal`
+  无 `role="dialog"`；`admin-items.js` 的 attrs 只校验"是合法 JSON"（放行数组/标量）。
+- **零玩法包场景的界面审计已过期**：`.uitools/audit_no_plays_ui.mjs` 停在 v0.2.0，
+  v0.5.x 编辑器重写后没在"停用全部玩法包"下再验过（后端有 `test_empty_state_*`，
+  界面只有旧的本地脚本）。
+
+### G37 工程/流程
+
+- **CI 不校验已提交的 `webui/dist`**：`pytest.yml` 的 `webui-build` 只
+  `npm run build`，不比对产物；而 `Dockerfile` 与 wheel 都吃**已提交的 dist**
+  → 改了 `src` 忘了 build 就会发出旧界面。建议加 `git diff --exit-code webui/dist`。
+- **浏览器 E2E 只存在本机**：`.uitools/*.mjs` 被 gitignore、CI 不跑——
+  换机/换人就断了（本轮新增的 G28/G29/G34 回归线也在那里）。
+- **解释器口径**：本机 `.venv` = Python 3.14，CI = 3.12，而 `requires-python >=3.10`
+  / ruff `target-version = py310` —— 3.10/3.11 从未被跑过。
+- **本地 `origin/main` 追踪引用陈旧**（显示 ahead 22）：远端其实已是最新，
+  `git fetch origin` 即可；`push` 需 SSH（HTTPS 凭据失效）。
+
+

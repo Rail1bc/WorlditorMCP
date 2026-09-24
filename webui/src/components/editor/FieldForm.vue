@@ -31,7 +31,11 @@
     </div>
     <p v-else class="dim">这个类型没有声明任何字段（可直接在下面的原始 JSON 里写）。</p>
 
-    <details class="raw" :open="Boolean(extraKeys.length)">
+    <!-- 错误必须露在折叠区外面：v0.5.2 之前它藏在 details 里，JSON 写坏时
+         "改一个字段"会把另一容器静默清空，用户既看不到报错也看不到数据没了 -->
+    <p v-if="jsonError" class="error-text">{{ jsonError }}</p>
+
+    <details class="raw" :open="Boolean(extraKeys.length) || Boolean(jsonError)">
       <summary>
         原始数据
         <span v-if="extraKeys.length" class="bad">未声明字段 {{ extraKeys.length }} 个</span>
@@ -42,7 +46,6 @@
         state（动态状态：<code>block_move</code> 可动态改挡路、<code>invisible</code> 隐身）
       </label>
       <textarea v-model="stateJson" rows="3" @change="pushRaw('state')"></textarea>
-      <p v-if="jsonError" class="error-text">{{ jsonError }}</p>
     </details>
   </div>
 </template>
@@ -156,8 +159,11 @@ function parseJson(text) {
 function push() {
   const attrs = buildAttrs();
   if (attrs === null) return;
+  // 另一个容器解析失败 → **不发**：宁可这次修改不生效，也不能把整袋数据清空
+  const state = parseJson(stateJson.value);
+  if (state === null) return;
   jsonError.value = "";
-  emit("update", { attrs, state: parseJson(stateJson.value) || {} });
+  emit("update", { attrs, state });
 }
 
 function pushComplex(f) {
@@ -170,8 +176,10 @@ function pushRaw(which) {
   if (which === "state") {
     const state = parseJson(stateJson.value);
     if (state === null) return;
+    const attrs = buildAttrs();
+    if (attrs === null) return; // attrs 写坏时同样不落盘（否则会清空 attrs）
     jsonError.value = "";
-    emit("update", { attrs: buildAttrs() || {}, state });
+    emit("update", { attrs, state });
     return;
   }
   push();

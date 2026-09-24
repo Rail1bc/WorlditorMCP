@@ -324,6 +324,28 @@ def test_copy_map_entities_optional_and_players_excluded(tmp_path):
     _run(fn())
 
 
+def test_copy_map_preserves_entity_tags(tmp_path):
+    """G30：复制地图时实例标签一起复制（v0.5.2 修——原先副本标签全丢）。"""
+
+    async def fn():
+        engine = await _engine(tmp_path)
+        try:
+            await _world_with_two_maps(engine)
+            source = await engine.place_entity(
+                "slime", "m1", 0, 0, name="史莱姆", tags=["spawner", "strong"]
+            )
+            await engine.copy_map("m1", "m1_copy", with_entities=True)
+            copied = engine.list_entities(map_id="m1_copy")
+            assert len(copied) == 1
+            assert copied[0].tags == ["spawner", "strong"]
+            assert copied[0].tags == source.tags
+            assert copied[0].id != source.id  # 是新实体，不是同一个
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
 def test_copy_map_duplicate_id_rejected_and_name_default(tmp_path):
     """id 冲突报错；名称缺省为「原名（副本）」。"""
 
@@ -585,6 +607,64 @@ def test_admin_endpoints_wire_governance_ops(tmp_path):
         r = await client.delete("/admin/maps/m1_copy", headers=h)
         assert r.status_code == 200, r.text
         assert "地图不存在" in (await client.get("/admin/maps/m1_copy", headers=h)).text
+
+    _run(_admin_scenario(tmp_path, fn))
+
+
+def test_admin_round_trip_keeps_windowed_text_schedule(tmp_path):
+    """G28（v0.5.2）：带时间窗的文案经管理端保存后窗口仍在。
+
+    文案只有结构化一种格式（纯字符串被内核拒绝），所以这里守的是"结构化提交 →
+    原样存回"这条契约：`periods` 的 start/end、items 的 text/weight 一个都不少。
+    """
+
+    async def fn(client, h):
+        windowed = {
+            "periods": [
+                {
+                    "start": "08:00",
+                    "end": "18:00",
+                    "items": [{"text": "白天开门", "weight": 1}],
+                }
+            ]
+        }
+        r = await client.post(
+            "/admin/connections",
+            json={
+                "map_id": "m1",
+                "row": 0,
+                "col": 0,
+                "direction": "up",
+                "enabled": True,
+                "paths": [{"targets": [{"row": -1, "col": 0}], "label": windowed}],
+            },
+            headers=h,
+        )
+        assert r.status_code == 200, r.text
+        detail = (await client.get("/admin/maps/m1", headers=h)).json()
+        loc = next(x for x in detail["locations"] if x["row"] == 0 and x["col"] == 0)
+        label = loc["connections"]["up"]["paths"][0]["label"]
+        assert label["periods"][0]["start"] == "08:00"
+        assert label["periods"][0]["end"] == "18:00"
+        assert label["periods"][0]["items"][0]["text"] == "白天开门"
+
+        # 地块描述同一套规则（TextSchedule）
+        r = await client.post(
+            "/admin/locations",
+            json={
+                "map_id": "m1",
+                "row": 0,
+                "col": 0,
+                "name": "中央广场",
+                "description": windowed,
+            },
+            headers=h,
+        )
+        assert r.status_code == 200, r.text
+        detail = (await client.get("/admin/maps/m1", headers=h)).json()
+        loc = next(x for x in detail["locations"] if x["row"] == 0 and x["col"] == 0)
+        assert loc["description"]["periods"][0]["start"] == "08:00"
+        assert loc["description"]["periods"][0]["end"] == "18:00"
 
     _run(_admin_scenario(tmp_path, fn))
 

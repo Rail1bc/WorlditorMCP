@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from .errors import WorldError
+
 DIRECTIONS = ("up", "right", "down", "left")
 
 # 身份化实体类型（v0.2.0：只有 player——人类玩家与 agent 不区分，都由身份服务创建；
@@ -138,53 +140,62 @@ class TextSchedule:
         }
 
 
-def parse_text_schedule(value: Any) -> TextSchedule:
-    """把存储值解析为 TextSchedule。
+_SCHEDULE_HINT = (
+    '文案格式：{"periods": [{"start": "00:00", "end": "24:00", '
+    '"items": [{"text": "文本", "weight": 1}]}]}'
+)
 
-    接受：None（返回默认空调度）、纯字符串（单时段全天单条）、
-    {"periods": [...]} 结构。非法条目静默丢弃；全部非法 → 默认空调度。
+
+def parse_text_schedule(value: Any) -> TextSchedule:
+    """解析结构化文案（TextSchedule）。**只认一种格式**（v0.5.2 起）。
+
+    接受：``None``（= 无文案，返回默认空调度）、``{"periods": [...]}``。
+    拒绝：**纯字符串**（历史上是"全天单条"的简写——同一份数据两种写法，
+    必然引出"读进来是文本、存回去结构变了"这类静默丢失，故取消）、
+    以及任何结构非法的值（**报错，不再静默丢弃条目**——静默丢字段正是
+    D23/G24 要根除的那类问题）。
+
+    读取路径不存在需要容忍的历史形态：库里写的一律是 ``TextSchedule.to_dict()``
+    的产物（写入前必经本函数）。
     """
     if value is None:
         return TextSchedule()
-    if isinstance(value, str):
-        return TextSchedule(
-            periods=[TextPeriod("00:00", "24:00", [TextItem(value, 1.0)])]
-        )
     if not isinstance(value, dict):
-        return TextSchedule()
-    periods: list[TextPeriod] = []
+        raise WorldError(f"{_SCHEDULE_HINT}（收到 {type(value).__name__}）")
     raw_periods = value.get("periods")
-    if isinstance(raw_periods, list):
-        for p in raw_periods:
-            if not isinstance(p, dict):
-                continue
-            try:
-                start = str(p.get("start") or "00:00")
-                end = str(p.get("end") or "24:00")
-                _parse_minutes(start)
-                _parse_minutes(end)
-            except ValueError:
-                continue
-            items: list[TextItem] = []
-            raw_items = p.get("items")
-            if isinstance(raw_items, list):
-                for it in raw_items:
-                    if not isinstance(it, dict):
-                        continue
-                    text = it.get("text")
-                    if not isinstance(text, str) or not text:
-                        continue
-                    weight = it.get("weight", 1.0)
-                    if isinstance(weight, bool) or not isinstance(weight, (int, float)):
-                        continue
-                    w = float(weight)
-                    if not math.isfinite(w) or w <= 0:
-                        continue
-                    items.append(TextItem(text, w))
-            if items:
-                periods.append(TextPeriod(start, end, items))
-    if not periods:
-        return TextSchedule()
+    if not isinstance(raw_periods, list) or not raw_periods:
+        raise WorldError(f"periods 必须是非空数组。{_SCHEDULE_HINT}")
+    periods: list[TextPeriod] = []
+    for index, raw_period in enumerate(raw_periods, 1):
+        if not isinstance(raw_period, dict):
+            raise WorldError(f"第 {index} 个时段必须是对象。{_SCHEDULE_HINT}")
+        start = str(raw_period.get("start") or "00:00")
+        end = str(raw_period.get("end") or "24:00")
+        try:
+            _parse_minutes(start)
+            _parse_minutes(end)
+        except ValueError:
+            raise WorldError(
+                f"第 {index} 个时段的时间非法：{start}–{end}（需 HH:MM，00:00–24:00）"
+            ) from None
+        raw_items = raw_period.get("items")
+        if not isinstance(raw_items, list) or not raw_items:
+            raise WorldError(f"第 {index} 个时段的 items 必须是非空数组")
+        items: list[TextItem] = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                raise WorldError(f"第 {index} 个时段的 items 条目必须是对象")
+            text = raw_item.get("text")
+            if not isinstance(text, str) or not text:
+                raise WorldError(f"第 {index} 个时段有条目缺少非空 text")
+            weight = raw_item.get("weight", 1.0)
+            if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+                raise WorldError(f"第 {index} 个时段的 weight 必须是数字")
+            parsed_weight = float(weight)
+            if not math.isfinite(parsed_weight) or parsed_weight <= 0:
+                raise WorldError(f"第 {index} 个时段的 weight 必须是正的有限数字")
+            items.append(TextItem(text, parsed_weight))
+        periods.append(TextPeriod(start, end, items))
     return TextSchedule(periods=periods)
 
 

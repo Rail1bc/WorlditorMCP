@@ -114,14 +114,18 @@ def _check_item_payload(raw: dict) -> tuple[str, str]:
 
 
 async def _admin_item_create(api: WorlditorPlayAPI, **params) -> dict:
-    """管理页动作：新建物品定义（attrs 可选 dict；创建即落库）。"""
+    """管理页动作：新建物品定义（attrs 可选 dict；创建即落库）。
+
+    走 ``save_item_def``（用户数据形态）：包停用/整体卸载时不会被清掉
+    （v0.5.2 之前用 ``register_item_def``，停一下 items 包，管理员建的物品就没了）。
+    """
     item_id, name = _check_item_payload(params)
     if api.get_item_def(item_id) is not None:
         raise WorldError(f"物品已存在：{item_id}")
     attrs = params.get("attrs") or {}
     if not isinstance(attrs, dict):
         raise WorldError("attrs 必须是对象")
-    api.register_item_def(
+    api.save_item_def(
         ItemDef(
             id=item_id,
             name=name,
@@ -139,11 +143,17 @@ async def _admin_item_create(api: WorlditorPlayAPI, **params) -> dict:
 
 
 async def _admin_item_update(api: WorlditorPlayAPI, **params) -> dict:
-    """管理页动作：更新物品定义（未提供的字段不变；更新即落库）。"""
+    """管理页动作：更新物品定义（未提供的字段不变；更新即落库）。
+
+    先校验后改：``item`` 是内存里的**同一个对象**，边改边校验的话，后一步抛错
+    会留下"内存已改、库里没改"的不一致（重启前生效、重启后回滚）。
+    """
     item_id, _ = _check_item_payload(params)
     item = api.get_item_def(item_id)
     if item is None:
         raise WorldError(f"物品不存在：{item_id}")
+    if "attrs" in params and not isinstance(params["attrs"], dict):
+        raise WorldError("attrs 必须是对象")
     if "name" in params:
         item.name = str(params["name"]).strip() or item.name
     if "desc" in params:
@@ -155,10 +165,8 @@ async def _admin_item_update(api: WorlditorPlayAPI, **params) -> dict:
     if "use_action" in params:
         item.use_action = str(params["use_action"]) if params["use_action"] else None
     if "attrs" in params:
-        if not isinstance(params["attrs"], dict):
-            raise WorldError("attrs 必须是对象")
         item.attrs = params["attrs"]
-    api.register_item_def(item)
+    api.save_item_def(item)
     await api.flush_item_defs()
     return {"id": item_id}
 

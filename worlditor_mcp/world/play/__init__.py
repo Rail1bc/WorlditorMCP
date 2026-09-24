@@ -366,7 +366,7 @@ class PlayLoader:
                 )
             info = self.plays.pop(play_id, None)
             if info is not None:
-                await self._teardown_one(info)
+                await self._teardown_one(info, purge=True)  # 真卸载：含用户数据
             self._disabled.discard(play_id)
             await self._save_disabled_state()
             try:
@@ -474,18 +474,30 @@ class PlayLoader:
                 ids.add(spec.play_id)
         return ids
 
-    async def _teardown_one(self, info: PlayInfo) -> None:
-        """卸载单个玩法包：teardown(api)（可选）+ 清注册（含物品定义落库删除）+ 解绑。"""
+    async def _teardown_one(self, info: PlayInfo, *, purge: bool = False) -> None:
+        """卸载单个玩法包：teardown(api)（可选）+ 清注册 + 解绑。
+
+        Args:
+            info: 待卸载的包。
+            purge: 真卸载（删包目录）传 True——连**用户数据形态**的物品定义
+                （管理页维护的）一并删除；停用/整体卸载传 False，保留用户数据
+                （v0.5.2：原先不分青红皂白全删，停用 items 包会永久丢掉管理员
+                建的物品定义）。
+        """
         teardown = getattr(info.module, "teardown", None)
         if callable(teardown):
             try:
-                teardown(info.api)
+                result = teardown(info.api)
+                # setup 支持 async（v0.2.0），teardown 同理——不 await 的话
+                # "在 teardown 里取消自管 task"（G5 约定）静默不生效
+                if inspect.isawaitable(result):
+                    await result
             except Exception:  # noqa: BLE001
                 logger.exception("[worlditor] 玩法包 teardown 异常：%s", info.play_id)
         # 先落库删除本包注册的物品定义（v0.2.0：避免"幽灵物品"残留）
-        for item_id in self.engine.item_defs_of_play(info.play_id):
+        for item_id in self.engine.item_defs_of_play(info.play_id, include_user=purge):
             await self.engine.store.delete_item(item_id)
-        self.engine.clear_play_registrations(info.play_id)
+        self.engine.clear_play_registrations(info.play_id, keep_user_items=not purge)
         self.engine.detach_play_api(info.play_id)
 
     # ---------- 整体卸载 ----------

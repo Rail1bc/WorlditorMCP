@@ -59,6 +59,21 @@ async def _connect(engine, map_id: str, src: tuple[int, int], direction: str, ds
     )
 
 
+def schedule(
+    text: str, *, start: str = "00:00", end: str = "24:00", weight: float = 1.0
+):
+    """构造结构化文案（TextSchedule）——内核只认这一种格式（v0.5.2）。
+
+    纯字符串在 v0.5.2 起被明确拒绝（同一份数据两种写法 → 静默丢字段），
+    测试里也用同一个构造器，避免各处手抄 periods 结构。
+    """
+    return {
+        "periods": [
+            {"start": start, "end": end, "items": [{"text": text, "weight": weight}]}
+        ]
+    }
+
+
 def _load_world_module():
     path = BUILTIN_DIR / DEMO_WORLD_ID / "main.py"
     spec = importlib.util.spec_from_file_location(DEMO_WORLD_ID, path)

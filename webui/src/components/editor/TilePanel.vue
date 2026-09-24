@@ -18,9 +18,15 @@
       <input v-model="name" placeholder="地块名称" />
     </label>
     <label class="field">
-      描述（纯文本，或分时段 JSON）
-      <textarea v-model="description" rows="3" placeholder="如：小镇广场，人来人往。"></textarea>
+      描述（结构化 JSON，留空 = 无描述）
+      <textarea
+        v-model="description"
+        rows="4"
+        :placeholder="SCHEDULE_HINT"
+        @input="descError = ''"
+      ></textarea>
     </label>
+    <p v-if="descError" class="bad">{{ descError }}</p>
     <div class="row">
       <button class="btn" @click="saveMeta">{{ tile ? "保存地块" : "在此新建地块" }}</button>
       <button v-if="tile" class="mini-btn" @click="saveAsTemplate">存为地块模板</button>
@@ -56,6 +62,11 @@
 
 <script setup>
 import { ref, watch } from "vue";
+import {
+  SCHEDULE_HINT,
+  parseScheduleText,
+  scheduleToJson,
+} from "../../textSchedule.js";
 
 const props = defineProps({
   tile: { type: Object, default: null },
@@ -73,36 +84,17 @@ const emit = defineEmits([
 
 const name = ref("");
 const description = ref("");
+const descError = ref("");
 const row = ref(0);
 const col = ref(0);
 const toRow = ref(0);
 const toCol = ref(0);
 const picked = ref("");
 
-function descToText(desc) {
-  if (!desc) return "";
-  if (typeof desc === "string") return desc;
-  const periods = desc.periods || [];
-  if (periods.length === 1 && periods[0].items?.length === 1) {
-    return periods[0].items[0].text || "";
-  }
-  return JSON.stringify(desc, null, 2);
-}
-
-function descToPayload(text) {
-  if (!text.trim()) return null;
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed && typeof parsed === "object") return parsed;
-    return text;
-  } catch {
-    return text;
-  }
-}
-
 function sync() {
   name.value = props.tile ? props.tile.name : "";
-  description.value = props.tile ? descToText(props.tile.description) : "";
+  description.value = props.tile ? scheduleToJson(props.tile.description) : "";
+  descError.value = "";
   row.value = props.pos.row;
   col.value = props.pos.col;
   toRow.value = props.pos.row;
@@ -110,7 +102,14 @@ function sync() {
 }
 
 function saveMeta() {
-  emit("save-meta", { name: name.value, description: descToPayload(description.value) });
+  // 描述只认结构化 JSON（v0.5.2 统一格式）：不合法就**不提交**并就地报错
+  const parsed = parseScheduleText(description.value);
+  if (!parsed.ok) {
+    descError.value = `描述${parsed.error}`;
+    return;
+  }
+  descError.value = "";
+  emit("save-meta", { name: name.value, description: parsed.value });
 }
 
 function saveAsTemplate() {

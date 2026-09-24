@@ -119,8 +119,10 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 | API | 说明 |
 |---|---|
-| `register_item_def(item, fields=[])` | 物品类型定义（内核注册表；同 id 覆盖更新） |
+| `register_item_def(item, fields=[])` | 物品类型定义（内核注册表；同 id 覆盖更新）。**包代码声明**用它——包停用/整体卸载时随之清理，重新启用即恢复 |
+| `save_item_def(item, fields=[])` | 同上，但标为**用户数据**（管理页让管理员增删改时用，v0.5.2）：包停用/整体卸载**不清理**，只有真卸载（删包目录）才删 |
 | `add_item_fields(item_id, fields)` | 向已有物品类型追加字段（D9） |
+| `flush_item_defs()` / `delete_item_def(item_id)` | 物品定义落库（PlayLoader 内自动调用；管理页改完由玩法包显式调用）/ 删除物品定义（管理页；锁内 + `on_world_edited` 广播） |
 | `register_entity_kind(kind, block_move, interactions, label, fields, categories, tags=())` | 实体类型；`interactions` = 该类型默认可用的动作名。**D18：等价于注册一条隐式同名标签**，`tags` 是该类型**预设**的额外标签（"类型 A = {A, C}" → `tags=("C",)`） |
 | `register_entity_tag(tag, label, block_move, interactions, fields, categories)` | 注册一条**标签**（与类型共用一个命名空间）；实体挂上它即获得这里声明的一切 |
 | `register_entity_type(kind, tags=(), ...)` | `register_entity_kind` 的同义名（"类型只是预设"读起来更顺） |
@@ -130,6 +132,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `register_interaction(action, handler, label)` | 全局交互动作；`async (api, req) -> InteractionResult` |
 | `register_world_event(event, handler, interval=0)` | 事件订阅；on_tick 必须给 interval（秒） |
 | `register_ui_component(name, web_entry)` / `register_ui_hook(block_kind, position, provider)` | 自定义界面组件 / UiBlock 注入（before/after/replace） |
+| `apply_ui_hooks(block)` | 对一棵 UiBlock 树应用全部已注册钩子（服务端展开，锁内）；玩家壳生成角色卡后调它，部件包的面板即被追加（§11） |
 | `register_tool(name, handler, description, params)` | MCP 工具（见 §7） |
 | `register_view(key, title, icon, provider)` | WebUI 视图（见 §8） |
 | `register_service(name, handler)` | 跨包服务（见 §6） |
@@ -142,9 +145,11 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 |---|---|
 | `get_entity(id)` / `list_entities(map_id, row, col, viewer_id)` | 实体；**viewer_id 感知过滤（G12）**：隐藏 `attrs.invisible` 实体，viewer 自身 `see_invisible` 真视 |
 | `get_location(map_id, row, col)` / `get_map(map_id)` | 地块 / 地图（Location 含 connections） |
+| `get_item_def(item_id)` / `list_item_defs()` | 物品定义（内核注册表只读：单个 / 全部 dict 列表） |
 | `list_actions(target_id)` | 目标可用动作按钮（UI 菜单） |
 | `list_worlds()` / `get_world(id)` / `entity_world(id)` / `map_world(id)` | 世界与归属（D15） |
 | `list_folders(world_id)` / `list_maps_by_folder(world_id, folder_id)` | 组织树（按容器内序号排序） |
+| `list_admin_pages()` | 管理端管理页清单（§13；导航/调试用） |
 | `kv_get(key, default, world_id)` / `kv_set(key, value, world_id)` | 玩法数据 KV（namespace = 本包） |
 | `list_world_log(limit=100)` | 世界日志（最新在前） |
 | `list_primitive_overrides()` / `list_primitive_filters()` / `list_services()` / `list_views()` | 注册表状态（管理页同源） |
@@ -167,7 +172,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 ### 地图编辑（D14：内容治理归玩法包/用户）
 
-`update_location(map_id, row, col, **kwargs)` / `update_connection(map_id, row, col, direction, **kwargs)` / `create_map(map_id, name, ...)` / `delete_map(map_id)`（图上玩家在场拒绝，G2）/ `save_template(template)` / `delete_template(template_id)`
+`create_location(map_id, row, col, name, *, description=None)`（新建地块，坐标重复/空名称报错）/ `update_location(map_id, row, col, **kwargs)` / `update_connection(map_id, row, col, direction, **kwargs)` / `create_map(map_id, name, ...)` / `delete_map(map_id)`（图上玩家在场拒绝，G2）/ `save_template(template)` / `delete_template(template_id)`
 
 **模板（D22：地块与实体共用一个"模板"概念）**：
 - `register_entity_template(template_id, name, data, label="")` —— 注册本包自带的**实体模板**
@@ -182,6 +187,18 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 见 DESIGN §4.3.2；缺省 = 同节点保留原位 / 换节点排到末尾）。管理端还有组织树拖拽、
 地图搬家（含跨世界）、复制另存与地图体检（`GET /admin/lint`）——这些都是**管理维度**，
 玩法包一般只需要 `assign_map` 把自己的地图放进世界。
+
+**文案（TextSchedule）只有一种格式**（v0.5.2 统一）：地图/地块的 `description`
+与出口路径的 `label` 都必须是
+
+```python
+{"periods": [{"start": "06:00", "end": "18:00",
+              "items": [{"text": "白天", "weight": 3}, {"text": "也是白天", "weight": 1}]}]}
+```
+
+`None` = 无文案；**纯字符串会被拒绝**（`WorldError`，消息里带格式示例），
+结构非法（坏时间 / 空 `items` / 缺 `text` / 权重非正数）同理——不再静默丢弃条目。
+`description` / `label` 的读取侧一律是 `to_dict()` 的产物，往返无损。
 
 ### 身份
 

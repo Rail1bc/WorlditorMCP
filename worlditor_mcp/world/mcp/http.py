@@ -92,23 +92,25 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get("path", "")
-        if path in self.public_exact or any(
+        is_public = path in self.public_exact or any(
             path == p or path.startswith(p) for p in self.public_paths
-        ):
-            await self.app(scope, receive, send)
-            return
+        )
         headers = {
             k.decode("latin-1").lower(): v.decode("latin-1")
             for k, v in scope.get("headers", [])
         }
         token = _bearer_token(headers.get("authorization", "")) or _query_token(scope)
+        # 公共路径 = **不要求**凭据，不等于"忽略凭据"：带了凭据照样解析身份——
+        # `/views` 就靠这一点按调用者所在世界过滤（v0.5.2 修：原先公共路径直接
+        # 放行不解析 token，导致已登录玩家的视图列表恒按匿名/默认世界算）
         info = self.identity.resolve(token) if token else None
-        if info is None:
+        if info is None and not is_public:
             await _send_json(send, scope, 401, {"error": "未认证或凭据无效"})
             return
-        scope.setdefault("state", {})[_SCOPE_IDENTITY_KEY] = info
-        if scope["method"] == "POST":
-            receive = self._wrap_receive(receive, info)
+        if info is not None:
+            scope.setdefault("state", {})[_SCOPE_IDENTITY_KEY] = info
+            if scope["method"] == "POST":
+                receive = self._wrap_receive(receive, info)
         await self.app(scope, receive, send)
 
     def _wrap_receive(self, receive: Any, info: Any) -> Any:

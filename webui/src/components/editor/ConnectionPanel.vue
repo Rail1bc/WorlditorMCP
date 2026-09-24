@@ -17,20 +17,16 @@
       <div v-for="(p, i) in form[dir].paths" :key="i" class="path">
         <div class="path-head">
           <span class="dim">路径 {{ i + 1 }}{{ i === 0 ? "（主）" : "（意外）" }}</span>
-          <button class="mini-btn" @click.prevent="p.complex = !p.complex">
-            {{ p.complex ? "改用纯文本" : "分时段 JSON" }}
-          </button>
           <button class="mini-btn danger" @click.prevent="form[dir].paths.splice(i, 1)">
             删除路径
           </button>
         </div>
         <textarea
-          v-if="p.complex"
           v-model="p.labelJson"
           rows="3"
-          placeholder='分时段文案 JSON：{"periods":[{"start":"08:00","end":"18:00","items":[{"text":"白天","weight":1}]}]}'
+          :placeholder="`路径文案（可选，结构化）：${SCHEDULE_HINT}`"
         ></textarea>
-        <input v-else v-model="p.labelText" placeholder="路径文案（可选，如「往北走」）" />
+        <p class="dim">留空 = 没有文案；分时段就写多段（各自 start/end，items 按 weight 抽一条）。</p>
 
         <label class="mini-label">
           <input type="checkbox" v-model="p.reveal_target" /> 移动前揭示目标名
@@ -62,6 +58,7 @@
 
 <script setup>
 import { computed, reactive, watch } from "vue";
+import { SCHEDULE_HINT, parseScheduleText, scheduleToJson } from "../../textSchedule.js";
 
 const props = defineProps({
   tile: { type: Object, required: true },
@@ -88,12 +85,8 @@ function buildForm() {
 }
 
 function pathToForm(p) {
-  const label = p.label || null;
-  const simple = simpleLabel(label);
   return {
-    complex: label != null && simple === null,
-    labelText: simple === null ? "" : simple,
-    labelJson: label ? JSON.stringify(label, null, 2) : "",
+    labelJson: scheduleToJson(p.label),
     reveal_target: p.reveal_target !== false,
     targets: (p.targets || []).map((t) => ({
       map_id: t.map_id || "",
@@ -104,20 +97,8 @@ function pathToForm(p) {
   };
 }
 
-/** 单时段单条文案 → 纯文本；分时段结构 → null（改用 JSON 编辑）。 */
-function simpleLabel(label) {
-  if (!label) return "";
-  const periods = label.periods || [];
-  if (periods.length === 1 && (periods[0].items || []).length === 1) {
-    return periods[0].items[0].text || "";
-  }
-  return null;
-}
-
 function addPath(dir) {
   form[dir].paths.push({
-    complex: false,
-    labelText: "",
     labelJson: "",
     reveal_target: true,
     targets: [{ map_id: "", row: props.tile.row, col: props.tile.col, weight: 1 }],
@@ -133,19 +114,10 @@ function targetExists(t) {
   return props.locationKeys.includes(key);
 }
 
-function labelPayload(p) {
-  if (p.complex) {
-    const text = (p.labelJson || "").trim();
-    return text ? JSON.parse(text) : null; // 非法 JSON 由调用方兜住
-  }
-  const text = (p.labelText || "").trim();
-  return text || null;
-}
-
 function save(dir) {
   const slot = form[dir];
   const paths = [];
-  for (const p of slot.paths) {
+  for (const [index, p] of slot.paths.entries()) {
     const targets = p.targets
       .filter((t) => Number.isInteger(t.row) && Number.isInteger(t.col))
       .map((t) => {
@@ -154,14 +126,13 @@ function save(dir) {
         return item;
       });
     if (!targets.length) continue; // 空路径没有意义（运行时会当死引用剔除）
-    let label = null;
-    try {
-      label = labelPayload(p);
-    } catch {
-      emit("invalid", `路径文案不是合法 JSON：${p.labelJson.slice(0, 40)}…`);
+    // 文案只认结构化 JSON（v0.5.2 统一格式）：不合法就**不提交**，把原因显示出来
+    const parsed = parseScheduleText(p.labelJson);
+    if (!parsed.ok) {
+      emit("invalid", `第 ${index + 1} 条路径的文案${parsed.error}`);
       return;
     }
-    paths.push({ label, reveal_target: p.reveal_target, targets });
+    paths.push({ label: parsed.value, reveal_target: p.reveal_target, targets });
   }
   emit("save", dir, { direction: dir, enabled: slot.enabled, paths });
 }

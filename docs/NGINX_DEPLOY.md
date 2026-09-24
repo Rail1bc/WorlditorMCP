@@ -128,8 +128,11 @@ curl -s -X POST https://worlditor.raila.cn/world/mcp \
 
 ## 6. 说明
 
-- **compose 不用改**：容器内监听 `0.0.0.0`，宿主映射收敛到 `127.0.0.1:6288/6289`，
-  nginx 反代本机回环地址即可；公网直连 6288/6289 端口被防火墙挡住
+- **compose 不用改**：容器内监听 `0.0.0.0`，但宿主机映射**两者不同**——
+  `compose.yml` 里 **6289 只绑 `127.0.0.1`**（管理端永不直接出公网），
+  而 **6288 是 `0.0.0.0:6288` 映射** → 玩家端口的公网暴露**完全依赖防火墙**，
+  所以 §2 的"只放行 80/443"是**硬要求**，不是可选项；nginx 反代本机
+  `127.0.0.1:6288/6289` 即可
 - **同源部署**，WebUI/API/静态资源都在 `worlditor.raila.cn` 的 443 下，
   无 CORS 配置需求（`WORLDITOR_ALLOWED_ORIGINS` 保持空）
 - MCP client 地址：`https://worlditor.raila.cn/world/mcp`

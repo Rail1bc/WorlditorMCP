@@ -262,7 +262,8 @@ def test_connection_editor_is_structured():
     )
     assert "targetsText" not in conn  # 旧的纯文本目标框已废弃
     assert "weight" in conn and "map_id" in conn  # 目标带地图与权重
-    assert "complex" in conn  # 分时段文案有 JSON 模式，不再被 String(dict) 毁掉
+    # 文案只有结构化一种格式（v0.5.2）：不再有"纯文本/JSON"双模式开关
+    assert "parseScheduleText" in conn and "complex" not in conn
 
 
 def test_entity_panel_renders_schema_and_tags():

@@ -44,6 +44,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .errors import WorldError
 from .model import (
     ATTR_INVISIBLE,
     ATTR_SEE_INVISIBLE,
@@ -89,10 +90,6 @@ InteractionHandler = Callable[[Any, InteractionRequest], Any]
 WorldEventHandler = Callable[..., Any]
 # UI 钩子 provider：async def provider(api, block: UiBlock) -> list[UiBlock]
 UiHookProvider = Callable[..., Any]
-
-
-class WorldError(Exception):
-    """世界动作的业务错误（非法方向、实体不存在等），消息可直接展示给用户。"""
 
 
 class AsyncRLock:
@@ -431,18 +428,23 @@ def _absolute_to_template(loc: dict) -> dict:
 
 
 def _location_template_payload(data: Any) -> dict[str, Any]:
-    """地块模板负载规范化（best-effort：能规范就规范，缺 name 留到套用时再报错）。
+    """地块模板负载规范化 + **校验**（v0.5.2：文案结构在保存点就检查）。
 
-    这样"先存个空壳模板、之后再填"仍然可行；真正套用时 `parse_location` 会以
-    "地块名称不能为空"拒绝——报错发生在使用点，而不是保存点。
+    模板 ``data`` 会原样入库，保存时不校验的话，非法结构（含 v0.5.2 起已禁止的
+    纯文本文案）会一直躺在库里，直到"套用"时才炸——错误该发生在保存点。
+    ``name`` 仍允许留空（"先存个空壳模板、之后再填"的场景保留）：用占位名走一遍
+    完整解析，再把名字还原成空。
     """
     if not isinstance(data, dict):
         raise WorldError("地块模板 data 必须是对象")
     name = data.get("name")
-    if not isinstance(name, str) or not name.strip():
-        return dict(data)
-    loc = parse_location(_template_to_absolute(data, 0, 0))
-    return _absolute_to_template(location_to_dict(loc))
+    placeholder = not (isinstance(name, str) and name.strip())
+    source = {**data, "name": "（未命名）"} if placeholder else data
+    loc = parse_location(_template_to_absolute(source, 0, 0))
+    out = _absolute_to_template(location_to_dict(loc))
+    if placeholder:
+        out["name"] = ""  # 名字保持"还没填"
+    return out
 
 
 def _location_from_template(data: dict, map_id: str, row: int, col: int) -> Any:
@@ -510,6 +512,8 @@ class WorldEngine:
         self._item_fields: dict[str, list[_FieldAppend]] = {}
         # 物品定义归属（play_id）：玩法包卸载时清理其注册的物品定义（v0.2.0）
         self._item_def_play: dict[str, str] = {}
+        # 其中由**用户**（管理页）维护的定义：停用/整体卸载时保留（v0.5.2）
+        self._item_def_user: set[str] = set()
         # D11/A3 原语分派表：name -> 覆盖登记（无登记 = 内核默认实现）
         self._primitive_overrides: dict[str, _PrimitiveOverride] = {}
         # G14 原语过滤器链：name -> 按注册序的过滤器列表（链尾 = 默认实现）
@@ -584,11 +588,17 @@ class WorldEngine:
 
     # ---------- 玩法包注册（WorlditorPlayAPI 转发至此） ----------
 
-    def register_item_def(self, item: Any, *, play_id: str = "") -> None:
+    def register_item_def(
+        self, item: Any, *, play_id: str = "", user_data: bool = False
+    ) -> None:
         """注册/更新物品定义（同步更新内存；``flush_item_defs`` 批量落库）。
 
         物品 id 是类型键（玩法包引用），注册冲突即覆盖更新（同 id 视为同一物品）；
         ``play_id`` 记录归属，玩法包卸载时据此清理（见 item_defs_of_play）。
+
+        ``user_data=True`` 表示这条定义是**用户数据**（管理页建的/改的，不是包代码
+        里的声明）：包停用/整体卸载时**不清理**——只有真正卸载（删包目录）才一起删。
+        v0.5.2 之前两者混在一起，停用 items 包会把管理员建的物品定义永久删掉。
         """
         if not isinstance(item, ItemDef) and not (
             hasattr(item, "id") and hasattr(item, "name") and hasattr(item, "to_dict")
@@ -601,10 +611,25 @@ class WorldEngine:
         self.store.items[item.id] = item
         if play_id:
             self._item_def_play[item.id] = play_id
+        # 代码声明会覆盖同名用户数据（包重新启用时以代码为准）
+        if user_data:
+            self._item_def_user.add(item.id)
+        else:
+            self._item_def_user.discard(item.id)
 
-    def item_defs_of_play(self, play_id: str) -> list[str]:
-        """该玩法包注册的物品定义 id（卸载清理用）。"""
-        return [i for i, p in self._item_def_play.items() if p == play_id]
+    def item_defs_of_play(
+        self, play_id: str, *, include_user: bool = True
+    ) -> list[str]:
+        """该玩法包注册的物品定义 id（卸载清理用）。
+
+        ``include_user=False`` 只返回**代码声明**的定义（停用路径用：保留用户
+        在管理页维护的定义）；``True`` 连用户数据一起（真卸载用）。
+        """
+        return [
+            i
+            for i, p in self._item_def_play.items()
+            if p == play_id and (include_user or i not in self._item_def_user)
+        ]
 
     async def flush_item_defs(self) -> None:
         """把内存中的物品定义全量写回 items 表（PlayLoader 加载结束后调用）。"""
@@ -619,6 +644,9 @@ class WorldEngine:
             if item_id not in self.store.items:
                 raise WorldError(f"物品定义不存在：{item_id}")
             await self.store.delete_item(item_id)
+            # 删除后清归属记账，免得 item_defs_of_play 继续报一个已不存在的 id
+            self._item_def_play.pop(item_id, None)
+            self._item_def_user.discard(item_id)
             await self._emit(
                 "on_world_edited", {"op": "delete_item_def", "item_id": item_id}
             )
@@ -1454,11 +1482,16 @@ class WorldEngine:
     def detach_play_api(self, play_id: str) -> None:
         self._play_apis.pop(play_id, None)
 
-    def clear_play_registrations(self, play_id: str) -> None:
+    def clear_play_registrations(
+        self, play_id: str, *, keep_user_items: bool = True
+    ) -> None:
         """清理某玩法包的全部注册（kind / interaction / event / ui / 字段 /
         原语分派），供加载失败回滚与卸载使用（C2：重载 = 引擎重建，此为兜底清理）。
 
         原语分派登记随生命周期清除 → 自动恢复内核默认实现（§2.4 恢复语义）。
+
+        ``keep_user_items=True``（默认）：管理页维护的物品定义是**用户数据**，
+        不随包停用消失（v0.5.2）；只有真卸载（删包目录）才传 False 一并清。
         """
         self._tag_specs = {
             k: v for k, v in self._tag_specs.items() if v.play_id != play_id
@@ -1498,10 +1531,14 @@ class WorldEngine:
             for k, v in self._item_fields.items()
             if any(a.play_id != play_id for a in v)
         }
-        # 本包注册的物品定义：内存清理（落库删除由 PlayLoader._teardown_one 负责）
-        for item_id in self.item_defs_of_play(play_id):
+        # 本包注册的物品定义：内存清理（落库删除由 PlayLoader._teardown_one 负责）。
+        # 用户数据（管理页维护）默认保留——它属于用户，不属于包的代码注册。
+        for item_id in self.item_defs_of_play(
+            play_id, include_user=not keep_user_items
+        ):
             self.store.items.pop(item_id, None)
             self._item_def_play.pop(item_id, None)
+            self._item_def_user.discard(item_id)
         self._primitive_overrides = {
             k: v for k, v in self._primitive_overrides.items() if v.play_id != play_id
         }
@@ -2937,6 +2974,9 @@ class WorldEngine:
                             desc=e.desc,
                             attrs=copy.deepcopy(e.attrs),
                             state=copy.deepcopy(e.state),
+                            # D18：实例标签必须一起复制——否则副本悄悄变成"裸实体"
+                            # （原先漏了这行：带 spawner 标签的实体复制后标签全丢）
+                            tags=list(e.tags),
                             last_active_ts=0.0,
                         )
                     )

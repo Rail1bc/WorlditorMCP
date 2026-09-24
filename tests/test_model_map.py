@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
+from world_fixtures import schedule
 
+from worlditor_mcp.world.engine import WorldError
 from worlditor_mcp.world.model import (
     DIR_OFFSETS,
     DIRECTIONS,
@@ -35,10 +37,10 @@ def test_default_schedule_resolves_to_empty():
     assert TextSchedule().resolve(NOW) == ""
 
 
-def test_plain_string_schedule():
-    s = parse_text_schedule("迷雾笼罩，看不真切")
-    assert s.resolve(datetime(2026, 8, 13, 3, 0)) == "迷雾笼罩，看不真切"
-    assert s.resolve(NOW) == "迷雾笼罩，看不真切"
+def test_plain_string_schedule_is_rejected():
+    """v0.5.2：文案只有结构化一种格式——纯字符串明确报错（不再当"全天单条"）。"""
+    with pytest.raises(WorldError, match="periods"):
+        parse_text_schedule("迷雾笼罩，看不真切")
 
 
 def test_none_schedule_is_empty():
@@ -141,59 +143,61 @@ def test_weighted_pick_with_injected_rand():
     assert s.resolve(NOW, rand=lambda: 0.99) == "B"
 
 
-def test_empty_item_text_filtered():
-    s = parse_text_schedule(
-        {
-            "periods": [
+def test_empty_item_text_is_rejected():
+    """v0.5.2：空 text 的条目不再被静默丢弃，而是整段报错（静默丢字段=要根除的问题）。"""
+    with pytest.raises(WorldError, match="text"):
+        parse_text_schedule(
+            {
+                "periods": [
+                    {
+                        "start": "00:00",
+                        "end": "24:00",
+                        "items": [
+                            {"text": "", "weight": 1},
+                            {"text": "B", "weight": 1},
+                        ],
+                    }
+                ]
+            }
+        )
+
+
+def test_invalid_weights_are_rejected():
+    """权重非法（0 / 负数 / 字符串 / 布尔）→ 报错，不再"丢弃条目"后静默变空。"""
+    for bad_weight in (0, -1, "x", True, float("inf")):
+        with pytest.raises(WorldError, match="weight"):
+            parse_text_schedule(
                 {
-                    "start": "00:00",
-                    "end": "24:00",
-                    "items": [{"text": "", "weight": 1}, {"text": "B", "weight": 1}],
+                    "periods": [
+                        {
+                            "start": "00:00",
+                            "end": "24:00",
+                            "items": [{"text": "A", "weight": bad_weight}],
+                        }
+                    ]
                 }
-            ]
-        }
-    )
-    assert s.resolve(NOW) == "B"
+            )
 
 
-def test_invalid_weights_dropped():
-    s = parse_text_schedule(
-        {
-            "periods": [
-                {
-                    "start": "00:00",
-                    "end": "24:00",
-                    "items": [
-                        {"text": "A", "weight": 0},
-                        {"text": "B", "weight": -1},
-                        {"text": "C", "weight": "x"},
-                        {"text": "D", "weight": True},
-                    ],
-                }
-            ]
-        }
-    )
-    assert s.resolve(NOW) == ""
-
-
-def test_invalid_period_dropped():
-    s = parse_text_schedule(
-        {
-            "periods": [
-                {
-                    "start": "25:00",
-                    "end": "24:00",
-                    "items": [{"text": "X", "weight": 1}],
-                },
-                {
-                    "start": "00:00",
-                    "end": "24:00",
-                    "items": [{"text": "好", "weight": 1}],
-                },
-            ]
-        }
-    )
-    assert s.resolve(NOW) == "好"
+def test_invalid_period_time_is_rejected():
+    """时段非法（25:00）→ 报错，不再"跳过这一段、悄悄用下一段"。"""
+    with pytest.raises(WorldError, match="时间非法"):
+        parse_text_schedule(
+            {
+                "periods": [
+                    {
+                        "start": "25:00",
+                        "end": "24:00",
+                        "items": [{"text": "X", "weight": 1}],
+                    },
+                    {
+                        "start": "00:00",
+                        "end": "24:00",
+                        "items": [{"text": "好", "weight": 1}],
+                    },
+                ]
+            }
+        )
 
 
 def test_text_schedule_round_trip():
@@ -278,7 +282,7 @@ def test_parse_location_full():
             "row": 3,
             "col": 5,
             "name": "铁匠铺",
-            "description": "炉火终日不熄。",
+            "description": schedule("炉火终日不熄。"),
             "connections": {
                 "right": {
                     "enabled": True,
@@ -342,7 +346,7 @@ def test_location_round_trip():
             "row": 3,
             "col": 5,
             "name": "铁匠铺",
-            "description": "炉火终日不熄。",
+            "description": schedule("炉火终日不熄。"),
             "connections": {
                 "right": {
                     "enabled": True,
@@ -419,7 +423,7 @@ def test_map_parse_and_round_trip():
         {
             "id": "default",
             "name": "主世界",
-            "description": "示例小镇。",
+            "description": schedule("示例小镇。"),
             "timezone": "Asia/Shanghai",
             "spawn_row": 1,
             "spawn_col": 2,

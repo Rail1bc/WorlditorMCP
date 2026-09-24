@@ -150,6 +150,59 @@ def test_tools_and_views_follow_world_activation(tmp_path):
     asyncio.run(run())
 
 
+def test_views_filter_uses_caller_world_not_default(tmp_path):
+    """G33（v0.5.2）：`/views` 必须按**调用者所在世界**过滤，而不是"默认世界"。
+
+    原先 `/views` 挂在免认证公共路径上，中间件遇到公共路径**直接放行、不解析
+    token** → `_identity_of()` 恒为 None → 过滤退化成匿名（= 默认世界的激活集合）。
+    默认世界通常是"全部启用"，所以只在默认世界里测（旧测试就是）永远发现不了；
+    这里让玩家站到另一个世界里。
+    """
+
+    async def run():
+        engine = WorldEngine(WorldStore(tmp_path / "world.db"))
+        await engine.initialize()
+        await seed_test_world(engine)  # 默认世界的地图
+        loader = PlayLoader(
+            engine, plays_dir=tmp_path / "plays", builtin_dir=BUILTIN_DIR
+        )
+        await loader.load_all()
+        identity = IdentityService(engine, auth_mode="open")
+        mcp = build_mcp_server(engine)
+        app = build_http_app(mcp, identity, engine=engine, loader=loader)
+        try:
+            # 乙世界：只启用 social；玩家站在乙世界的地图上
+            await engine.create_world(
+                "world_b", "乙世界", play_ids=["worlditor_play_social"]
+            )
+            await engine.create_map("m_b", "乙世界地图", spawn_row=0, spawn_col=0)
+            await engine.create_location("m_b", 0, 0, "乙世界广场")
+            await engine.assign_map("m_b", "world_b")
+            player = await identity.register_agent("世界探针")
+            await engine.move_entity(player.entity_id, "m_b", 0, 0)
+
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://play"
+            ) as client:
+                h = {"Authorization": f"Bearer {player.token}"}
+                # 已登录：按玩家所在世界 → 只有 social 的视图
+                views = (await client.get("/views", headers=h)).json()["views"]
+                assert {v["key"] for v in views} == {"social_log"}, views
+
+                # 匿名（无凭据）仍按默认世界算（默认世界全启用，视图齐全）
+                anon = (await client.get("/views")).json()["views"]
+                assert {v["key"] for v in anon} >= {"items", "movement", "social_log"}
+
+                # 放开乙世界 → 恢复
+                await engine.update_world("world_b", play_ids=[])
+                views = (await client.get("/views", headers=h)).json()["views"]
+                assert {v["key"] for v in views} >= {"items", "movement", "social_log"}
+        finally:
+            await engine.terminate()
+
+    asyncio.run(run())
+
+
 def test_primitive_filter_follows_world(tmp_path):
     """原语过滤器：挂过滤器的包在该世界未启用 → 过滤器不参与（默认实现生效）。"""
 
