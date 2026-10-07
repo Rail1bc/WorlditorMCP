@@ -20,7 +20,9 @@
 ```
 玩法包 worlditor_play_*（内置领域包 ×6 + 社区包）
   ├─ 行为：on_tick 状态机 / 事件订阅 / 交互 handler / 自定义事件
-  ├─ 规则：视野 / 广播 / 行为编排 —— 读数据 → 调内核原语
+  │        （执行顺序由 phase/order 声明，D27——不再依赖包加载序）
+  ├─ 规则：视野 / 广播 / 行为编排 —— query_entities 按标签/世界/变更游标
+  │        查一批实体（D26）→ 调内核原语
   │        （移动默认由内核提供，玩法包可 override/disable，D11）
   ├─ 工具：register_tool 注册 MCP 工具（身份经 api.caller() 获取，内核裁定权限）
   └─ 视图：register_view 注册页面（UiBlock 协议，WebUI 渲染）
@@ -28,13 +30,16 @@
         ▼
 内核 worlditor（v5）
   ├─ 事实层：世界（激活玩法包集合）+ 组织树（多层）+ 地块/连接/模板
-  │          + 实体（字段化）+ 物品定义（字段化）+ 玩法数据 KV + 日志
+  │          + 实体（字段化 + revision/changed_tick 变更戳，D28）
+  │          + 物品定义（字段化）+ 玩法数据 KV + 日志
   │          （SQLite WAL，全量内存快照；无背包持有表）
   ├─ 原语（默认实现；行为原语可被玩法包覆盖/禁用 D11，place/remove
   │    仅可调用不可覆盖 D14）：place_entity / remove_entity / move_entity /
   │    move（路径移动：读 connections → 抽目标）/
-  │    set_data / get_data / interact（handler 命令式调原语，无 effects，D12）
+  │    set_data / get_data / remove_data（删字段，D29）/
+  │    interact（handler 命令式调原语，无 effects，D12）
   │    （无背包原语——D8 持有下沉；无 say——D1）
+  │    查询原语（只读，不可覆盖）：query_entities（D26）
   ├─ 身份：账户 / token 三档 / auth_mode / 邀请码 / 吊销（不可下沉，全局）
   ├─ 编辑：世界/组织树/地块/连接/地图/实体与物品定义编辑
   │        （admin 人类入口 + 玩法包 API 程序入口，D14）
@@ -55,7 +60,8 @@
 | 世界 / 组织树 | worlds（玩法包激活集合）+ world_folders（多层纯管理，D15，见 §3.0） |
 | 地块 / 连接 / 模板 | 多地图；4 方向槽位 + 平行路径 + 加权目标 + **分时段文本（v3 模型原样保留）**；地图归属世界与组织节点；**可见性 visible（public/private，G1）** |
 | 文本（TextSchedule） | 地图/地块 `description` 与出口路径 `label` **只有一种格式**：`{"periods": [{"start": "HH:MM", "end": "HH:MM", "items": [{"text": "…", "weight": 1}]}]}`——`None` = 无文案；**纯字符串与非结构一律报错**（v0.5.2 统一，见 GAPS G28：两种写法并存必然引出静默丢字段）。解析：`parse_text_schedule`（**不再静默丢弃非法条目**） |
-| 实体 | 字段化统一模型（见 §3.1），位置持久化 |
+| 实体 | 字段化统一模型（见 §3.1），位置持久化；`revision` / `changed_tick` 变更戳（D28） |
+| 变更检测 | `revision`（全局写序号，world_meta 持久化、重启续号）+ 实体 `changed_tick`（tick 窗口）；增量游标见 D26/D28 |
 | 物品定义 | 字段化 ItemDef（见 §3.2），**仅定义不持有** |
 | 玩法数据 KV | play_data（namespace = 世界 + 玩法包 双层隔离） |
 | 世界日志 | world_log（5000 上限） |
@@ -71,6 +77,8 @@
 | `move` | 路径移动（身份化实体） | 内核：读 connections → 按权重抽目标（死引用剔除） |
 | `move_entity(map,row,col)` | 直接位移（行为驱动，传送语义） | 内核 |
 | `set_data` / `get_data` | 字段读写（合并写 / 全量读；容器 = attrs） | 内核 |
+| `remove_data` | **删字段**（D29；容器 = attrs，与 set_data 同走分派表——可被过滤/覆盖/禁用）。字段不存在 = 幂等返回 False，不落盘、不发事件 | 内核 |
+| `query_entities` | **实体查询**（D26：按标签 / 排除标签 / 地图 / 世界 / 坐标 / 感知 viewer / 变更游标筛一批实体；稳定排序 + limit）。只读、**不可覆盖**（查询是数据面，不是行为面） | 内核 |
 | `interact` | 交互通道：handler 命令式调内核原语（无 effects 清单，D12）；结果 = text + ui | 内核：按 register_interaction 注册表分发（动作校验 → handler → on_interact 事件）；override 则整体替换该通道（校验/事件语义由覆盖者决定，同 §2.4 末句） |
 
 行为原语默认实现由内核提供，**可被玩法包覆盖/禁用**（§2.4，D11）；
@@ -92,7 +100,8 @@ place/remove 可调用但不可覆盖（治理域，D14）。
 > **已下沉（不在内核）**：背包持有（D8）、说话与广播（D1）、玩法数据语义
 > （字段由玩法包声明/读写）。
 > **内核提供但玩法包可覆盖/禁用**：行为原语 {move, move_entity, set_data,
-> get_data, interact}（D11）；place/remove 可调用但不可覆盖（治理域，D14）。
+> get_data, remove_data, interact}（D11/D29）；place/remove 可调用但不可覆盖
+> （治理域，D14）；query_entities 只读且不可覆盖（D26）。
 
 ### 2.4 原语覆盖与过滤器链（D11 / A3 / G14）
 
@@ -136,11 +145,37 @@ emit / kv_set…）为同一任务重入，安全且多段「读-判-写」天�
   异常隔离（同交互 handler）
 - **恢复语义**：登记跟随玩法包生命周期——卸载/停用即清除登记与过滤器、
   自动恢复默认实现；不设 enable API
-- **覆盖范围**：`{move, move_entity, set_data, get_data, interact}` 行为原语；
-  place/remove 可**调用**（D14）但不可覆盖/禁用（生命周期与治理域）
+- **覆盖范围**：`{move, move_entity, set_data, get_data, remove_data, interact}`
+  行为原语；place/remove 可**调用**（D14）但不可覆盖/禁用（生命周期与治理域）；
+  query_entities 只读原语，不进分派表（D26）
 - 覆盖/禁用/过滤器状态**管理页可见**（谁覆盖了什么、谁禁用了什么、谁挂了
   过滤器及顺序）；被覆盖的调用走同一分派入口，事件由实际执行的原语产生
   （默认实现发对应事件；覆盖行为的事件由玩法包行为决定）
+
+### 2.5 事件顺序与变更检测（D27 / D28）
+
+**事件顺序（D27）**：同一事件的多个订阅者按 `(phase, order, 注册序)` 执行——
+
+- `phase` ∈ `input` → `simulate`（缺省）→ `present`；未知名**报错**（不静默造新阶段）
+- `order` 为同阶段内序号（整数，可负）；同 phase/order 时按注册序稳定兜底
+  （= v0.6.0 之前的行为，单包多订阅者顺序不变）
+- 覆盖**全部事件**（含 `on_tick`）；顺序在注册时定下来，emit/心跳热路径不排序
+- 为什么要有：跨包顺序原本等于"包加载顺序"这个**隐式事实**——包一多就变成
+  不能碰的意外契约。声明出来之后，"输入 → 模拟 → 表现"才是可读的
+
+**变更检测（D28）**：内核给每个实体盖两枚戳，写入路径**不可能漏盖**：
+
+- `revision`：实体字段；**落库那一刻**分配，全局单调（`store.save_entities` 是
+  唯一盖章点，`save_entity` 转发到它）
+- `changed_tick`：实体字段；最近一次变更所在的 tick 窗口（`_tick_once` 每轮
+  窗口号 +1，**哪怕没有任何 on_tick 订阅者**——它是时间轴，不能停）
+- 全局 `revision` 与业务写**同一事务**落 `world_meta`，启动时在**任何写之前**
+  续号 → 重启后单调不回退（漏报是这类机制里唯一不可接受的错）
+- 两个游标（`query_entities`）：`changed_since_revision`（精确：每次写 +1，
+  既不多报也不漏报，客户端增量刷新用）/ `changed_since_tick`（窗口粒度：
+  同窗口内重复报，**宁可多报绝不漏报**）
+- 出口：`/state` 顶部带 `revision`/`tick`，实体自带两字段；SSE 事件
+  payload 带 `revision`/`tick`
 
 ## 3. 数据模型
 
@@ -215,6 +250,8 @@ class Entity:
     user_id: str | None = None   # 身份化实体绑定
     last_active_ts: float = 0.0
     tags: list[str] = []         # 实例级标签（有序，参与能力并集与字段覆盖顺序）
+    revision: int = 0            # D28：落库分配的全局变更号
+    changed_tick: int = 0        # D28：最近变更所在的 tick 窗口
 ```
 
 **能力解析（D18/D19/D21）**：
@@ -243,6 +280,7 @@ fields       = 隐式 kind 标签 → 实例 tags（数组序）→ 分类字段
 | 标签/类型声明字段 | `register_entity_kind(kind, ..., fields=[{name,label,type,default?}])` / `register_entity_tag` | 声明级 schema，UI 通用渲染（角色卡/编辑表单）；类型 str/int/float/bool/json |
 | 向已有标签追加字段 | `add_tag_fields(tag, fields)`（旧名 `add_kind_fields`） | 玩法包 B 给**带该标签的实体**加字段（D18 起语义扩张） |
 | 实例任意字段 | `set_data(entity_id, name, value)`（容器 = attrs，走原语分派） | buff 等临时效果，无需声明；未声明字段 UI 降级原始 JSON。同容器的 `set_attrs` 为合并写（不经分派），二选一 |
+| 删字段 | `remove_data(entity_id, name)`（走原语分派，D29）/ `remove_state(entity_id, name)` | 显式删掉一个字段（D23 的另一半：不能只保证"不静默丢"，还要能"明确地删"）；字段不存在 = 幂等 False |
 
 **分类标签（D10）**：`register_entity_kind(..., categories=("生物",))`——标签挂
 分类（宽松，无需预注册）；**分类字段** `add_category_fields("生物", [hp])` 使该
@@ -280,21 +318,27 @@ class ItemDef:
 | `register_item_def` / `add_item_fields` | 物品类型定义与字段追加 |
 | `register_entity_kind` / `add_kind_fields` / `add_category_fields` | 实体类型、字段、分类 |
 | `register_interaction` | 交互动作 handler |
-| `register_world_event` | 任意事件名订阅（on_tick 带间隔） |
+| `register_world_event` | 任意事件名订阅（on_tick 带间隔）；**phase / order 声明执行顺序**（D27，§2.5） |
 | `register_ui_component` / `register_ui_hook` | 自定义界面组件 / 界面注入（before/after/replace） |
 | `register_tool` | MCP 工具；handler 签名 `handler(api, ctx, **args)`——api 注入统一（与 §2.4 一致），ctx = MCP Context（读请求 _meta/进度），身份经 `api.caller()` 读取、内核裁定权限；参数类型 string/integer/number/boolean/**array**（G11） |
 | `register_view` | WebUI 页面（协议见 §4.4 视图宿主） |
 | `override_primitive` / `disable_primitive` / `call_default_primitive` | 原语覆盖 / 禁用 / 调默认实现（D11，§2.4） |
+| `query_entities` / `current_tick` / `world_revision` | 实体查询（D26）与变更游标（D28，§2.5） |
 
 ### 4.2 运行时（读写 + 身份）
 
 - 只读：实体/场景/地图/动作列表/背包（玩法包自己的数据）/字段/KV/`list_kinds(category)`；
-  **感知过滤（G12）**：`list_entities(..., viewer_id=)` 统一按 `invisible` 字段隐藏
-  （viewer 自身 `see_invisible` 真视；`/scene` 与玩法包感知工具遵守）
-  —— ⚠ **未实现**：`/state` 是全量快照，只按 G1 地图可见性过滤，**不过隐身过滤**
-  （见 `GAPS.md` G12 尾巴）
-- 写：`set_data` / `get_data` / `move_entity` / `interact` / `emit`（自定义事件）/
-  `place_entity` / `remove_entity` / `delete_map`（G2）/
+  **实体查询（D26）**：`query_entities(tags=…, exclude_tags=…, map_id/world_id/row/col=…,
+  viewer_id=…, changed_since_tick/changed_since_revision=…, where=…, limit=…)`
+  ——"所有带中毒标签的实体"不再需要全量扫 + 自己筛；标签匹配按 D21 激活语义
+  （声明包未加载或该世界未启用 → 不匹配，"纯数据标签"照常匹配），包含与排除同一套判定；
+  严格校验（拼错的地图/世界、非法标签报错，不静默返回空）
+  **感知过滤（G12）**：`list_entities(..., viewer_id=)` 与 `query_entities(viewer_id=)`
+  统一按 `invisible` 字段隐藏（viewer 自身 `see_invisible` 真视；`/scene` 与玩法包
+  感知工具遵守）—— ⚠ **未实现**：`/state` 是全量快照，只按 G1 地图可见性过滤，
+  **不过隐身过滤**（见 `GAPS.md` G12 尾巴）
+- 写：`set_data` / `get_data` / `remove_data`（D29 删字段）/ `move_entity` / `interact` /
+  `emit`（自定义事件）/ `place_entity` / `remove_entity` / `delete_map`（G2）/
   地图编辑原语（地块/连接/地图/模板，D14）
 - `caller()`：当前调用者身份（MCP 工具 handler 用，权限内核裁定）
 - 自有资源：`data/`（数据文件）、`web/`（组件入口）、kv namespace（隔离）
@@ -629,14 +673,14 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
    构建推送 ghcr.io/rail1bc/worlditor）——v0.1.0 起已多次走通
 ```
 
-## 9. 决策记录（D1–D25，已全部确认）
+## 9. 决策记录（D1–D30，已全部确认）
 
 > **编号说明（读文档前先看这三行）**：
 > - `D*` = 本文件的决策号，唯一权威，一条一个结论。
 > - `G*` = **两套历史编号，同号不同义**——正文 §4.3/§4.4 里的 `（G2）`/`（G3）`/`（G4）`/
 >   `（G5）`/`（G6）`/`（G7）`/`（G8）` 是**旧插件期**的缺口号（动态工具 / 视图协议 /
 >   物理位置 / 状态持久化 / 依赖管理 / 卸载安全 / 自定义事件）；而 `GAPS.md` 的
->   `G1–G26` 是本仓库的缺口清单。**查"还差什么"一律以 `GAPS.md` 为准**。
+>   `G1–G38` 是本仓库的缺口清单。**查"还差什么"一律以 `GAPS.md` 为准**。
 > - `A1–A4`（旧架构审查）、`B1–B13`（代码审查）、`C1–C4`（并发/缓存审查）、
 >   `R1–R6`（规则审查）、`P0-x`（2026-09 安全审查）同样来自**未入库的历史审查报告**，
 >   结论已并入 D 系列与 `GAPS.md`；代码注释里引用这些编号时指的就是那批报告。
@@ -668,6 +712,11 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 | D23 | 编辑器的数据正确性（G24） | 编辑器**不得静默丢字段**：出口编辑改**结构化表单**（目标 = 地图 + 坐标 + 权重；文案 = 分时段条目），保存前给 **diff 预览**；实体数据**按声明字段 schema 渲染控件、未声明字段走原始 JSON 兜底**；显示**合并后的最终能力**（挡路/动作/字段）作为诊断；`attrs`（玩法数据）与 `state`（动态状态）分开标注 |
 | D24 | 编辑器形态与增强 | 拆成**地块 / 实体 / 出口 / 模板四个面板**（不再单一 800 行组件）；做**地块多选 + 框选复制粘贴**、**出口方向箭头可视化（简版）**、接入 `engine.move_location`（内核早有、一直没入口）；**不做撤销/重做**（成本≈其余三项之和，由"保存前 diff 预览"兜底）。**v0.5.1 修订**：面板之上再分**三个可切换视图**（地图编辑 / 实体 / 模板）+ 可视化画布缩放平移，形态见 §4.3.3 |
 | D25 | 死代码清理 | 删除 `EntityKindSpec.tick`（`register_entity_kind(tick=…)` 写了从没被读过、`list_kinds()` 也不返回、管理端不可见）；`list_kinds` 扩为"类型 + 标签"清单，标注**来源包**与**是否隐式** |
+| D26 | 实体查询原语 | **新增 `query_entities`（只读原语，不进覆盖/过滤分派表）**：按 `tags`（AND）/ `exclude_tags` / `map_id` / `world_id` / `row` / `col` / `viewer_id` / 变更游标 / `where` 筛选，稳定排序 `(map_id,row,col,id)` + `limit`。**标签匹配按 D21 激活语义**：声明该标签的包未加载、或该世界未启用 → 不匹配（与 `available_actions`/`_is_blocking` 同源，避免"query 说是商贩、菜单说没动作"）；无声明者的标签（实例自带纯数据 / 声明包已真卸载）照常匹配。**包含与排除共用一份"活标签集"**，语义天然对称。严格校验（拼错 = 报错，不静默返回空）。标签归属记忆 `_tag_owner` 停用不清、真卸载才清（purge）。性能：内存线性扫描（几千实体微秒级），上万再上倒排索引（GAPS G38 残留） |
+| D27 | 事件顺序声明化 | **同事件执行顺序 = `(phase, order, 注册序)`**：`phase ∈ {input, simulate(缺省), present}`（未知名报错），`order` 为同阶段整数序号；覆盖全部事件（含 `on_tick`）；注册时排序，热路径不排序。**动机**：跨包顺序原本等于包加载顺序这个隐式事实，包一多就成了不能碰的意外契约 |
+| D28 | 变更检测 | **落库那一刻盖章**：实体 `revision`（全局单调写序号，`save_entities` 是唯一盖章点，写入路径不可能漏盖）+ `changed_tick`（tick 窗口，`_tick_once` 每轮 +1，无订阅者也算）。全局号与业务写**同事务**落 `world_meta`，启动在**任何写之前**续号 → 重启不回退（漏报唯一不可接受）。两个游标：`changed_since_revision`（精确）/ `changed_since_tick`（窗口粒度，宁可多报）。出口：`/state` 顶部 + 实体字段 + SSE payload。**不做**字段级脏标记/事件溯源（需要时再说） |
+| D29 | 删字段原语 | **新增 `remove_data`（进分派表：可被过滤/覆盖/禁用）与 `remove_state`**——D23"不静默丢字段"的另一半：能**明确地删**，而不是只能"整体覆盖 attrs"顺手连坐别人的字段。字段不存在 = 幂等返回 False（不落盘、不发事件、不推进变更号）；删除发 `on_entity_changed {attrs_removed:[name]}` |
+| D30 | 与 ECS 的关系 | **不改成 ECS**：数据模型这一半已在门口（实体 + 可组合的能力单元 + 数据容器），执行模型是另一条路（事件/插件 + 中间件分派 + 单锁串行）。补 **A–D 四项**（D26 查询 / D27 调度 / D29 删字段 / D28 变更检测）让玩法包能用 ECS 式写法；**明确不采纳 E**：组件独立存储 / archetype / SoA / 并行系统执行（规模不需要、与"每字段改动都要落盘 + 批量写红线"直接冲突）。**不采纳的硬理由**：ECS 会把 query 语义、组件 schema 归属、系统顺序这三样**策略**塞回内核（撞 §2.3 红线），且 ECS 无对应物承载 D21 世界激活过滤这一治理层。详见 §11 |
 
 > **G 系列缺口实现**（详见 GAPS.md）：G1 地图可见性（private 在场可见）、G2 delete_map、
 > G11 工具数组参数、G12 感知隐身过滤、G14 通用原语过滤器链——已全部落地。
@@ -679,3 +728,46 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 - 内核代码已迁移（M0 完成，见 §7.2）；行为层按 v5 设计整体以玩法包重写
 - 所有玩法包（内置+社区）面向同一套内核 API 与协议，与宿主形态无关
 - AstrBot（或任意 agent 框架）经 MCP streamable HTTP 接入，无插件耦合
+
+## 11. 与 ECS 的关系（D30）
+
+**一句话**：worlditor **不是 ECS**，是"实体-字段存储 + 标签能力组合（trait 式）+
+事件/插件式行为 + 原语中间件分派"。数据模型那一半已在 ECS 门口，执行模型那一半
+是另一条路；差的不是实现深度，补上 D26–D29 之后玩法包就能用 ECS 式写法写逻辑。
+
+**逐项对号**：
+
+| ECS 要素 | 现状 | 说明 |
+|---|---|---|
+| Entity | ✅ 有 | `Entity`（uuid4 hex），`store.entities` 内存表 + SQLite 一行一实体 |
+| Component（声明） | ✅ 有 | `TagSpec` / 三层次字段 schema（§3.1）：组件"长什么样"是声明出来的 |
+| Component（数据单元） | ❌ 无 | 数据在 `attrs` / `state` 两个容器里，不是 `(实体, 组件类型) → 数据`；"加/删组件"= 写/删字段（D29） |
+| Component（查询键） | ⚠️ 用标签代替 | 能力 = 各标签声明的并集（D19），**每次现算 + 规格缓存**；不是位掩码，也不做 archetype 迁移 |
+| Query | ✅ 有（D26） | `query_entities`：标签 AND / 排除 / 世界 / 坐标 / 感知 / 变更游标 |
+| System | ⚠️ 分四条通道 | 交互 handler / 世界事件 / 原语覆盖与过滤器 / on_tick——**全部被动触发**，没有"遍历一套 query"的显式系统对象 |
+| Scheduler | ✅ 有（D27） | 事件按 `(phase, order, 注册序)`；`on_tick` 各订阅者自带 interval，单循环串行 |
+| Resources | ✅ 有 | `play_data` KV（namespace = 世界 + 玩法包，双层隔离） |
+| 变更检测 | ✅ 有（D28） | 实体 `revision` / `changed_tick` + 两个增量游标 |
+| 延迟命令缓冲 | ❌ 无（不需要） | 全部行为在同一把 `AsyncRLock` 里跑：多段"读-判-写"天然原子（§2.4） |
+| 并行系统执行 / SoA | ❌ 不采纳 | 见下 |
+
+**明确不采纳（E 项）及理由**：
+
+1. **组件独立存储 / archetype / SoA**：世界服务规模是几百到几千实体、每 tick 几毫秒；
+   ECS 的性能红利≈0，而拆成组件行会把"改一个 hp"变成"拆行合行 + 多表事务"，
+   直接撞 §2.4 的**批量写红线**（WAL 下 N 行 = N 次 fsync = 世界冻结）。
+2. **并行系统执行**：行为有意跑在同一把锁里（读-判-写原子），换来的正确性远比吞吐值钱；
+   而且每个字段改动都必须落盘（D23 + 崩溃恢复），并行写没有意义。
+3. **字段级脏标记 / 事件溯源**：D28 只做到"实体级戳"。字段级要做就得给每个字段挂号，
+   与"实例可写任意未声明字段"（D9）的开放模型相冲突；真需要时再按包约定加。
+
+**为什么不整体转 ECS（比"成本"更硬的理由）**：
+
+- ECS 会把 **query 语义 / 组件 schema 归属 / 系统执行顺序** 这三样**策略**塞回内核，
+  正是 §2.3 红线要挡的（行为下沉玩法包）。
+- worlditor 有一个 **ECS 里没有对应物**的东西：**D21 世界激活过滤**——标签所属玩法包
+  在实体所在世界未启用 → 这条标签不贡献能力（`_active_specs` / `query_entities` /
+  `available_actions` / `_is_blocking` 同源）。ECS 的组件是全局的，没有"某组件类型在
+  这个世界失效"这个概念；它在这里是**治理层**，也是产品差异点。
+- ECS 框架普遍假设"世界是进程内产物、可重启重建"；worlditor 的前提是**世界必须持久化
+  且可被管理端治理**（编辑器 / 模板 / 级联清理 / 身份保护）。

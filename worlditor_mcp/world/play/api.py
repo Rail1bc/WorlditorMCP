@@ -168,11 +168,29 @@ class WorlditorPlayAPI:
         )
 
     def register_world_event(
-        self, event: str, handler, *, interval: float = 0.0
+        self,
+        event: str,
+        handler,
+        *,
+        interval: float = 0.0,
+        phase: str = "simulate",
+        order: int = 0,
     ) -> None:
-        """订阅世界事件；on_tick 需给 interval（各自间隔秒数，A3）。"""
+        """订阅世界事件；on_tick 需给 interval（各自间隔秒数，A3）。
+
+        Args:
+            interval: on_tick 专用（正秒数）。
+            phase: 执行阶段（D27）——``input`` → ``simulate`` → ``present``，
+                缺省 ``simulate``；跨包顺序靠它显式声明（不再依赖包加载序）。
+            order: 同阶段内序号（越小越先，可负）；同 phase/order 按注册序兜底。
+        """
         self._engine.register_world_event(
-            event, handler, interval=interval, play_id=self.play_id
+            event,
+            handler,
+            interval=interval,
+            phase=phase,
+            order=order,
+            play_id=self.play_id,
         )
 
     def register_ui_component(self, name: str, web_entry: str) -> None:
@@ -205,6 +223,58 @@ class WorlditorPlayAPI:
         self, map_id=None, row=None, col=None, viewer_id: str | None = None
     ) -> list:
         return self._engine.list_entities(map_id, row, col, viewer_id=viewer_id)
+
+    def query_entities(
+        self,
+        *,
+        tags: list[str] | tuple[str, ...] | None = None,
+        exclude_tags: list[str] | tuple[str, ...] | None = None,
+        map_id: str | None = None,
+        world_id: str | None = None,
+        row: int | None = None,
+        col: int | None = None,
+        viewer_id: str | None = None,
+        changed_since_tick: int | None = None,
+        changed_since_revision: int | None = None,
+        where=None,
+        limit: int | None = None,
+    ) -> list:
+        """实体查询（D26）：「所有带某标签的实体」不再需要全量扫 + 自己筛。
+
+        ```python
+        for e in api.query_entities(tags=["poison"], world_id=world_id):
+            await api.set_data(e.id, "hp", api.get_attrs(e.id).get("hp", 0) - 1)
+        ```
+
+        语义要点（详见 ``WorldEngine.query_entities``）：
+        - 标签匹配按 D21 生效：声明该标签的包在实体所在世界未激活 → 不匹配；
+          实例自带的纯数据标签（无声明者）照常匹配。
+        - ``viewer_id`` 走感知过滤（G12 隐身），与 list_entities 同源。
+        - 增量遍历（D28）：``changed_since_revision``（精确游标，配
+          ``api.world_revision()``）或 ``changed_since_tick``（窗口粒度，宁可多报）。
+        - 严格校验：拼错的地图/世界、非法标签会报错，而不是"查到空"。
+        """
+        return self._engine.query_entities(
+            tags=tags,
+            exclude_tags=exclude_tags,
+            map_id=map_id,
+            world_id=world_id,
+            row=row,
+            col=col,
+            viewer_id=viewer_id,
+            changed_since_tick=changed_since_tick,
+            changed_since_revision=changed_since_revision,
+            where=where,
+            limit=limit,
+        )
+
+    def current_tick(self) -> int:
+        """当前 tick 窗口号（D28：心跳轮次；配合 changed_since_tick 做增量遍历）。"""
+        return self._engine.tick
+
+    def world_revision(self) -> int:
+        """当前全局变更号（D28：增量游标——记住它，下轮用 changed_since_revision）。"""
+        return self._engine.revision
 
     def get_location(self, map_id: str, row: int, col: int):
         return self._engine.get_location(map_id, row, col)
@@ -284,6 +354,18 @@ class WorlditorPlayAPI:
     async def get_data(self, entity_id: str, name: str | None = None) -> Any:
         """字段读（单字段或全量；走原语分派）。"""
         return await self._engine.get_data(entity_id, name)
+
+    async def remove_data(self, entity_id: str, name: str) -> bool:
+        """删除一个玩法字段（走原语分派，可被 override/过滤器拦；D23 的另一半）。
+
+        返回是否真的删掉了（字段不存在 → False，幂等）。删掉整个字段比
+        ``set_data(name, None)`` 干净：``None`` 仍是"有这个字段、值为空"。
+        """
+        return await self._engine.remove_data(entity_id, name)
+
+    async def remove_state(self, entity_id: str, name: str) -> bool:
+        """删除一个 state 字段（不经分派，与 ``set_state`` 对称）。"""
+        return await self._engine.remove_state(entity_id, name)
 
     # ---------- 原语覆盖（D11 / A3） ----------
 

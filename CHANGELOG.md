@@ -1,5 +1,70 @@
 # Changelog
 
+## v0.6.0（2026-09-24）
+
+**按 ECS 对照清单补齐 A–D 四项**：一次架构自问"我们现在算 ECS 吗"引出逐项盘点
+（实体 ✅ / 组件只有声明 ✅ / **查询 ❌** / **调度 ⚠ 隐式** / **删字段 ❌** /
+**变更检测 ❌**）。裁定：**除 E（组件独立存储 / archetype / SoA / 并行系统）外全补**——
+补这四项让玩法包能用 ECS 式写法写逻辑，同时不动存储形态、不丢 D21 世界治理。
+设计结论与新边界写进 DESIGN §11（新增决策 D26–D30）。
+
+### 新增：实体查询原语（D26 / GAPS G38）
+- **`engine.query_entities` / `api.query_entities`**：按 `tags`（AND）、`exclude_tags`、
+  `map_id` / `world_id` / `row` / `col`、`viewer_id` 感知、变更游标、`where` 谓词筛选，
+  稳定排序 `(map_id,row,col,id)` + `limit`。此前玩法包要"所有带中毒标签的实体"只能
+  `list_entities()` 全量拿 + 自己筛（movement 看一次视野打 9 次位置查询）。
+- **标签匹配按 D21 激活语义**（避免"query 说是商贩、菜单说没动作"）：标签由某包声明、
+  而该包**未加载**或在该实体所在**世界未启用** → 不匹配；无声明者的实例标签
+  （`set_tags(["my_marker"])`）照常匹配。为此新增**标签归属记忆** `_tag_owner`
+  （停用不清、真卸载 `purge` 才清——否则停用包声明的标签会"诈尸"成纯数据标签）。
+- 包含与排除共用同一份"活标签集"，语义天然对称；**严格校验**（拼错的地图/世界、
+  空标签报错，不静默返回空）。
+- 老接口 `list_entities` 行为不变（宽松位置筛选、不校验地图存在），与 query 共用
+  **G12 感知判定**（`_filter_perception` 单一判定点）。
+
+### 新增：事件执行顺序（D27）
+- **`register_world_event(..., phase=, order=)`**：同事件执行顺序 = `(phase, order, 注册序)`，
+  `phase ∈ input → simulate（缺省） → present`，未知名报错；覆盖**全部事件**（含 `on_tick`）。
+  注册时排序，emit/心跳热路径不排序；不给参数 = 注册序（老行为不变）。
+  动机：跨包顺序原本等于"包加载顺序"这个隐式事实，包一多就成了不能碰的意外契约。
+
+### 新增：删字段原语（D29）
+- **`remove_data`（进分派表：可被过滤/覆盖/禁用）与 `remove_state`**——D23"不静默丢字段"
+  的另一半：能**明确地删**，而不是只能"整体覆盖 attrs"顺手连坐别人的字段。
+  字段不存在 = 幂等 `False`（不落盘、不发事件、不推进变更号）；删除发
+  `on_entity_changed {attrs_removed:[name]}` / `{state_removed:[name]}`。
+
+### 新增：变更检测（D28）
+- 实体新增 `revision`（全局单调写序号，**落库那一刻盖章**——`save_entities` 是唯一盖章点，
+  写入路径不可能漏盖）与 `changed_tick`（tick 窗口；`_tick_once` 每轮 +1，**哪怕没有任何
+  on_tick 订阅者**）。库结构 v7（`entities.revision` / `changed_tick`，老库自动补列）。
+- 全局号与业务写**同一事务**落 `world_meta`，启动在**任何写之前**续号 → 重启不回退
+  （漏报是这类机制里唯一不可接受的错）。
+- 两个增量游标：`changed_since_revision`（精确，既不多报也不漏报）/
+  `changed_since_tick`（窗口粒度，宁可多报绝不漏报）。
+- 出口：`/state` 顶部带 `revision`/`tick`，实体序列化自带两字段，SSE payload 也带。
+
+### 设计记录
+- **DESIGN**：新增 §2.5（事件顺序与变更检测）、**§11「与 ECS 的关系」**（逐项对号 +
+  E 项不采纳理由 + "为什么不该整体转 ECS"），§9 标题 → D1–D30 并补 D26–D30 五行；
+  §1/§2.1/§2.2/§2.3/§2.4/§3.1/§4.1/§4.2 同步（原语表 + `remove_data` + `query_entities`、
+  实体字段 + 两枚戳、注册面 + `query_entities`/`current_tick`/`world_revision`）。
+- **GAPS**：新增 G38（A–D 已落地 + 五条残留：线性扫描待倒排索引、只到实体级变更、
+  `where` 不可用于工具、地图级可见性不进查询、事件顺序管理端不可见）；
+  G35 那条"5 个可覆盖原语"的过滤器链表述随 D29 更新为 6 个。
+- **PLAY_DEV**：§5 拆成 §5.1 原语与过滤器 / **§5.2 实体查询** / **§5.3 事件顺序** /
+  **§5.4 变更检测与增量遍历**（各带可抄的代码块与"标签活性"语义说明）。
+
+### 测试
+- 新增 28 条：`test_entity_query.py`（8：标签 AND/exclude、世界激活、停用/真卸载、
+  范围与排序、感知过滤、where/limit、严格校验、play API 出口）、
+  `test_event_phases.py`（6：阶段优先、order、注册序兜底、on_tick、校验、API 出口）、
+  `test_change_detection.py`（8：盖章、批量同号、无写不跳号、tick 无订阅者也走、
+  两游标、重启续号、SSE payload、实体序列化）、
+  `test_primitive_remove_data.py`（6：默认实现、重启保留、幂等 no-op、state 对称、
+  分派三态、override/disable）；`test_world_service.py` 的 `/state` 断言补
+  `revision`/`tick`/实体 `revision`。**316 → 344 条全绿**。
+
 ## v0.5.2（2026-09-24）
 
 **文档规整 + 六处静默缺陷修复**：v0.5.1 发布后对项目与文档做了一次全面审查

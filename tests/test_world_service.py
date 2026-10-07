@@ -135,6 +135,10 @@ def test_snapshot_and_auth(tmp_path):
         data = resp.json()
         assert len(data["locations"]) == 41
         assert any(e["kind"] == "merchant" for e in data["entities"])
+        # D28：快照带全局变更号/tick，实体各自带 revision（客户端增量游标）
+        assert data["revision"] == engine.revision > 0
+        assert data["tick"] == engine.tick
+        assert all(e["revision"] > 0 for e in data["entities"])
         # scene（商贩视角；无玩家在场 → peers 为空）
         merchant = [e for e in data["entities"] if e["kind"] == "merchant"][0]
         resp = await client.get(

@@ -480,7 +480,8 @@ class PlayLoader:
         Args:
             info: 待卸载的包。
             purge: 真卸载（删包目录）传 True——连**用户数据形态**的物品定义
-                （管理页维护的）一并删除；停用/整体卸载传 False，保留用户数据
+                （管理页维护的）与**标签归属记忆**（D26：query 的激活判定用）
+                一并删除；停用/整体卸载传 False，保留用户数据与归属记忆
                 （v0.5.2：原先不分青红皂白全删，停用 items 包会永久丢掉管理员
                 建的物品定义）。
         """
@@ -497,7 +498,9 @@ class PlayLoader:
         # 先落库删除本包注册的物品定义（v0.2.0：避免"幽灵物品"残留）
         for item_id in self.engine.item_defs_of_play(info.play_id, include_user=purge):
             await self.engine.store.delete_item(item_id)
-        self.engine.clear_play_registrations(info.play_id, keep_user_items=not purge)
+        self.engine.clear_play_registrations(
+            info.play_id, keep_user_items=not purge, purge=purge
+        )
         self.engine.detach_play_api(info.play_id)
 
     # ---------- 整体卸载 ----------

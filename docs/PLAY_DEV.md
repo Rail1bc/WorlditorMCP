@@ -130,7 +130,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `list_kinds(category=None)` | 类型 + 标签清单（字段 schema / 来源包 / 是否隐式 / 预设标签），分类过滤 |
 | `capabilities(entity)` | 某实体合并后的能力：`tags / active_tags / inactive_tags / unknown_tags / block_move / interactions / fields` |
 | `register_interaction(action, handler, label)` | 全局交互动作；`async (api, req) -> InteractionResult` |
-| `register_world_event(event, handler, interval=0)` | 事件订阅；on_tick 必须给 interval（秒） |
+| `register_world_event(event, handler, interval=0, phase="simulate", order=0)` | 事件订阅；on_tick 必须给 interval（秒）；**phase/order 声明跨包执行顺序**（D27，见 §5.3） |
 | `register_ui_component(name, web_entry)` / `register_ui_hook(block_kind, position, provider)` | 自定义界面组件 / UiBlock 注入（before/after/replace） |
 | `apply_ui_hooks(block)` | 对一棵 UiBlock 树应用全部已注册钩子（服务端展开，锁内）；玩家壳生成角色卡后调它，部件包的面板即被追加（§11） |
 | `register_tool(name, handler, description, params)` | MCP 工具（见 §7） |
@@ -143,7 +143,9 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 | API | 说明 |
 |---|---|
-| `get_entity(id)` / `list_entities(map_id, row, col, viewer_id)` | 实体；**viewer_id 感知过滤（G12）**：隐藏 `attrs.invisible` 实体，viewer 自身 `see_invisible` 真视 |
+| `get_entity(id)` / `list_entities(map_id, row, col, viewer_id)` | 实体（位置筛选，宽松：地图不存在 = 空列表）；**viewer_id 感知过滤（G12）**：隐藏 `attrs.invisible` 实体，viewer 自身 `see_invisible` 真视 |
+| `query_entities(tags, exclude_tags, map_id, world_id, row, col, viewer_id, changed_since_tick, changed_since_revision, where, limit)` | **实体查询（D26，见 §5.2）**：按标签查一批实体，不再需要"全量拿 + 自己筛" |
+| `current_tick()` / `world_revision()` | 变更游标（D28）：tick 窗口号 / 全局变更号（见 §5.4） |
 | `get_location(map_id, row, col)` / `get_map(map_id)` | 地块 / 地图（Location 含 connections） |
 | `get_item_def(item_id)` / `list_item_defs()` | 物品定义（内核注册表只读：单个 / 全部 dict 列表） |
 | `list_actions(target_id)` | 目标可用动作按钮（UI 菜单） |
@@ -162,6 +164,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `move_entity(entity_id, map_id, row, col)` | 直接位移（行为驱动，不做阻挡检查） |
 | `set_attrs(entity_id, patch)` / `get_attrs(entity_id)` | 实体 attrs（玩法数据）合并读写（不经原语分派） |
 | `set_data(entity_id, name, value)` / `get_data(entity_id, name)` | 字段原语（**可被覆盖/禁用**，D11）；读写容器 = attrs，与 `set_attrs` 同容器 |
+| `remove_data(entity_id, name)` / `remove_state(entity_id, name)` | **删字段**（D29）：`remove_data` 走分派（可被过滤/覆盖/禁用），`remove_state` 不经分派；字段不存在 = 幂等 `False`（不落盘、不发事件） |
 | `interact(entity_id, target_id, action, args, item_id)` | 交互（**可被覆盖/禁用**） |
 | `emit(event, data, log=False)` | 自定义事件（SSE 推送；`log=True` 写 world_log） |
 | `place_entity(kind, map_id, row, col, ..., tags=[...])` / `remove_entity(id)` | 实体生命周期（D14；身份化实体不可 remove）。`tags` = 实例级标签（D18），如 `place_entity("slime", ..., tags=["spawner"])` |
@@ -208,9 +211,11 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 - 玩家可永久注销（`POST /auth/delete-account`，级联吊销凭据 + 删除玩家实体）；管理员可删除账户/变更角色（`PATCH /admin/accounts/{id}`，变更即吊销旧凭据强制重登）
 - **对玩法包的影响**：注销 = 身份化实体被**受控删除**（非玩法包 remove_entity 通道），会触发 `on_entity_removed` / `on_world_edited`——需要按实体清理自身数据的包订阅该事件（如 items 包背包、social 包冷却）
 
-## 5. 原语覆盖与过滤器链（D11 / G14）
+## 5. 原语、查询、顺序与变更（D11 / G14 / D26–D28）
 
-5 个可覆盖原语：`move` / `move_entity` / `set_data` / `get_data` / `interact`。
+### 5.1 原语覆盖与过滤器链（D11 / G14）
+
+6 个可覆盖原语：`move` / `move_entity` / `set_data` / `get_data` / `remove_data` / `interact`。
 
 **override**（整体替换）：`override_primitive(name, handler)`——handler
 `async (api, *args, **kwargs)` 锁内回调；可调 `api.call_default_primitive`
@@ -232,6 +237,79 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 > 经典用法：movement 包的"方向别名归一"过滤器（上/北/north → up）、
 > 束缚/锁血/遮蔽类效果包。
+
+### 5.2 实体查询（D26）
+
+"所有带某标签的实体"不要写成"全量 `list_entities` + 自己筛"：
+
+```python
+# 所有中毒的生物（每 tick 扣血那种）
+for e in api.query_entities(tags=["poisoned", "monster"], world_id=world_id):
+    await api.set_data(e.id, "hp", api.get_attrs(e.id).get("hp", 0) - 1)
+
+# 排除 + 限制条数（结果按 (map_id,row,col,id) 稳定排序，便于 diff）
+targets = api.query_entities(tags=["monster"], exclude_tags=["dead"], limit=10)
+
+# 感知过滤：我只该看到我看得见的（隐身 G12）
+seen = api.query_entities(map_id=me.map_id, viewer_id=me.id)
+```
+
+**标签匹配语义（重要）**：标签的有效集 = 基底 `kind` + 类型预设 + 实例 `tags`（D18），
+但要**"活着"**才算数——**声明该标签的包没加载，或该包在实体所在世界没启用 → 不匹配**
+（D21：这个世界没有这个能力）。所以"停用中毒包"之后 `tags=["poisoned"]` 查不到东西，
+和 `available_actions` 说"它没动作"是一致的。两面例外：
+
+- **实例自带的纯数据标签**（`set_tags(["my_marker"])`，没有任何包声明过它）照常匹配
+  ——"标签即数据"的用法不受影响。
+- 要完全跳过这套语义，用 `where=lambda e: "x" in e.tags`（只认字面标签）。
+
+**严格校验**：拼错的地图 / 世界、非法标签（空串、非字符串）**直接报错**，不会"悄悄
+查到空"——查询条件是人现写的意图，静默返回空会让人以为"世界里没有"。
+性能：内存线性扫描（几千实体微秒级）；上万实体再考虑加倒排索引（GAPS G38）。
+
+### 5.3 事件执行顺序（D27）
+
+同一事件的多个订阅者按 **`(phase, order, 注册序)`** 执行：
+
+| 参数 | 取值 | 说明 |
+|---|---|---|
+| `phase` | `input` → `simulate`（缺省） → `present` | 跨包的大阶段；未知名**报错**（不静默造阶段） |
+| `order` | 整数（可负） | 同阶段内的细分序号，小的先跑 |
+| — | 注册序 | 同 phase/order 时兜底（= 老行为：不给参数就还是注册序） |
+
+```python
+api.register_world_event("on_tick", _decay, interval=1.0, phase="input", order=-10)
+api.register_world_event("on_tick", _ai,    interval=1.0)                    # simulate
+api.register_world_event("on_tick", _broadcast, interval=2.0, phase="present")
+```
+
+覆盖**全部事件**（含 `on_tick`）。跨包顺序从此是**声明出来的**，而不是"谁先加载谁先跑"
+这个隐式事实——包一多，那个顺序就会变成不能碰的意外契约。
+
+### 5.4 变更检测与增量遍历（D28）
+
+内核在**落库那一刻**给实体盖两枚戳（写入路径不可能漏盖）：
+
+| 字段 | 含义 |
+|---|---|
+| `entity.revision` | 全局单调写序号（每次落盘写 +1；重启从库里续号，不回退） |
+| `entity.changed_tick` | 最近一次变更所在的 **tick 窗口**（心跳每轮 +1，哪怕没人订阅 on_tick） |
+
+增量遍历（"只处理上一轮之后动过的实体"）：
+
+```python
+cursor = api.world_revision()          # 或持久化在 kv 里
+for e in api.query_entities(tags=["poisoned"], changed_since_revision=cursor):
+    ...
+await api.kv_set("cursor", api.world_revision())
+```
+
+- `changed_since_revision`：**精确游标**（每次写 +1，既不多报也不漏报）——客户端
+  增量刷新 / 大世界按需 tick 用这个。
+- `changed_since_tick`：**窗口粒度**（同一窗口内重复报）——`>=` 语义，宁可多报绝不漏报。
+- 出口：`/state` 顶部带 `revision`/`tick`，实体自带两字段，SSE 事件 payload 也带。
+- **不做**字段级脏标记（"哪些字段变了"）——与"实例可写任意未声明字段"的开放模型冲突，
+  真需要时按包约定自己存影子副本。
 
 ## 6. 跨包服务（M3：玩法包间同步调用）
 

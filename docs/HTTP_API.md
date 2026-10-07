@@ -28,7 +28,7 @@
 | 方法 | 路径 | 档位 | 说明 |
 |---|---|---|---|
 | POST/GET/DELETE | `/world/mcp` | play / admin | MCP streamable HTTP（工具调用入口；`read` 档在工具入口被拒） |
-| GET | `/state` | read / play / admin | 全量快照：`{maps, locations, entities}`，按 G1 可见性过滤 private 地图 |
+| GET | `/state` | read / play / admin | 全量快照：`{revision, tick, maps, locations, entities}`，按 G1 可见性过滤 private 地图；`revision`/`tick` = 变更游标（D28，实体各自也带） |
 | GET | `/scene?entity_id=` | read / play / admin | 单实体场景 `{entity, scene, peers}`（含动作菜单；`entity_id` 缺省 = 调用者自己） |
 | GET | `/events` | play / admin | SSE 事件流（`?token=` 支持） |
 | GET | `/views` | 免认证 | 视图清单 `{views: [{key,title,icon,play_id}]}`；**带凭据时按调用者所在世界过滤**（D15） |
@@ -156,3 +156,10 @@ curl -s -X POST http://127.0.0.1:6288/world/mcp \
 - `?token=` 会进日志（SSE 的硬需求），公网部署请让反代过滤该 query。
 - `/state` 是**全量快照**（按 G1 地图可见性过滤），不做隐身实体过滤；
   隐身过滤目前只作用于感知工具与 `/scene`（见 `GAPS.md` G12 尾巴）。
+- **增量刷新（D28）**：`/state` 顶部与每个实体都带 `revision`（全局单调写序号）
+  与 `changed_tick`（tick 窗口）；SSE 事件 payload 也带全局 `revision`/`tick`。
+  客户端缓存失效判定：`revision` 没变 = 世界没写盘；单实体用 `entity.revision`
+  比对（相等 = 这条没被改过）。玩法包侧精确增量用
+  `api.query_entities(changed_since_revision=cursor)`。
+- **实体查询（D26）不走 HTTP**：`query_entities` 是玩法包/内核 API（`api.query_entities`），
+  面向 agent 的查询能力由玩法包自己注册 MCP 工具暴露。

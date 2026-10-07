@@ -38,8 +38,9 @@ from .model import (
 
 # 表结构版本（沿用 v4 引擎表布局；D13 无迁移逻辑，仅写入 world_meta 记录。
 # v5 = world_maps.sort：组织树内地图与文件夹共用一个排序空间
-# v6 = entities.tags_json（D18 实体标签）+ templates.scope（D22 模板统一））
-SCHEMA_VERSION = "6"
+# v6 = entities.tags_json（D18 实体标签）+ templates.scope（D22 模板统一）
+# v7 = entities.revision / changed_tick（D28 变更检测）+ world_meta['revision']）
+SCHEMA_VERSION = "7"
 DEFAULT_MAP_ID = "default"
 
 # 世界日志保留上限（超出后裁掉最旧记录；防高频事件刷爆库）
@@ -47,6 +48,14 @@ WORLD_LOG_LIMIT = 5000
 
 # 内核不内置任何世界内容（v0.2.0）：地图/地块/实体由玩法包导入
 # （参考世界包 worlditor_play_demo_world）或用户经管理端地图编辑器创建。
+
+
+def _int_or_zero(value: object) -> int:
+    """world_meta 里的数字串 → int（坏值按 0）。"""
+    try:
+        return max(0, int(str(value)))
+    except (TypeError, ValueError):
+        return 0
 
 
 # ---------- 表 SQL ----------
@@ -65,7 +74,9 @@ CREATE TABLE IF NOT EXISTS entities (
     attrs_json TEXT NOT NULL DEFAULT '{}',
     state_json TEXT NOT NULL DEFAULT '{}',
     last_active_ts REAL NOT NULL DEFAULT 0,
-    tags_json TEXT NOT NULL DEFAULT '[]'
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    revision INTEGER NOT NULL DEFAULT 0,
+    changed_tick INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_entities_pos ON entities(map_id, row, col);
 CREATE TABLE IF NOT EXISTS items (
@@ -194,6 +205,9 @@ class WorldStore:
         self.map_folder: dict[str, str | None] = {}  # map_id -> folder_id | None
         self.map_sort: dict[str, int] = {}  # map_id -> 组织树内的序号
         self.world_meta: dict[str, str] = {}  # world_meta 表内存态
+        # D28 变更检测：全局单调变更号 + 当前 tick 窗口（_load_all 从库中续号）
+        self.revision = 0
+        self.tick = 0
 
     # ---------- 生命周期 ----------
 
@@ -205,6 +219,9 @@ class WorldStore:
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.executescript(_MAP_TABLES_SQL)
         await self._conn.executescript(_ENTITY_TABLES_SQL)
+        # D28：**在任何启动写之前**续号——迁移/播种的提交也会推进变更号，
+        # 先读旧号才能保证"结构变更多于实体变更"的库重启后号不回退
+        await self._resume_revision()
         await self._ensure_columns()
         await self._seed_if_empty()
         await self._load_all()
@@ -213,6 +230,40 @@ class WorldStore:
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
+
+    # ---------- 变更检测（D28） ----------
+
+    def next_revision(self) -> int:
+        """推进并返回全局变更号（不落盘；``_commit`` 在同一事务里写 world_meta）。"""
+        self.revision += 1
+        return self.revision
+
+    async def _resume_revision(self) -> None:
+        """启动时从 world_meta 续变更号（在任何写之前调用；表不存在则按 0）。"""
+        assert self._conn is not None
+        try:
+            cur = await self._conn.execute(
+                "SELECT value FROM world_meta WHERE key = 'revision'"
+            )
+            row = await cur.fetchone()
+        except Exception:  # noqa: BLE001 —— 老库/表缺失：从 0 起算
+            row = None
+        self.revision = _int_or_zero(row["value"]) if row is not None else 0
+
+    async def _commit(self) -> None:
+        """提交当前写事务，并把变更号一起落盘（D28）。
+
+        变更号在**同一事务**里 UPSERT 到 world_meta，所以重启后单调不回退——
+        客户端拿着旧 revision 也不会因为"重启后计数归零"而误判"世界没变"
+        （漏报是这类机制里唯一不可接受的错）。
+        """
+        assert self._conn is not None
+        self.revision += 1
+        await self._conn.execute(
+            "INSERT OR REPLACE INTO world_meta(key, value) VALUES('revision', ?)",
+            (str(self.revision),),
+        )
+        await self._conn.commit()
 
     async def _ensure_columns(self) -> None:
         """补齐后加列（幂等）。
@@ -225,7 +276,12 @@ class WorldStore:
         wanted = {
             # 表 → {列名: 列定义}
             "world_maps": {"sort": "INTEGER NOT NULL DEFAULT 0"},
-            "entities": {"tags_json": "TEXT NOT NULL DEFAULT '[]'"},
+            "entities": {
+                "tags_json": "TEXT NOT NULL DEFAULT '[]'",
+                # D28 变更检测（v0.6.0）：老库补列，已有实体按 0 起算
+                "revision": "INTEGER NOT NULL DEFAULT 0",
+                "changed_tick": "INTEGER NOT NULL DEFAULT 0",
+            },
         }
         for table, columns in wanted.items():
             cur = await self._conn.execute(f"PRAGMA table_info({table})")
@@ -241,7 +297,7 @@ class WorldStore:
             await self._conn.execute(
                 "ALTER TABLE templates ADD COLUMN scope TEXT NOT NULL DEFAULT 'location'"
             )
-        await self._conn.commit()
+        await self._commit()
 
     async def _seed_if_empty(self) -> None:
         """空库只建「默认世界」这一结构性容器（幂等）。
@@ -260,7 +316,7 @@ class WorldStore:
             "INSERT OR REPLACE INTO world_meta(key, value) VALUES('schema_version', ?)",
             (SCHEMA_VERSION,),
         )
-        await self._conn.commit()
+        await self._commit()
 
     # ---------- 全量载入 ----------
 
@@ -381,6 +437,14 @@ class WorldStore:
                 "used": bool(row["used"]),
                 "created_ts": row["created_ts"],
             }
+        # D28：变更号/tick 窗口**从库中续号**（world_meta 记全局号，实体记窗口），
+        # 取三者较大值——含启动时已续的号（self.revision），绝不回退
+        self.revision = max(
+            self.revision,
+            _int_or_zero(self.world_meta.get("revision")),
+            max((e.revision for e in self.entities.values()), default=0),
+        )
+        self.tick = max((e.changed_tick for e in self.entities.values()), default=0)
 
     # ---------- 目标解析（死引用判定，同 v3） ----------
 
@@ -412,7 +476,7 @@ class WorldStore:
                 m.visible,
             ),
         )
-        await self._conn.commit()
+        await self._commit()
         self.maps[m.id] = m
 
     async def save_location(self, loc: Location) -> None:
@@ -445,7 +509,7 @@ class WorldStore:
             "VALUES(?, ?, ?, ?, ?, ?)",
             [self._location_row(loc) for loc in locs],
         )
-        await self._conn.commit()
+        await self._commit()
         for loc in locs:
             self.loc_by_pos[(loc.map_id, loc.row, loc.col)] = loc
 
@@ -456,7 +520,7 @@ class WorldStore:
             "DELETE FROM locations WHERE map_id = ? AND row = ? AND col = ?",
             (map_id, row, col),
         )
-        await self._conn.commit()
+        await self._commit()
         self.loc_by_pos.pop((map_id, row, col), None)
 
     async def delete_map(self, map_id: str) -> None:
@@ -469,7 +533,7 @@ class WorldStore:
         await self._conn.execute("DELETE FROM locations WHERE map_id = ?", (map_id,))
         await self._conn.execute("DELETE FROM maps WHERE id = ?", (map_id,))
         await self._conn.execute("DELETE FROM world_maps WHERE map_id = ?", (map_id,))
-        await self._conn.commit()
+        await self._commit()
         self.maps.pop(map_id, None)
         self.loc_by_pos = {k: v for k, v in self.loc_by_pos.items() if k[0] != map_id}
         self.map_world.pop(map_id, None)
@@ -489,14 +553,14 @@ class WorldStore:
                 template.scope,
             ),
         )
-        await self._conn.commit()
+        await self._commit()
         self.templates[template.id] = template
 
     async def delete_template(self, template_id: str) -> None:
         """删除模板。"""
         assert self._conn is not None
         await self._conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
-        await self._conn.commit()
+        await self._commit()
         self.templates.pop(template_id, None)
 
     # ---------- 实体 ----------
@@ -506,18 +570,27 @@ class WorldStore:
         await self.save_entities([entity])
 
     async def save_entities(self, entities: list[Entity]) -> None:
-        """批量写回实体（单事务；同 ``save_locations`` 的理由）。"""
+        """批量写回实体（单事务；同 ``save_locations`` 的理由）。
+
+        D28 变更检测：**落库这一刻盖章**——本批实体拿到同一个新变更号与当前
+        tick 窗口。所有实体写入都必须走这里（``save_entity`` 亦转发），所以
+        "某条写入路径忘了盖章"这种静默缺陷在结构上不会发生。
+        """
         assert self._conn is not None
         if not entities:
             return
+        revision = self.revision + 1  # _commit 会把它推进到同一个值
+        for entity in entities:
+            entity.revision = revision
+            entity.changed_tick = self.tick
         await self._conn.executemany(
             "INSERT OR REPLACE INTO entities("
             "id, map_id, row, col, kind, name, desc, user_id, attrs_json, state_json, "
-            "last_active_ts, tags_json"
-            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "last_active_ts, tags_json, revision, changed_tick"
+            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [entity_db_row(e) for e in entities],
         )
-        await self._conn.commit()
+        await self._commit()
         for entity in entities:
             self.entities[entity.id] = entity
 
@@ -525,7 +598,7 @@ class WorldStore:
         """删除实体。"""
         assert self._conn is not None
         await self._conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
-        await self._conn.commit()
+        await self._commit()
         self.entities.pop(entity_id, None)
 
     # ---------- 物品 ----------
@@ -544,13 +617,13 @@ class WorldStore:
             ") VALUES(?, ?, ?, ?, ?, ?, ?)",
             item_db_row(item),
         )
-        await self._conn.commit()
+        await self._commit()
 
     async def delete_item(self, item_id: str) -> None:
         """删除物品定义行。"""
         assert self._conn is not None
         await self._conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
-        await self._conn.commit()
+        await self._commit()
         self.items.pop(item_id, None)
 
     # ---------- 玩法数据 KV（namespace 隔离） ----------
@@ -561,7 +634,7 @@ class WorldStore:
             "INSERT OR REPLACE INTO play_data(namespace, key, value_json) VALUES(?, ?, ?)",
             (namespace, key, json.dumps(value, ensure_ascii=False)),
         )
-        await self._conn.commit()
+        await self._commit()
         self.play_data[(namespace, key)] = value
 
     # ---------- 世界日志（B3：上限 5000，写入时清理最旧） ----------
@@ -582,7 +655,7 @@ class WorldStore:
                 "SELECT id FROM world_log ORDER BY id LIMIT ?)",
                 (n - WORLD_LOG_LIMIT,),
             )
-        await self._conn.commit()
+        await self._commit()
 
     async def list_world_log(self, limit: int = 100) -> list[dict]:
         """读取世界日志（最新在前）。"""
@@ -625,7 +698,7 @@ class WorldStore:
                 account.created_ts,
             ),
         )
-        await self._conn.commit()
+        await self._commit()
         self.accounts[account.id] = account
 
     def get_account(self, account_id: str) -> Account | None:
@@ -654,7 +727,7 @@ class WorldStore:
                 created_ts,
             ),
         )
-        await self._conn.commit()
+        await self._commit()
         self.tokens[info.token] = info
 
     def get_token(self, token: str) -> TokenInfo | None:
@@ -670,7 +743,7 @@ class WorldStore:
             "UPDATE tokens SET revoked = ? WHERE token = ?",
             (1 if revoked else 0, token),
         )
-        await self._conn.commit()
+        await self._commit()
         if revoked:
             self.tokens.pop(token, None)
         return True
@@ -681,7 +754,7 @@ class WorldStore:
         await self._conn.execute(
             "UPDATE tokens SET revoked = 1 WHERE account_id = ?", (account_id,)
         )
-        await self._conn.commit()
+        await self._commit()
         self.tokens = {
             t: v for t, v in self.tokens.items() if v.account_id != account_id
         }
@@ -690,7 +763,7 @@ class WorldStore:
         """删除账户行（永久注销；调用方负责吊销凭据与身份化实体）。"""
         assert self._conn is not None
         await self._conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
-        await self._conn.commit()
+        await self._commit()
         self.accounts.pop(account_id, None)
 
     async def save_invite_code(self, code: str, created_ts: float) -> None:
@@ -699,7 +772,7 @@ class WorldStore:
             "INSERT OR REPLACE INTO invite_codes(code, used, created_ts) VALUES(?, 0, ?)",
             (code, created_ts),
         )
-        await self._conn.commit()
+        await self._commit()
         self.invite_codes[code] = {"used": False, "created_ts": created_ts}
 
     def get_invite_code(self, code: str) -> dict | None:
@@ -719,7 +792,7 @@ class WorldStore:
         await self._conn.execute(
             "UPDATE invite_codes SET used = ? WHERE code = ?", (1 if used else 0, code)
         )
-        await self._conn.commit()
+        await self._commit()
         self.invite_codes[code]["used"] = used
         return True
 
@@ -736,7 +809,7 @@ class WorldStore:
             "INSERT OR REPLACE INTO world_meta(key, value) VALUES(?, ?)",
             (key, value),
         )
-        await self._conn.commit()
+        await self._commit()
         self.world_meta[key] = value
 
     # ---------- 世界与组织（D15；调用方在引擎锁内执行） ----------
@@ -758,7 +831,7 @@ class WorldStore:
             "INSERT INTO worlds(id, name, desc, play_ids_json) VALUES(?, ?, ?, ?)",
             (world.id, world.name, world.desc, json.dumps(world.play_ids)),
         )
-        await self._conn.commit()
+        await self._commit()
         self.worlds[world.id] = world
         return world
 
@@ -785,7 +858,7 @@ class WorldStore:
             "UPDATE worlds SET name = ?, desc = ?, play_ids_json = ? WHERE id = ?",
             (world.name, world.desc, json.dumps(world.play_ids), world.id),
         )
-        await self._conn.commit()
+        await self._commit()
         return world
 
     async def delete_world(self, world_id: str) -> None:
@@ -800,7 +873,7 @@ class WorldStore:
         await self._conn.execute(
             "DELETE FROM world_maps WHERE world_id = ?", (world_id,)
         )
-        await self._conn.commit()
+        await self._commit()
         self.worlds.pop(world_id, None)
         self.folders = {k: v for k, v in self.folders.items() if v.world_id != world_id}
         for map_id, wid in list(self.map_world.items()):
@@ -845,7 +918,7 @@ class WorldStore:
             "VALUES(?, ?, ?, ?)",
             (map_id, world_id, folder_id, sort),
         )
-        await self._conn.commit()
+        await self._commit()
         self.map_world[map_id] = world_id
         self.map_folder[map_id] = folder_id
         self.map_sort[map_id] = sort
@@ -854,7 +927,7 @@ class WorldStore:
         """解除地图的世界归属（地图本身保留，变为未归属）。"""
         assert self._conn is not None
         await self._conn.execute("DELETE FROM world_maps WHERE map_id = ?", (map_id,))
-        await self._conn.commit()
+        await self._commit()
         self.map_world.pop(map_id, None)
         self.map_folder.pop(map_id, None)
         self.map_sort.pop(map_id, None)
@@ -878,7 +951,7 @@ class WorldStore:
         await self._conn.execute(
             "UPDATE world_maps SET sort = ? WHERE map_id = ?", (sort, map_id)
         )
-        await self._conn.commit()
+        await self._commit()
         self.map_sort[map_id] = sort
 
     def _next_sort(self, world_id: str, folder_id: str | None) -> int:
@@ -924,7 +997,7 @@ class WorldStore:
             "VALUES(?, ?, ?, ?, ?)",
             (folder.id, folder.world_id, folder.parent_id, folder.name, folder.sort),
         )
-        await self._conn.commit()
+        await self._commit()
         self.folders[folder.id] = folder
         return folder
 
@@ -937,7 +1010,7 @@ class WorldStore:
         await self._conn.execute(
             "UPDATE world_folders SET name = ? WHERE id = ?", (name, folder_id)
         )
-        await self._conn.commit()
+        await self._commit()
 
     async def set_folder_sort(self, folder_id: str, sort: int) -> None:
         """设置文件夹在其父节点内的序号。"""
@@ -948,7 +1021,7 @@ class WorldStore:
         await self._conn.execute(
             "UPDATE world_folders SET sort = ? WHERE id = ?", (sort, folder_id)
         )
-        await self._conn.commit()
+        await self._commit()
 
     async def move_folder(
         self, folder_id: str, parent_id: str | None, *, sort: int | None = None
@@ -979,7 +1052,7 @@ class WorldStore:
             "UPDATE world_folders SET parent_id = ?, sort = ? WHERE id = ?",
             (parent_id, sort, folder_id),
         )
-        await self._conn.commit()
+        await self._commit()
 
     async def delete_folder(self, folder_id: str) -> None:
         """删除组织文件夹（调用方负责非空校验；子文件夹与地图引用同时清除）。"""
@@ -995,7 +1068,7 @@ class WorldStore:
             "UPDATE world_maps SET folder_id = NULL WHERE folder_id = ?",
             (folder_id,),
         )
-        await self._conn.commit()
+        await self._commit()
         self.folders.pop(folder_id, None)
         for f in self.folders.values():
             if f.parent_id == folder_id:

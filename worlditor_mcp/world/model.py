@@ -602,6 +602,9 @@ class Entity:
     user_id: str | None = None  # 身份化实体：账户/实例标识（联邦预留）
     last_active_ts: float = 0.0  # 在线状态（动作/SSE 活动维护）
     tags: list[str] = field(default_factory=list)  # 实例级标签（D18，有序、去重）
+    # 变更检测（D28）：内核在**落库那一刻**盖章，玩法包/客户端据此刻画增量
+    revision: int = 0  # 全局单调变更号（每次写 +1；重启后从库里最大值续号）
+    changed_tick: int = 0  # 最近一次变更所在的 tick 窗口（query(changed_since_tick=)）
 
     def pos_key(self) -> tuple[str, int, int]:
         return (self.map_id, self.row, self.col)
@@ -628,6 +631,8 @@ class Entity:
             "user_id": self.user_id,
             "last_active_ts": self.last_active_ts,
             "tags": list(self.tags),
+            "revision": self.revision,
+            "changed_tick": self.changed_tick,
         }
 
     @staticmethod
@@ -663,7 +668,16 @@ class Entity:
             if isinstance(value.get("last_active_ts"), (int, float))
             else 0.0,
             tags=parse_tags(value.get("tags")),
+            revision=_nonneg_int(value.get("revision")),
+            changed_tick=_nonneg_int(value.get("changed_tick")),
         )
+
+
+def _nonneg_int(value: Any) -> int:
+    """非负整数解析（布尔/负数/坏类型 → 0；D28 变更号容错）。"""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return 0
 
 
 def parse_tags(value: Any) -> list[str]:
@@ -895,6 +909,11 @@ WORLD_EVENTS: tuple[str, ...] = (
     "on_world_edited",
 )
 
+# 事件执行的阶段（D27：跨包顺序声明化，不再依赖"包加载序"这个隐式事实）。
+# 同一事件内排序键 = (阶段, order, 注册序)；未给阶段 → simulate。
+EVENT_PHASES: tuple[str, ...] = ("input", "simulate", "present")
+DEFAULT_EVENT_PHASE = "simulate"
+
 # 实体 id 序列化辅助（attrs/state JSON）
 
 
@@ -912,7 +931,7 @@ def _load_json(raw: str | None, default: Any) -> Any:
 
 
 def entity_db_row(entity: Entity) -> tuple:
-    """entities 表写入行（与 store SQL 列序一致）。"""
+    """entities 表写入行（与 store SQL 列序一致；D28 两列在末尾）。"""
     return (
         entity.id,
         entity.map_id,
@@ -926,11 +945,13 @@ def entity_db_row(entity: Entity) -> tuple:
         _dump_json(entity.state),
         entity.last_active_ts,
         _dump_json(entity.tags),
+        entity.revision,
+        entity.changed_tick,
     )
 
 
 def entity_from_row(row: Any) -> Entity | None:
-    """从 aiosqlite Row 解析实体（容错：json 损坏按空 dict）。"""
+    """从 aiosqlite Row 解析实体（容错：json 损坏按空 dict；缺列按 0）。"""
     return Entity.from_dict(
         {
             "id": row["id"],
@@ -945,8 +966,19 @@ def entity_from_row(row: Any) -> Entity | None:
             "state": _load_json(row["state_json"], {}),
             "last_active_ts": row["last_active_ts"],
             "tags": _load_json(row["tags_json"], []),
+            # D28 后加列：老库 / 测试假行可能没有这两列
+            "revision": _row_get(row, "revision", 0),
+            "changed_tick": _row_get(row, "changed_tick", 0),
         }
     )
+
+
+def _row_get(row: Any, key: str, default: Any) -> Any:
+    """行取值容错（缺列 → 默认值；老库与测试假行都要能读）。"""
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
 
 
 def item_db_row(item: ItemDef) -> tuple:

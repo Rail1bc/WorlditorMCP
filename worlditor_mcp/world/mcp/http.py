@@ -196,6 +196,9 @@ async def _state(request: Request) -> Response:
 
     return JSONResponse(
         {
+            # D28：全局变更号 + tick 窗口（客户端缓存失效/增量刷新用；实体各自也带）
+            "revision": engine.revision,
+            "tick": engine.tick,
             "maps": [map_to_dict(m) for m in visible_maps],
             "locations": [
                 location_to_dict(loc)

@@ -7,8 +7,10 @@
 
 from .engine import WorldEngine, WorldError
 from .model import (
+    DEFAULT_EVENT_PHASE,
     DIR_OFFSETS,
     DIRECTIONS,
+    EVENT_PHASES,
     OPPOSITE_DIR,
     Entity,
     EntityKindSpec,
@@ -37,9 +39,11 @@ from .model import (
 from .store import DEFAULT_MAP_ID, WorldStore
 
 __all__ = [
+    "DEFAULT_EVENT_PHASE",
     "DEFAULT_MAP_ID",
     "DIR_OFFSETS",
     "DIRECTIONS",
+    "EVENT_PHASES",
     "Entity",
     "EntityKindSpec",
     "InteractionRequest",

@@ -48,7 +48,9 @@ from .errors import WorldError
 from .model import (
     ATTR_INVISIBLE,
     ATTR_SEE_INVISIBLE,
+    DEFAULT_EVENT_PHASE,
     DIRECTIONS,
+    EVENT_PHASES,
     IDENTITY_KINDS,
     STATE_BLOCK_MOVE,
     WORLD_EVENTS,
@@ -131,12 +133,19 @@ class AsyncRLock:
 
 @dataclass
 class _EventBinding:
-    """一次事件订阅（play_id 用于取 API 与 namespace）。"""
+    """一次事件订阅（play_id 用于取 API 与 namespace）。
+
+    D27：同事件的执行顺序 = ``(phase, order, 注册序)``——阶段与序号都可声明，
+    注册序只作为同键时的兜底，所以"跨包顺序"不再是包加载顺序这个隐式事实。
+    """
 
     play_id: str
     handler: WorldEventHandler
     interval: float = 0.0  # on_tick 专用：各自间隔（A3）
     last_run: float = 0.0
+    phase: str = DEFAULT_EVENT_PHASE
+    order: int = 0
+    seq: int = 0  # 注册序（同 phase/order 时稳定排序用）
 
 
 @dataclass
@@ -228,7 +237,7 @@ class _AdminPageBinding:
 
 # 可被玩法包覆盖/禁用的行为原语（D11；place/remove 不可覆盖，D14）
 OVERRIDABLE_PRIMITIVES = frozenset(
-    {"move", "move_entity", "set_data", "get_data", "interact"}
+    {"move", "move_entity", "set_data", "get_data", "remove_data", "interact"}
 )
 
 # 原语名 → 默认实现方法名（分派表兜底）
@@ -237,6 +246,7 @@ _PRIMITIVE_DEFAULT_NAMES = {
     "move_entity": "_move_entity_default",
     "set_data": "_set_data_default",
     "get_data": "_get_data_default",
+    "remove_data": "_remove_data_default",
     "interact": "_interact_default",
 }
 
@@ -246,6 +256,7 @@ _PRIMITIVE_PARAM_NAMES = {
     "move_entity": ["entity_id", "map_id", "row", "col"],
     "set_data": ["entity_id", "name", "value"],
     "get_data": ["entity_id", "name"],
+    "remove_data": ["entity_id", "name"],
     "interact": ["entity_id", "target_id", "action", "args", "item_id"],
 }
 
@@ -258,6 +269,19 @@ def _primitive_params(name: str, args: tuple, kwargs: dict) -> dict:
         if i < len(names) and names[i] not in params:
             params[names[i]] = value
     return params
+
+
+# D27 事件阶段排序：input → simulate → present（未知阶段在校验处就报错）
+_PHASE_RANK = {phase: i for i, phase in enumerate(EVENT_PHASES)}
+
+
+def _binding_sort_key(binding: _EventBinding) -> tuple[int, int, int]:
+    """事件执行顺序键（D27）：阶段 → order → 注册序。"""
+    return (
+        _PHASE_RANK.get(binding.phase, len(_PHASE_RANK)),
+        binding.order,
+        binding.seq,
+    )
 
 
 _FIELD_TYPES = ("str", "int", "float", "bool", "json")
@@ -308,6 +332,26 @@ def _clean_required(value: object, what: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise WorldError(f"{what}不能为空")
     return value.strip()
+
+
+def _clean_tag_list(value: object, what: str) -> tuple[str, ...]:
+    """标签筛选参数校验（D26：**不静默丢弃**——非字符串/空串直接报错）。
+
+    与 ``parse_tags``（实体标签的容错解析）刻意不同：实体身上的标签是**已有数据**，
+    解析要宽容；查询条件是人/包现写的意图，拼错了必须报错而不是"查不到东西"。
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise WorldError(f"{what} 必须是标签数组")
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise WorldError(f"{what} 里的标签必须是非空字符串")
+        tag = item.strip()
+        if tag not in out:
+            out.append(tag)
+    return tuple(out)
 
 
 def _check_direction(direction: object) -> str:
@@ -498,6 +542,10 @@ class WorldEngine:
         self._tag_specs: dict[str, TagSpec] = {}
         # 类型预设标签：register_entity_kind/type(kind, tags=[...]) → kind 自带的额外标签
         self._type_tags: dict[str, tuple[str, ...]] = {}
+        # D21/D26 标签归属：tag -> 最近声明它的玩法包。**停用不清、卸载才清**——
+        # query 要能回答"这条标签的能力在当前世界存不存在"：停用的包声明过的
+        # 标签若被当成"未注册 → 纯数据"就会在 query 里诈尸（D26）。
+        self._tag_owner: dict[str, str] = {}
         # D21 规格级能力缓存：(kind, tags...) → 有序 TagSpec 列表（不含世界过滤）
         self._spec_cache: dict[tuple[str, tuple[str, ...]], tuple[TagSpec, ...]] = {}
         self._interactions: dict[str, _InteractionBinding] = {}
@@ -534,6 +582,7 @@ class WorldEngine:
         # 事件流订阅者（SSE 出口，B11：事件总线序列化推送；队列满丢最旧）
         self._subscribers: set[asyncio.Queue] = set()
         self._tick_task: asyncio.Task | None = None
+        self._binding_seq = 0  # D27 事件注册序（同 phase/order 的稳定兜底）
 
     # ---------- 生命周期 ----------
 
@@ -775,6 +824,9 @@ class WorldEngine:
             ),
             implicit=implicit,
         )
+        if play_id:
+            # D26：记住声明者（"最后声明者胜"与 _tag_specs 的单条语义一致）
+            self._tag_owner[tag] = play_id
         self._invalidate_spec_cache()
 
     # ---------- 字段设施（D9 / D10） ----------
@@ -1434,11 +1486,24 @@ class WorldEngine:
         *,
         interval: float = 0.0,
         play_id: str = "",
+        phase: str = DEFAULT_EVENT_PHASE,
+        order: int = 0,
     ) -> None:
         """订阅世界事件；on_tick 需给出 interval（各自间隔，A3）。
 
         事件名开放（D1/G8：任意事件名，语义由玩法包定义）；预置事件见
         model.WORLD_EVENTS。
+
+        Args:
+            interval: on_tick 专用，正秒数（各订阅者各自间隔）。
+            phase: 执行阶段（D27）——``input`` → ``simulate`` → ``present``，
+                缺省 ``simulate``。跨包顺序由此显式声明，不再依赖包加载序。
+            order: 同阶段内的细分序号（越小越先，可负）。同 phase/order 时
+                按注册序稳定排序（= 老行为，单包多订阅者顺序不变）。
+
+        Raises:
+            WorldError: 事件名空 / handler 不可调用 / on_tick 缺 interval /
+                阶段名不在 EVENT_PHASES 内 / order 非整数。
         """
         event = _clean_required(event, "事件名")
         if not callable(handler):
@@ -1446,9 +1511,35 @@ class WorldEngine:
         if event == "on_tick":
             if interval <= 0:
                 raise WorldError("on_tick 需要正的 interval 秒数")
-        self._event_bindings.setdefault(event, []).append(
-            _EventBinding(play_id=play_id, handler=handler, interval=float(interval))
+        phase = self._clean_phase(phase)
+        if not _is_int(order):
+            raise WorldError("order 必须是整数")
+        self._binding_seq += 1
+        bindings = self._event_bindings.setdefault(event, [])
+        bindings.append(
+            _EventBinding(
+                play_id=play_id,
+                handler=handler,
+                interval=float(interval),
+                phase=phase,
+                order=int(order),
+                seq=self._binding_seq,
+            )
         )
+        # 顺序在注册时定下来（emit/tick 热路径不排序）
+        bindings.sort(key=_binding_sort_key)
+
+    @staticmethod
+    def _clean_phase(phase: object) -> str:
+        """阶段名校验（D27）：未给/空 = simulate；未知名报错（不静默造新阶段）。"""
+        if phase is None or phase == "":
+            return DEFAULT_EVENT_PHASE
+        if not isinstance(phase, str) or phase not in EVENT_PHASES:
+            raise WorldError(
+                f"阶段必须是 {'/'.join(EVENT_PHASES)} 之一"
+                f"（缺省 {DEFAULT_EVENT_PHASE}）"
+            )
+        return phase
 
     def register_ui_component(
         self, name: str, web_entry: str, *, play_id: str = ""
@@ -1483,7 +1574,7 @@ class WorldEngine:
         self._play_apis.pop(play_id, None)
 
     def clear_play_registrations(
-        self, play_id: str, *, keep_user_items: bool = True
+        self, play_id: str, *, keep_user_items: bool = True, purge: bool = False
     ) -> None:
         """清理某玩法包的全部注册（kind / interaction / event / ui / 字段 /
         原语分派），供加载失败回滚与卸载使用（C2：重载 = 引擎重建，此为兜底清理）。
@@ -1492,10 +1583,17 @@ class WorldEngine:
 
         ``keep_user_items=True``（默认）：管理页维护的物品定义是**用户数据**，
         不随包停用消失（v0.5.2）；只有真卸载（删包目录）才传 False 一并清。
+
+        ``purge=True``（真卸载）：连**标签归属记忆**（D26）一起清——包目录都没了，
+        "这个标签曾由它声明"就不该继续让 query 认为该标签"在本世界不存在"。
+        停用（purge=False）**保留**归属：停用的包声明过的标签仍然算"有主且不活跃"，
+        否则 query 会把它当纯数据标签匹配到（能力已经没了，数据还在）。
         """
         self._tag_specs = {
             k: v for k, v in self._tag_specs.items() if v.play_id != play_id
         }
+        if purge:
+            self._tag_owner = {k: v for k, v in self._tag_owner.items() if v != play_id}
         self._type_tags = {
             k: v for k, v in self._type_tags.items() if k in self._tag_specs
         }
@@ -1801,6 +1899,9 @@ class WorldEngine:
             "event": event,
             "ts": self._now_ts(),
             "entity": entity.to_dict() if entity else None,
+            # D28：给客户端做增量/缓存失效的全局坐标（事件本身的实体也各自带 revision）
+            "revision": self.store.revision,
+            "tick": self.store.tick,
         }
         if event == "on_entity_move":
             payload["from"] = list(args[1])
@@ -1847,7 +1948,12 @@ class WorldEngine:
                 logger.exception("[worlditor] 心跳循环异常")
 
     async def _tick_once(self) -> None:
-        """心跳一轮：到期 on_tick handler 依次执行（各自间隔）。"""
+        """心跳一轮：到期 on_tick handler 依次执行（各自间隔）。
+
+        D28：**每轮先把 tick 窗口号 +1**（哪怕本轮没有任何 on_tick 订阅者）——
+        窗口号是变更检测的时间轴，不能因为"没人订阅心跳"就停住。
+        """
+        self.store.tick += 1  # 单循环内自增，无需锁（_tick_loop 串行调用）
         bindings = [
             b for b in self._event_bindings.get("on_tick", []) if b.interval > 0
         ]
@@ -1882,10 +1988,13 @@ class WorldEngine:
         col: int | None = None,
         viewer_id: str | None = None,
     ) -> list[Entity]:
-        """实体列表；viewer_id 传入时按隐身过滤（G12）。
+        """实体列表（位置筛选，宽松：地图不存在 = 空列表）；viewer_id 按隐身过滤（G12）。
 
         实体字段 ``invisible`` 为真时对普通 viewer 隐藏；viewer 自身字段
         ``see_invisible`` 为真（真视）或查看自己时可见。
+
+        这是**老接口**：只按位置筛、不校验地图存在、保持存储顺序。要按标签/世界/
+        变更窗口查一批实体，用 ``query_entities``（D26，严格校验 + 稳定排序）。
         """
         entities = list(self.store.entities.values())
         if map_id is not None:
@@ -1894,16 +2003,174 @@ class WorldEngine:
             entities = [e for e in entities if e.row == row]
         if col is not None:
             entities = [e for e in entities if e.col == col]
-        if viewer_id is not None:
-            viewer = self.store.entities.get(viewer_id)
-            see_all = bool(viewer and viewer.attrs.get(ATTR_SEE_INVISIBLE))
-            if not see_all:
-                entities = [
-                    e
-                    for e in entities
-                    if e.id == viewer_id or not e.attrs.get(ATTR_INVISIBLE)
-                ]
+        self._filter_perception(entities, viewer_id)
         return entities
+
+    def query_entities(
+        self,
+        *,
+        tags: list[str] | tuple[str, ...] | None = None,
+        exclude_tags: list[str] | tuple[str, ...] | None = None,
+        map_id: str | None = None,
+        world_id: str | None = None,
+        row: int | None = None,
+        col: int | None = None,
+        viewer_id: str | None = None,
+        changed_since_tick: int | None = None,
+        changed_since_revision: int | None = None,
+        where: Callable[[Entity], bool] | None = None,
+        limit: int | None = None,
+    ) -> list[Entity]:
+        """实体查询原语（D26）：**按标签/世界/坐标/变更窗口筛一批实体**。
+
+        玩法包不再需要"全量 list_entities + 自己筛"——"所有带中毒标签的实体"
+        就是 ``query_entities(tags=["poison"])``。
+
+        Args:
+            tags: 必须**全部**具备的有效标签（= kind + 类型预设 + 实例 tags，
+                D18）。匹配按 D21 语义：标签由某玩法包声明、而该包在**实体所在
+                世界**未激活时，视为"该能力在本世界不存在"→ 不匹配；没有声明者
+                的标签（实例自带的纯数据标签，如 ``set_tags(["poisoned"])``）
+                照常匹配。要跳过激活语义，用 ``where=lambda e: "x" in e.tags``。
+            exclude_tags: 任一具备即排除（同一套激活语义）。
+            map_id: 限定地图（空串 = 默认地图；不存在报错）。
+            world_id: 限定世界（**未归属地图按默认世界算**，与激活判定同源）。
+            row / col: 坐标筛选（与 list_entities 一致，可单独用）。
+            viewer_id: 感知过滤（G12 隐身）：普通 viewer 看不到 ``invisible``
+                实体；viewer 自身与 ``see_invisible`` 真视者例外。未知 viewer
+                按普通观察者处理（与 list_entities 一致）。
+            changed_since_tick: 只要**变更窗口号 ≥ 该值**的实体（D28）。窗口粒度粗：
+                同一窗口内多次变更共享窗口号，所以按窗口查**宁可多报、绝不漏报**
+                （重复刷新无害，漏刷新才是错的）。
+            changed_since_revision: 只要**变更号 > 该值**的实体（D28 精确游标：
+                每次落盘写 +1，既不多报也不漏报）。增量刷新用这个——记住
+                ``engine.revision`` 当游标即可。
+            where: 额外谓词（进程内用法，不参与 MCP 工具/序列化）。
+            limit: 结果条数上限（正整数）。
+
+        Returns:
+            实体列表，按 ``(map_id, row, col, id)`` 稳定排序（便于 diff/limit）。
+
+        Raises:
+            WorldError: 标签/坐标/上限/变更游标类型非法，或地图/世界不存在
+                （**不静默返回空**——拼错的筛选条件必须报错）。
+
+        Note:
+            当前为内存全表线性扫描（几千实体 = 微秒级）；若实体规模上万，
+            在 store 加"标签 → 实体 id"倒排索引即可，本接口不变（见 GAPS G38）。
+        """
+        required = _clean_tag_list(tags, "tags")
+        excluded = _clean_tag_list(exclude_tags, "exclude_tags")
+        if map_id is not None:
+            map_id = self._map_arg(map_id)
+            if map_id not in self.store.maps:
+                raise WorldError(f"地图不存在：{map_id}")
+        if world_id is not None:
+            if world_id not in self.store.worlds:
+                raise WorldError(f"世界不存在：{world_id}")
+        if row is not None and not _is_int(row):
+            raise WorldError("row 必须是整数")
+        if col is not None and not _is_int(col):
+            raise WorldError("col 必须是整数")
+        if changed_since_tick is not None and (
+            not _is_int(changed_since_tick) or changed_since_tick < 0
+        ):
+            raise WorldError("changed_since_tick 必须是非负整数")
+        if changed_since_revision is not None and (
+            not _is_int(changed_since_revision) or changed_since_revision < 0
+        ):
+            raise WorldError("changed_since_revision 必须是非负整数")
+        if limit is not None and (not _is_int(limit) or limit <= 0):
+            raise WorldError("limit 必须是正整数")
+        if where is not None and not callable(where):
+            raise WorldError("where 必须是可调用对象")
+
+        matched: list[Entity] = []
+        for entity in self.store.entities.values():
+            if map_id is not None and entity.map_id != map_id:
+                continue
+            if world_id is not None and self._world_of_map(entity.map_id) != world_id:
+                continue
+            if row is not None and entity.row != row:
+                continue
+            if col is not None and entity.col != col:
+                continue
+            if (
+                changed_since_tick is not None
+                and entity.changed_tick < changed_since_tick
+            ):
+                continue
+            if (
+                changed_since_revision is not None
+                and entity.revision <= changed_since_revision
+            ):
+                continue
+            if required or excluded:
+                live = self._live_tags(entity)
+                if not set(required) <= live:
+                    continue
+                if excluded and (set(excluded) & live):
+                    continue
+            if where is not None and not where(entity):
+                continue
+            matched.append(entity)
+        self._filter_perception(matched, viewer_id)
+        matched.sort(key=lambda e: (e.map_id, e.row, e.col, e.id))
+        return matched[:limit] if limit is not None else matched
+
+    def _filter_perception(self, entities: list[Entity], viewer_id: str | None) -> None:
+        """就地按隐身规则过滤（G12：list_entities / query / 场景同一套判定）。"""
+        if viewer_id is None:
+            return
+        viewer = self.store.entities.get(viewer_id)
+        see_all = bool(viewer and viewer.attrs.get(ATTR_SEE_INVISIBLE))
+        if see_all:
+            return
+        entities[:] = [
+            e for e in entities if e.id == viewer_id or not e.attrs.get(ATTR_INVISIBLE)
+        ]
+
+    def _live_tags(self, entity: Entity) -> set[str]:
+        """实体身上"活着"的有效标签集（D26：激活语义的**唯一**落地点）。
+
+        "活着" = 该标签的**声明者当前已加载** 且 **实体所在世界启用了它**；
+        没有声明者的标签（实例自带的纯数据标签，或声明包已被真卸载）算活着。
+
+        为什么比"世界激活"多一条"已加载"：标签是**留在实体数据上的**，包停用后
+        标签还在（不像过滤器/覆盖登记那样随停用消失）。只看世界激活集合时，
+        空 ``play_ids``（= 全部激活）会让停用包声明的标签"诈尸"成纯数据标签——
+        于是 query 说"这是商贩"，available_actions 却说"它没有任何动作"。
+
+        包含与排除用同一份集合判定，所以语义天然对称。
+        """
+        world_id = self.store.map_world.get(entity.map_id)
+        live: set[str] = set()
+        for tag in self.entity_tags(entity):
+            owner = self._tag_owner.get(tag)
+            if owner and (
+                owner not in self._play_apis
+                or not self._world_play_active(world_id, owner)
+            ):
+                continue
+            live.add(tag)
+        return live
+
+    def _world_of_map(self, map_id: str) -> str | None:
+        """地图的有效世界（未归属 → 默认世界；与 ``_world_for_activation`` 同源）。"""
+        world_id = self.store.map_world.get(map_id)
+        if world_id is not None:
+            return world_id
+        return DEFAULT_WORLD_ID if DEFAULT_WORLD_ID in self.store.worlds else None
+
+    @property
+    def tick(self) -> int:
+        """当前 tick 窗口号（D28：每次心跳 +1；配合 changed_since_tick 做增量）。"""
+        return self.store.tick
+
+    @property
+    def revision(self) -> int:
+        """全局变更号（D28：每次落盘写 +1；客户端缓存失效判定用）。"""
+        return self.store.revision
 
     def get_map(self, map_id: str) -> Any | None:
         return self.store.maps.get(map_id)
@@ -2445,6 +2712,49 @@ class WorldEngine:
             entity.attrs = {**entity.attrs, name: value}
             await self.store.save_entity(entity)
             await self._emit("on_entity_changed", entity, {"attrs": {name: value}})
+
+    async def remove_data(self, entity_id: str, name: str) -> bool:
+        """字段删除（分派入口，D11；默认实现见 ``_remove_data_default``）。"""
+        return await self._dispatch_primitive("remove_data", entity_id, name)
+
+    async def _remove_data_default(self, entity_id: str, name: str) -> bool:
+        """默认字段删除：删掉 attrs 里的一个字段（容器 = attrs，与 set_data 对称）。
+
+        D23 的另一半：字段**能被显式删掉**，而不是只能"整体覆盖 attrs"顺手丢
+        （整体覆盖会连别的包写的字段一起丢，那正是要根除的静默丢字段）。
+
+        Returns:
+            是否真的删掉了；字段本来不存在 → False（幂等，不报错、不发事件、不落盘）。
+        """
+        name = _clean_required(name, "字段名")
+        async with self._lock:
+            entity = self._require_entity(entity_id)
+            if name not in entity.attrs:
+                return False
+            attrs = dict(entity.attrs)
+            del attrs[name]
+            entity.attrs = attrs
+            await self.store.save_entity(entity)
+            await self._emit("on_entity_changed", entity, {"attrs_removed": [name]})
+            return True
+
+    async def remove_state(self, entity_id: str, name: str) -> bool:
+        """删除 state 字段（**不经分派**，与 set_state 对称：state = 动态状态容器）。
+
+        Returns:
+            是否真的删掉了（不存在 → False，幂等）。
+        """
+        name = _clean_required(name, "字段名")
+        async with self._lock:
+            entity = self._require_entity(entity_id)
+            if name not in entity.state:
+                return False
+            state = dict(entity.state)
+            del state[name]
+            entity.state = state
+            await self.store.save_entity(entity)
+            await self._emit("on_entity_changed", entity, {"state_removed": [name]})
+            return True
 
     async def get_data(self, entity_id: str, name: str | None = None) -> Any:
         """字段读（分派入口；默认实现见 _get_data_default）。"""
