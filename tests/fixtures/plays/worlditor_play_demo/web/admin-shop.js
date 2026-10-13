@@ -16,13 +16,16 @@
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer " + (localStorage.getItem("worlditor_admin_key") || ""),
+        // 管理端组件与视图组件共用同一枚凭据（localStorage["worlditor_token"]，
+        // 见 webui/src/api.js）——管理端没有单独的 "admin key" 存储键。
+        Authorization: "Bearer " + (localStorage.getItem("worlditor_token") || ""),
       },
       body: JSON.stringify(payload || {}),
     });
     const data = await resp.json().catch(() => null);
     if (!resp.ok) {
-      throw new Error((data && data.detail) || "HTTP " + resp.status);
+      // 服务端错误体是 {"error": "…"}（admin.py）；WorldError 文案原样透出
+      throw new Error((data && data.error) || "HTTP " + resp.status);
     }
     return data && data.data !== undefined ? data.data : data;
   }
