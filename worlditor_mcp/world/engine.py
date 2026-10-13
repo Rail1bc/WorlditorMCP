@@ -2280,11 +2280,24 @@ class WorldEngine:
             if name is not None:
                 name = _clean_required(name, "世界名称")
             try:
-                return await self.store.update_world(
+                world = await self.store.update_world(
                     world_id, name=name, desc=desc, play_ids=play_ids
                 )
             except KeyError as e:
                 raise WorldError(str(e)) from None
+            # 激活集合变了 → 该世界里玩家能看到的视图/工具也跟着变，广播同一条信号
+            # （否则站在该世界的玩家要整页刷新才知道 tab 变了；PlayLoader 那条只覆盖
+            # 包的生命周期，世界级激活不在其中）
+            if play_ids is not None:
+                await self.emit(
+                    "plays_changed",
+                    {
+                        "reason": "world_plays",
+                        "world_id": world_id,
+                        "plays": list(world.play_ids),
+                    },
+                )
+            return world
 
     async def delete_world(self, world_id: str) -> None:
         """删除世界；世界仍有地图归属 → 拒绝（先移走）。"""

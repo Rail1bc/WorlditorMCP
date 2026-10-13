@@ -67,8 +67,10 @@
   （原先 500）；两个 app 都注册 `HTTPException → {"error": …}`，401/403/404 不再是
   纯文本（原先与"失败返回 `{"error":…}`"的约定矛盾）。
 - **新增 `plays_changed` 信号事件**：`PlayLoader` 在 load_all / enable / disable /
-  install / uninstall 之后广播，供前端 SSE 订阅——装/卸玩法包后自动刷新视图 tab，
-  不再需要手动整页刷新（载荷 `{"event":"plays_changed","data":{"reason":…,"plays":[…]}}`，
+  install / uninstall 之后广播，**另外** `engine.update_world(play_ids=…)` 改世界激活
+  集合时也广播（reason = `world_plays`）——玩家看到的视图 tab 由**所在世界的激活集合**
+  决定，只覆盖包生命周期是不够的。供前端 SSE 订阅，装/卸玩法包或改世界激活后自动刷新
+  视图 tab，不再需要手动整页刷新（载荷 `{"event":"plays_changed","data":{"reason":…,…}}`，
   自定义事件的数据在 `data` 键下；刻意不写 world_log）。
 - 新增回归测试 `tests/test_review_fixes.py`（8 条，逐条注明发现来源、位置与
   "不修会怎样"）；测试 300 → **308**。

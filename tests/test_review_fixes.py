@@ -169,6 +169,45 @@ def test_plays_changed_signal_emitted(tmp_path):
     _run(run())
 
 
+# ---------- 7. plays_changed：世界激活集合变化 ----------
+
+
+def test_plays_changed_signal_on_world_activation(tmp_path):
+    """世界激活集合变化同样广播 `plays_changed`（reason = world_plays）。
+
+    玩家看到哪些视图 tab 由**所在世界的激活集合**决定（`/views` 按世界过滤），所以
+    管理员改某世界的 `play_ids` 时，站在该世界的玩家也该自动刷新——PlayLoader 那条
+    信号只覆盖包的生命周期，世界级激活不在其中。只改名字则不该发信号。
+    """
+
+    async def run():
+        engine = WorldEngine(WorldStore(tmp_path / "world.db"))
+        await engine.initialize()
+        try:
+            queue = engine.subscribe()
+
+            def drain() -> list[str]:
+                out: list[str] = []
+                while True:
+                    try:
+                        payload = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    if payload.get("event") == "plays_changed":
+                        out.append(str((payload.get("data") or {}).get("reason")))
+                return out
+
+            await engine.update_world("default", play_ids=["worlditor_play_x"])
+            assert drain() == ["world_plays"]
+            # 只改名字：激活集合没变 → 不发信号
+            await engine.update_world("default", name="改名了")
+            assert drain() == []
+        finally:
+            await engine.terminate()
+
+    _run(run())
+
+
 # ---------- 3~5：需要 HTTP 双端口场景 ----------
 
 
