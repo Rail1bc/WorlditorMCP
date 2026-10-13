@@ -1007,16 +1007,26 @@ class WorldEngine:
         self._refresh_instructions()
 
     def _refresh_instructions(self) -> None:
-        """按当前工具集刷新 MCP instructions（零工具时提示未加载玩法包）。"""
-        settings = getattr(self._mcp, "settings", None)
-        if settings is None:
-            return
-        try:
-            from .mcp import build_instructions
+        """按当前工具集刷新 MCP instructions。
 
-            settings.instructions = build_instructions(self)
-        except Exception:  # noqa: BLE001
-            logger.debug("[worlditor] MCP instructions 刷新失败", exc_info=True)
+        真正的存储位是 SDK lowlevel server 的 ``instructions``——``FastMCP.instructions``
+        是只读 property，读的就是它。``FastMCP.settings`` **没有** instructions 字段：
+        v0.7.0 之前这里写的是 ``settings.instructions = …``，赋值抛 ValueError 又被
+        宽 except 吞成 debug 日志，于是"随注册表刷新"事实上从未生效——表现为**工具在、
+        说明书不在**（运行期装/启用玩法包后，``tools/list`` 已更新，``initialize`` 的
+        instructions 还停在启动时那份，零包启动的部署会一直说"没有任何工具"）。
+        """
+        server = getattr(self._mcp, "_mcp_server", None)
+        if server is None:
+            return
+        if not hasattr(server, "instructions"):
+            logger.warning(
+                "[worlditor] MCP instructions 刷新跳过：SDK server 无 instructions 属性"
+            )
+            return
+        from .mcp import build_instructions
+
+        server.instructions = build_instructions(self)
 
     def _sync_tool_add(self, name: str) -> None:
         if self._mcp is None:

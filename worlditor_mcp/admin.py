@@ -43,6 +43,36 @@ async def _json_body(request: Request) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _as_int(value: Any, name: str, default: int = 0) -> int:
+    """取整数入参：非法输入 → 400（而不是 500）。
+
+    G26 修复：原先各处直接 ``int(data.get(...) or 0)``，客户端传 ``"abc"`` 时
+    ``ValueError`` 会穿过 handler（只捕 ``WorldError``）冒到 Starlette，变成
+    ``500 Internal Server Error``（非 JSON）。``None`` / 空串按"未提供"处理，
+    布尔按 0/1（与旧行为一致）。
+    """
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except ValueError:
+        raise HTTPException(400, f"{name} 必须是整数：{value!r}") from None
+
+
+async def _http_error(request: Request, exc: HTTPException) -> JSONResponse:
+    """``HTTPException`` → 统一 JSON 错误体 ``{"error": …}``。
+
+    Starlette 默认把它渲染成**纯文本**，与本文件的响应约定（"失败 400
+    ``{"error": …}``"）以及中间件那头 JSON 形态的 401 不一致——客户端统一
+    按 JSON 解析时会崩。
+    """
+    return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+
+
 def _ok(data: Any = None) -> JSONResponse:
     return JSONResponse({"ok": True, **({} if data is None else {"data": data})})
 
@@ -320,8 +350,8 @@ async def _accounts(request: Request) -> Response:
     result = _identity(request).search_accounts(
         q=params.get("q", ""),
         role=params.get("role", ""),
-        page=int(params.get("page") or 1),
-        page_size=int(params.get("page_size") or 200),
+        page=_as_int(params.get("page"), "page", 1),
+        page_size=_as_int(params.get("page_size"), "page_size", 200),
         sort=params.get("sort", "created_desc"),
     )
     store = _engine(request).store
@@ -377,7 +407,7 @@ async def _invite_create(request: Request) -> Response:
     data = await _json_body(request)
     try:
         codes = await _identity(request).create_invite_codes(
-            max(1, int(data.get("count") or 1))
+            max(1, _as_int(data.get("count"), "count", 1))
         )
     except IdentityError as e:
         return _err(e)
@@ -484,8 +514,8 @@ async def _template_apply(request: Request) -> Response:
         loc = await _engine(request).apply_location_template(
             str(data.get("template_id") or ""),
             str(data.get("map_id") or ""),
-            int(data.get("row") or 0),
-            int(data.get("col") or 0),
+            _as_int(data.get("row"), "row"),
+            _as_int(data.get("col"), "col"),
         )
     except WorldError as e:
         return _err(e)
@@ -551,8 +581,8 @@ async def _map_create(request: Request) -> Response:
             str(data.get("name") or ""),
             description=data.get("description"),
             timezone=data.get("timezone"),
-            spawn_row=int(data.get("spawn_row") or 0),
-            spawn_col=int(data.get("spawn_col") or 0),
+            spawn_row=_as_int(data.get("spawn_row"), "spawn_row"),
+            spawn_col=_as_int(data.get("spawn_col"), "spawn_col"),
             visible=str(data.get("visible") or "public"),
         )
     except WorldError as e:
@@ -569,8 +599,8 @@ async def _map_update(request: Request) -> Response:
         if key in data:
             want[key] = data[key]
     if data.get("spawn_row") is not None or data.get("spawn_col") is not None:
-        want["spawn_row"] = int(data.get("spawn_row") or 0)
-        want["spawn_col"] = int(data.get("spawn_col") or 0)
+        want["spawn_row"] = _as_int(data.get("spawn_row"), "spawn_row")
+        want["spawn_col"] = _as_int(data.get("spawn_col"), "spawn_col")
     try:
         m = await _engine(request).update_map(request.path_params["map_id"], **want)
     except WorldError as e:
@@ -656,7 +686,7 @@ async def _location_upsert(request: Request) -> Response:
     data = await _json_body(request)
     engine = _engine(request)
     map_id = str(data.get("map_id") or "")
-    row, col = int(data.get("row") or 0), int(data.get("col") or 0)
+    row, col = _as_int(data.get("row"), "row"), _as_int(data.get("col"), "col")
     try:
         if engine.get_location(map_id, row, col) is None:
             loc = await engine.create_location(
@@ -685,8 +715,8 @@ async def _location_delete(request: Request) -> Response:
     try:
         await _engine(request).delete_location(
             str(data.get("map_id") or ""),
-            int(data.get("row") or 0),
-            int(data.get("col") or 0),
+            _as_int(data.get("row"), "row"),
+            _as_int(data.get("col"), "col"),
         )
     except WorldError as e:
         return _err(e)
@@ -703,10 +733,10 @@ async def _location_move(request: Request) -> Response:
     try:
         loc = await _engine(request).move_location(
             str(data.get("map_id") or ""),
-            int(data.get("row") or 0),
-            int(data.get("col") or 0),
-            int(data.get("to_row") or 0),
-            int(data.get("to_col") or 0),
+            _as_int(data.get("row"), "row"),
+            _as_int(data.get("col"), "col"),
+            _as_int(data.get("to_row"), "to_row"),
+            _as_int(data.get("to_col"), "to_col"),
         )
     except WorldError as e:
         return _err(e)
@@ -719,8 +749,8 @@ async def _connection_update(request: Request) -> Response:
     try:
         await _engine(request).update_connection(
             str(data.get("map_id") or ""),
-            int(data.get("row") or 0),
-            int(data.get("col") or 0),
+            _as_int(data.get("row"), "row"),
+            _as_int(data.get("col"), "col"),
             str(data.get("direction") or ""),
             enabled=data.get("enabled"),
             paths=data.get("paths"),
@@ -764,8 +794,8 @@ async def _entity_create(request: Request) -> Response:
         entity = await _engine(request).place_entity(
             str(data.get("kind") or ""),
             str(data.get("map_id") or ""),
-            int(data.get("row") or 0),
-            int(data.get("col") or 0),
+            _as_int(data.get("row"), "row"),
+            _as_int(data.get("col"), "col"),
             name=data.get("name"),
             desc=str(data.get("desc") or ""),
             attrs=data.get("attrs"),
@@ -913,7 +943,7 @@ def build_admin_app(
                 )
             )
             public_exact = ("/",)
-    app = Starlette(routes=routes)
+    app = Starlette(routes=routes, exception_handlers={HTTPException: _http_error})
     app.state.world_engine = engine
     app.state.world_identity = identity
     app.state.world_loader = loader

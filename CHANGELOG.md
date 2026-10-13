@@ -48,6 +48,31 @@
 - GAPS：新增 **G39**（含根因诊断与四条残留）、G6/G19/G20 状态更新（G19 已失效、
   G20 守卫改指参考组件）；编号范围更新为 `G1–G39`。
 
+### 审查修复（同日，零玩法包视角的内核审查发现）
+- **`instructions` 运行期刷新是死代码**：`_refresh_instructions` 写的是
+  `mcp.settings.instructions`，而 SDK 的 `Settings` **没有**该字段 → 赋值抛
+  `ValueError` 被宽 `except` 吞成 debug 日志，于是"随注册表刷新"从未生效：
+  装/启用玩法包后 `tools/list` 更新了、`initialize` 的 instructions 不变
+  （**工具在、说明书不在**）。改为写 lowlevel server 的 `instructions`
+  （`FastMCP.instructions` 是只读 property 读它），并收窄异常处理。
+- **零工具时的 instructions 文案不实**：原来说"未加载任何玩法包"，而世界内容包
+  是加载着的（只是不注册工具）——v0.7.0 起内置只剩它，所以这句假话正是**每个
+  全新安装的默认说明书**。改为"当前没有任何可用工具……也可能已装的包没有注册工具"。
+- **`/plays/{id}/web/` 路径校验用 `str.startswith`**：`<pkg>/web-evil/x.js` 会被
+  误判为"在 web/ 之内"（可读到包内 `web*` 兄弟目录）。改用 `Path.is_relative_to`
+  ——与 PlayLoader 的路径安全检查同一套语义。
+- **JSON-RPC 批处理请求不注入身份**：`_inject_identity` 遇数组直接 return，持合法
+  play 凭据发批量 `tools/call` 一律被判"未认证"且**静默失败**。改为逐条注入。
+- **G26 收口**：管理端 20 处裸 `int()` 统一走新助手 `_as_int`，坏入参 **400**
+  （原先 500）；两个 app 都注册 `HTTPException → {"error": …}`，401/403/404 不再是
+  纯文本（原先与"失败返回 `{"error":…}`"的约定矛盾）。
+- **新增 `plays_changed` 信号事件**：`PlayLoader` 在 load_all / enable / disable /
+  install / uninstall 之后广播，供前端 SSE 订阅——装/卸玩法包后自动刷新视图 tab，
+  不再需要手动整页刷新（载荷 `{"event":"plays_changed","data":{"reason":…,"plays":[…]}}`，
+  自定义事件的数据在 `data` 键下；刻意不写 world_log）。
+- 新增回归测试 `tests/test_review_fixes.py`（8 条，逐条注明发现来源、位置与
+  "不修会怎样"）；测试 300 → **308**。
+
 ## v0.6.0（2026-09-24）
 
 **按 ECS 对照清单补齐 A–D 四项**：一次架构自问"我们现在算 ECS 吗"引出逐项盘点

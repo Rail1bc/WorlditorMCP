@@ -35,6 +35,16 @@ _META_ENTITY_KEY = "worlditor_entity_id"
 _META_TIER_KEY = "worlditor_tier"
 _SCOPE_IDENTITY_KEY = "worlditor_identity"
 
+
+async def _http_error(request: Request, exc: HTTPException) -> JSONResponse:
+    """``HTTPException`` → 统一 JSON 错误体 ``{"error": …}``。
+
+    Starlette 默认渲染成纯文本，跟本模块中间件那头发出的 JSON 401 形态不一致，
+    客户端统一按 JSON 解析时会崩（403/404 都走这条）。
+    """
+    return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+
+
 # 公共路径（免认证）：自助注册类端点（B13 自助注册不依赖管理员）
 PUBLIC_PATHS = (
     "/auth/register",
@@ -130,25 +140,49 @@ class AuthMiddleware:
 
 
 def _inject_identity(body: bytes, info: Any) -> bytes:
-    """JSON-RPC 单请求：在 params._meta 注入 worlditor 身份字段。"""
+    """JSON-RPC 请求体：在 params._meta 注入 worlditor 身份字段。
+
+    支持**单个请求对象**与**批处理数组**（JSON-RPC 2.0 batch）。批处理原先被整段跳过
+    （`isinstance(obj, dict)` 不成立即 return），于是持合法 play 凭据的客户端发批量
+    `tools/call` 一律拿不到 `_meta` → 被工具入口判成"未认证"，**静默失败**。
+    """
     if not body:
         return body
     try:
         obj = json.loads(body)
     except ValueError:
         return body
-    if not isinstance(obj, dict):
-        return body  # 批处理 / 非标准请求：跳过注入
-    params = obj.get("params")
-    if isinstance(params, dict):
-        meta = params.get("_meta")
-        if not isinstance(meta, dict):
-            meta = {}
-        meta[_META_ENTITY_KEY] = info.entity_id
-        meta[_META_TIER_KEY] = info.tier
-        params["_meta"] = meta
+    if isinstance(obj, list):
+        # 注意：这里不能用 any(...) —— 生成器短路会让第二个请求之后全都不被注入
+        changed = False
+        for item in obj:
+            if _inject_into_request(item, info):
+                changed = True
+        if not changed:
+            return body
         return json.dumps(obj, ensure_ascii=False).encode("utf-8")
-    return body
+    if not _inject_into_request(obj, info):
+        return body
+    return json.dumps(obj, ensure_ascii=False).encode("utf-8")
+
+
+def _inject_into_request(obj: Any, info: Any) -> bool:
+    """把身份写进单个 JSON-RPC 请求对象的 ``params._meta``；返回是否有改动。
+
+    ``params`` 不是对象时不动（与单请求路径的老行为一致：无参数请求原样放行）。
+    """
+    if not isinstance(obj, dict):
+        return False
+    params = obj.get("params")
+    if not isinstance(params, dict):
+        return False
+    meta = params.get("_meta")
+    if not isinstance(meta, dict):
+        meta = {}
+    meta[_META_ENTITY_KEY] = info.entity_id
+    meta[_META_TIER_KEY] = info.tier
+    params["_meta"] = meta
+    return True
 
 
 async def _send_json(send: Any, scope: dict, status: int, data: dict) -> None:
@@ -404,7 +438,9 @@ async def _play_web(request: Request) -> Response:
         raise HTTPException(404, f"玩法包不存在：{play_id}")
     web_dir = (info.path / "web").resolve()
     target = (web_dir / subpath).resolve()
-    if not str(target).startswith(str(web_dir)) or not target.is_file():
+    # 路径校验用 is_relative_to（与 PlayLoader 的路径安全检查同一套语义）：
+    # str.startswith 会把 `<pkg>/web-evil/x.js` 误判为在 `<pkg>/web` 之内。
+    if not target.is_relative_to(web_dir) or not target.is_file():
         raise HTTPException(404, "资源不存在")
     content = target.read_bytes()
     media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
@@ -481,7 +517,11 @@ def build_http_app(
     else:
         public_paths = PUBLIC_PATHS
 
-    app = Starlette(routes=routes, lifespan=combined_lifespan)
+    app = Starlette(
+        routes=routes,
+        lifespan=combined_lifespan,
+        exception_handlers={HTTPException: _http_error},
+    )
     app.state.world_engine = engine
     app.state.world_identity = identity
     app.state.world_loader = loader

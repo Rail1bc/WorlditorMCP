@@ -148,7 +148,26 @@ class PlayLoader:
             if info is not None:
                 loaded.append(info)
         await self.engine.flush_item_defs()
+        await self._notify_plays_changed("load_all")
         return loaded
+
+    async def _notify_plays_changed(self, reason: str) -> None:
+        """玩法包集合变化 → 广播 ``plays_changed`` 信号事件。
+
+        用途：前端（SSE 订阅者）据此刷新视图 tab 与管理页清单——否则装/卸包后
+        浏览器必须手动整页刷新才知道有新视图。刻意**不写 world_log**：这是 UI
+        信号，不是世界历史。订阅者为零时开销可忽略（纯内存分发）。
+
+        Args:
+            reason: 触发原因（load_all / enable / disable / install / uninstall）。
+        """
+        try:
+            await self.engine.emit(
+                "plays_changed",
+                {"reason": reason, "plays": sorted(self.plays)},
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("[worlditor] plays_changed 广播失败", exc_info=True)
 
     def _topo_order(self, specs: dict[str, tuple[PlaySpec, Path, bool]]) -> list[str]:
         """依赖拓扑排序（Kahn）：先加载被依赖者；环/缺失依赖者留到最后。"""
@@ -290,6 +309,7 @@ class PlayLoader:
         """启用玩法包：自动先启用其 requires.plays 依赖（拓扑，G6）。"""
         async with self.engine._lock:  # noqa: SLF001
             await self._enable_inner(play_id, set())
+        await self._notify_plays_changed("enable")
 
     async def _enable_inner(self, play_id: str, stack: set[str]) -> None:
         if play_id in self.plays:
@@ -335,6 +355,7 @@ class PlayLoader:
                 await self._teardown_one(info)
             self._disabled.add(play_id)
             await self._save_disabled_state()
+        await self._notify_plays_changed("disable")
 
     async def uninstall(self, play_id: str) -> None:
         """卸载社区玩法包（删除目录含其数据，不可逆；G7 路径安全）。"""
@@ -374,6 +395,7 @@ class PlayLoader:
             except OSError as e:
                 raise WorldError(f"删除玩法包目录失败：{e}") from e
             logger.info("[worlditor] 玩法包已卸载：%s", play_id)
+        await self._notify_plays_changed("uninstall")
 
     async def install_zip(self, data: bytes, *, filename: str = "") -> str:
         """安装社区玩法包（zip 字节流；安全校验 → 解压到 plays_dir → 加载）。
@@ -457,6 +479,7 @@ class PlayLoader:
         self._disabled.discard(play_id)
         await self._save_disabled_state()
         logger.info("[worlditor] 玩法包已安装：%s", play_id)
+        await self._notify_plays_changed("install")
         return play_id
 
     def _find_candidate(self, play_id: str) -> tuple[Path, bool] | None:

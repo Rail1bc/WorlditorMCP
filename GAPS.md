@@ -118,6 +118,14 @@
   通用；玩法包不能贡献片段
 - **方案**：未来允许玩法包注册 instructions 片段（FastMCP 支持多段）
 - **状态**：M3 验证玩法包工具 description 是否足够承载世界观后定
+- **v0.7.0 审查补充（已修）**：instructions 的**运行期刷新**原先是死代码——
+  `engine._refresh_instructions` 写 `mcp.settings.instructions`，而 SDK 的
+  `Settings` 没有该字段（赋值抛 ValueError 被宽 `except` 吞成 debug 日志）；
+  真正的存储位是 lowlevel server（`FastMCP.instructions` 是只读 property 读它）。
+  表现是**工具在、说明书不在**：装/启用玩法包后 `tools/list` 更新了、instructions
+  不变。改为写 `_mcp_server.instructions`，并把零工具时的文案改准（原来说
+  "未加载任何玩法包"，而世界内容包其实加载着，只是不注册工具）。
+  回归测试 `tests/test_review_fixes.py` 两条。**本条的"玩法包注册片段"仍未做。**
 
 ### G10 MCP resources / prompts 未启用
 - **触发**：MCP 呈现讨论——resources（按 URI 主动读取）与 prompts（提示
@@ -384,15 +392,24 @@
 
 - **触发**：CORE_AUDIT §4 末尾"审查中发现但未处置的次要点"散落无人跟进
 - **条目**：
-  - 管理端多处裸 `int()` → 传非数字直接 **500**（不是 400）。点：
-    `admin.py` 的 `page`/`page_size`/`row`/`col`/`to_row`/`to_col`/`spawn_row`/
+  - ✅ **已修（v0.7.0）**：管理端多处裸 `int()` → 传非数字直接 **500**（不是 400）。
+    点：`admin.py` 的 `page`/`page_size`/`row`/`col`/`to_row`/`to_col`/`spawn_row`/
     `spawn_col`/`count`（`_accounts`、`_location_upsert`、`_location_move`、
     `_connection_update`、`_map_create`、`_map_update`、`_entity_create`、
-    `_template_apply`）。修法：统一 `_int_arg()` 助手 → `WorldError("行号必须是整数")`
+    `_template_apply`）。**改法**：新增 `admin.py:_as_int(value, name, default)` 助手，
+    20 处 `int(x or 0)` 全部改走它 → `HTTPException(400, "…必须是整数：…")`；
+    回归测试 `tests/test_review_fixes.py::test_admin_bad_int_returns_400_not_500`。
+  - ✅ **已修（v0.7.0）**：`HTTPException` 在本版本 Starlette 下渲染成**纯文本**，
+    与"失败 400 `{"error": …}`"的约定以及中间件那头的 JSON 401 不一致（客户端
+    统一 `.json()` 会崩）。**改法**：两个 app 都注册
+    `exception_handlers={HTTPException: _http_error}` → 统一 `{"error": detail}`；
+    回归测试 `test_http_errors_are_json`。
   - `PUBLIC_PATHS` 用 `startswith` 前缀匹配（`http.py:95-97`）——将来新增
     `/auth/read-token-xxx` 之类路径会**误免认证**；应改为精确匹配 + 显式前缀白名单
-  - `/plays/{play_id}/web` 前缀校验用字符串 `startswith`（`http.py:402`），
-    建议 `Path.is_relative_to`
+  - ✅ **已修（v0.7.0）**：`/plays/{play_id}/web` 前缀校验用字符串 `startswith`
+    （原 `http.py:407`）——`<pkg>/web-evil/x.js` 会被判为"在 web/ 之内"。
+    改为 `Path.is_relative_to`（与 PlayLoader 的路径安全检查同语义）；
+    回归测试 `test_play_web_rejects_web_prefix_sibling`
   - `?token=` 会进访问日志（SSE 的硬需求，不能删）——至少文档化 + 建议反代过滤
   - 停用玩法包不清理 `sys.modules` 残留（同名包换目录重载时可能拿到旧模块）
   - **局部更新语义不完整**（v0.5.2 审计补充）：
@@ -401,7 +418,13 @@
     - `POST /admin/connections` 的 `enabled`/`paths` 实际都是必填（`admin.py` 恒传
       `data.get(...)`，缺省 None 被当"显式给值"）→ 只改一个方向不可行
     - `POST /admin/locations`（upsert）不带 `description` 会**清空**整段分时段描述
-- **状态**：待决策（低危但成串，适合一次"收尾清理"批次；v0.5.2 未做）
+- **状态**：部分已修（v0.7.0 修掉 `int()` → 400、`HTTPException` 统一 JSON、
+  `/plays/*/web` 路径校验三项）；其余（`PUBLIC_PATHS` 前缀匹配、`sys.modules`
+  残留、局部更新语义三条）仍待决策——低危但成串，适合一次"收尾清理"批次
+- **另（v0.7.0 审查补充）**：JSON-RPC **批处理请求**原先整段不注入身份
+  （`http.py:_inject_identity` 的 `isinstance(obj, dict)` 判定），持合法 play
+  凭据发批量 `tools/call` 会被判"未认证"且**静默失败**——已修，
+  回归测试 `test_inject_identity_handles_batch_requests`
 
 ### G27 玩法包管理页组件逃过前端守卫（原生 confirm + 样式守卫盲区）
 

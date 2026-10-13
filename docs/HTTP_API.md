@@ -151,8 +151,11 @@ curl -s -X POST http://127.0.0.1:6288/world/mcp \
 - **文案（`description` / 路径 `label`）只有结构化一种格式**：
   `{"periods": [{"start": "06:00", "end": "18:00", "items": [{"text": "白天", "weight": 1}]}]}`；
   `null` = 清空。纯字符串或结构非法 → **400**（消息里带格式示例），不会静默落盘。
-- 数值参数（`row` / `col` / `page` / `count` …）传非数字会 **500**（不是 400）：
-  管理端 handler 只捕 `WorldError`。见 `GAPS.md` G26。
+- **错误体统一 JSON**：所有 `HTTPException`（401 / 403 / 404 …）与业务失败
+  （400）都返回 `{"error": "…"}`——v0.7.0 前 Starlette 默认把前者渲染成**纯文本**，
+  客户端统一按 JSON 解析会崩（已修，见 `GAPS.md` G26）。
+- 数值参数（`row` / `col` / `page` / `count` …）传非数字 → **400**
+  `{"error": "…必须是整数：…"}`（v0.7.0 前是 500；G26 已修）。
 - `?token=` 会进日志（SSE 的硬需求），公网部署请让反代过滤该 query。
 - `/state` 是**全量快照**（按 G1 地图可见性过滤），不做隐身实体过滤；
   隐身过滤目前只作用于感知工具与 `/scene`（见 `GAPS.md` G12 尾巴）。
