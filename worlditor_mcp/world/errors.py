@@ -13,3 +13,15 @@ from __future__ import annotations
 
 class WorldError(Exception):
     """世界动作的业务错误（非法方向、实体不存在、数据格式非法等），消息可直接展示。"""
+
+
+class IncompatibleDataError(WorldError):
+    """数据目录里的**既有内容**与当前版本不兼容（拒绝启动，不做迁移）。
+
+    与 ``WorldError`` 的区别只在**谁该被怪罪**：``WorldError`` 是"这次动作不合法"
+    （改输入即可），本类是"这份数据这个版本读不了"——按 D13 不迁移，唯一出路是
+    删除数据目录重建，所以消息里带**表 / 行键 / 字段 / 该删哪个文件**。
+
+    由 ``WorldStore._load_all`` 在启动期抛出；``cli`` 捕获它并打印指引而**不打栈**：
+    一屏 traceback 里的信息量只有最后一句话，而运维真正需要的是"删哪个文件"。
+    """

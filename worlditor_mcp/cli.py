@@ -72,7 +72,15 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "serve":
         _setup_logging(args.verbose)
         settings = _settings_from_args(args)
-        asyncio.run(_serve(settings))
+        from .world.errors import IncompatibleDataError
+
+        try:
+            asyncio.run(_serve(settings))
+        except IncompatibleDataError as e:
+            # 数据不兼容（D13：不迁移）：打**处理指引**，不打栈。栈里唯一有用的
+            # 信息是最后那句"（收到 str）"，而运维真正要回答的是"删哪个文件"。
+            print(f"\nworlditor 启动中止\n\n{e}\n", file=sys.stderr)
+            raise SystemExit(1) from None
 
 
 def _settings_from_args(args: argparse.Namespace) -> Settings:
@@ -120,7 +128,13 @@ async def _serve(settings: Settings) -> None:
     from .world.mcp.http import WorldHttpServer
 
     service = WorlditorService(settings)
-    await service.start()
+    try:
+        await service.start()
+    except Exception:
+        # 启动失败（数据不兼容 / 端口被占 / 权限不足…）：先把已开的东西关掉，
+        # 别把 SQLite 连接与心跳任务挂着——失败路径同样属于生命周期。
+        await service.stop()
+        raise
     servers = [
         WorldHttpServer(service.build_app(), host=settings.host, port=settings.port)
     ]

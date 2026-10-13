@@ -5,23 +5,30 @@
 同一份数据两种写法必然引出"读进来是文本、存回去结构变了"的静默丢失
 （G24/G28 家族），而静默丢字段正是 D23 要根除的东西。
 
-本模块守住三条：
+本模块守住四条：
 1. 只认结构化对象：字符串 / 非对象 / 空 periods / 坏时段 / 坏条目**全部报错**；
 2. 报错是 `WorldError`（管理端 400 + 可读文案），不是 500；
-3. `to_dict()` → `parse_text_schedule()` 是无损往返（格式自洽）。
+3. `to_dict()` → `parse_text_schedule()` 是无损往返（格式自洽）；
+4. **启动期**读到库里的不兼容老数据（如 v0.1.x 播种路径留下的纯字符串描述）：
+   拒绝启动**并把话说到位**——`IncompatibleDataError` 指出表/行键/字段与
+   "删哪个文件重建"。拒绝 ≠ 迁移：本版本不提供任何转换（D13）。
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import sqlite3
 from pathlib import Path
 
 import httpx
 import pytest
 from world_fixtures import schedule, seed_test_world
 
+from worlditor_mcp import cli
 from worlditor_mcp.admin import build_admin_app
 from worlditor_mcp.world.engine import WorldEngine, WorldError
+from worlditor_mcp.world.errors import IncompatibleDataError
 from worlditor_mcp.world.identity import IdentityService
 from worlditor_mcp.world.model import parse_text_schedule
 from worlditor_mcp.world.store import WorldStore
@@ -261,8 +268,6 @@ def test_location_template_text_is_validated_at_save_time(tmp_path):
 
 def test_demo_world_uses_structured_descriptions():
     """内置世界包的数据文件也只写结构化格式（别再出现纯文本描述）。"""
-    import json
-
     world_json = (
         Path(__file__).resolve().parent.parent
         / "worlditor_mcp"
@@ -279,3 +284,176 @@ def test_demo_world_uses_structured_descriptions():
             for path in slot.get("paths") or []:
                 if path.get("label") is not None:
                     assert isinstance(path["label"], dict), loc["name"]
+
+
+# ---------- 启动期：库里的不兼容数据 → 拒绝，但把话说到位 ----------
+#
+# 场景来源（真事）：v0.1.x 有两条播种路径，`store.py` 那条写结构化、
+# `v4store.py` 那条直接 `json.dumps(字符串)`，两者共用同一个 world.db。v0.5.2 收紧
+# 解析器后，这种库**启动即崩**，而崩出来的是一屏 60 行 traceback —— 运维能拿到的
+# 唯一信息是最后那句"（收到 str）"。这里的验收点就是：**仍然拒绝**（不迁移、
+# 不静默容忍），但错误本身要指明「哪张表哪一行哪个字段」与「删哪个文件重建」。
+
+# v0.1.0 `v4store._seed_world` 写进去的那一行（原样抄自 git show v0.1.0）
+_LEGACY_SEED = (
+    "INSERT OR REPLACE INTO maps(id, name, description_json, timezone,"
+    " spawn_row, spawn_col, visible) VALUES(?, ?, ?, ?, 0, 0, 'public')",
+    (
+        "default",
+        "主世界",
+        json.dumps(
+            "由广场、步行街、AstrBot大道、开源小区与迷雾森林组成的世界。",
+            ensure_ascii=False,
+        ),
+        "Asia/Shanghai",
+    ),
+)
+
+
+def _poison(tmp_path: Path, sql: str, params: tuple) -> Path:
+    """建一个正常库，再注入一行"这个版本读不了"的内容（模拟旧数据）。"""
+    db = tmp_path / "world.db"
+
+    async def fn():
+        store = WorldStore(db)
+        await store.initialize()
+        await store.close()
+
+    _run(fn())
+    con = sqlite3.connect(db)
+    con.execute(sql, params)
+    con.commit()
+    con.close()
+    return db
+
+
+def _boot(db: Path) -> None:
+    """再开一次库（等价于"下次启动"）；读不了就抛 IncompatibleDataError。"""
+
+    async def fn():
+        store = WorldStore(db)
+        try:
+            await store.initialize()
+        finally:
+            await store.close()
+
+    _run(fn())
+
+
+def test_legacy_plain_string_description_refuses_to_start(tmp_path):
+    """旧库的纯字符串地图描述：启动拒绝，且指明表/行键/字段 + 处理方式。"""
+    db = _poison(tmp_path, *_LEGACY_SEED)
+    with pytest.raises(IncompatibleDataError) as err:
+        _boot(db)
+    msg = str(err.value)
+    assert "maps.id='default'" in msg  # 哪张表哪一行
+    assert "description" in msg  # 哪个字段
+    assert "不迁移" in msg  # 结论没变：拒绝，不转换
+    assert str(db) in msg  # 删哪个文件（绝对路径）
+    assert ".old" in msg  # 想留档怎么办
+
+
+def test_legacy_description_is_not_silently_tolerated(tmp_path):
+    """拒绝 ≠ 静默容忍：抛错时**一个字段都没改**（不做任何偷偷的降级）。"""
+    db = _poison(tmp_path, *_LEGACY_SEED)
+    with pytest.raises(IncompatibleDataError):
+        _boot(db)
+    con = sqlite3.connect(db)
+    raw = con.execute("SELECT description_json FROM maps").fetchone()[0]
+    con.close()
+    assert json.loads(raw) == json.loads(_LEGACY_SEED[1][2])  # 原样还在
+
+
+def test_legacy_location_description_names_row(tmp_path):
+    """地块描述是纯字符串：错误里带 (map_id, row, col) 与字段名。"""
+    db = _poison(
+        tmp_path,
+        "INSERT INTO locations(map_id, row, col, name, description_json,"
+        " conns_json) VALUES('default', 3, 4, '旧客栈', ?, '{}')",
+        (json.dumps("炉火终日不熄。", ensure_ascii=False),),
+    )
+    with pytest.raises(IncompatibleDataError) as err:
+        _boot(db)
+    msg = str(err.value)
+    assert "row=3" in msg and "col=4" in msg
+    assert "description" in msg
+
+
+def test_legacy_path_label_names_the_exact_slot(tmp_path):
+    """连接路径 label 是纯字符串：错误指到 `connections.<方向>.paths[i].label`。
+
+    方向必须用合法值（up/down/left/right）——非法方向键在载入时被**静默忽略**
+    （`parse_location` 只解析 DIRECTIONS 里的槽位），所以用它当反例会让这条
+    测试变成"什么都没发生"。
+    """
+    conns = json.dumps(
+        {
+            "up": {
+                "direction": "up",
+                "enabled": True,
+                "paths": [
+                    {
+                        "reveal_target": True,
+                        "label": "向北的小路",
+                        "targets": [
+                            {"map_id": "default", "row": -1, "col": 0, "weight": 1.0}
+                        ],
+                    }
+                ],
+            }
+        },
+        ensure_ascii=False,
+    )
+    db = _poison(
+        tmp_path,
+        "INSERT INTO locations(map_id, row, col, name, description_json,"
+        " conns_json) VALUES('default', 0, 0, '小镇广场', NULL, ?)",
+        (conns,),
+    )
+    with pytest.raises(IncompatibleDataError) as err:
+        _boot(db)
+    assert "connections.up.paths[0].label" in str(err.value)
+
+
+def test_corrupt_json_column_is_reported_as_such(tmp_path):
+    """列里根本不是合法 JSON（截断/手改坏了）→ 说"不是合法 JSON"，不是栈。"""
+    db = _poison(
+        tmp_path,
+        "INSERT INTO maps(id, name, description_json, timezone, spawn_row,"
+        " spawn_col, visible) VALUES('default', '主世界', ?, NULL, 0, 0, 'public')",
+        ('{"periods": [{"start": "00:00"',),
+    )
+    with pytest.raises(IncompatibleDataError) as err:
+        _boot(db)
+    msg = str(err.value)
+    assert "不是合法 JSON" in msg
+    assert "maps.id='default'" in msg
+
+
+def test_healthy_database_still_boots(tmp_path):
+    """反向守卫：正常库（结构化文案）跨重启照常载入——别把检查做成误报。"""
+
+    async def fn():
+        engine = await _engine(tmp_path)
+        await seed_test_world(engine)
+        await engine.create_location(
+            "default", 2, 2, "茶馆", description=schedule("茶香扑鼻")
+        )
+        await engine.terminate()
+
+    _run(fn())
+    _boot(tmp_path / "world.db")
+
+
+def test_cli_reports_remedy_without_traceback(tmp_path, capsys):
+    """CLI 端到端：启动中止 → 打指引、退出码 1、**不打栈**。"""
+    db = _poison(tmp_path, *_LEGACY_SEED)
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["serve", "--data-dir", str(tmp_path), "--admin-port", "0"])
+    assert exit_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "worlditor 启动中止" in err
+    assert "maps.id='default'" in err
+    assert "不迁移" in err
+    assert str(db) in err
+    assert "Traceback" not in err

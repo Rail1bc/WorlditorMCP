@@ -17,6 +17,7 @@ from typing import Any
 
 import aiosqlite
 
+from .errors import IncompatibleDataError, WorldError
 from .identity import Account, TokenInfo
 from .model import (
     Entity,
@@ -34,6 +35,7 @@ from .model import (
     location_to_dict,
     parse_location,
     parse_map,
+    parse_text_schedule,
 )
 
 # 表结构版本（沿用 v4 引擎表布局；D13 无迁移逻辑，仅写入 world_meta 记录。
@@ -56,6 +58,51 @@ def _int_or_zero(value: object) -> int:
         return max(0, int(str(value)))
     except (TypeError, ValueError):
         return 0
+
+
+# ---------- 不兼容数据的定位（只在启动失败路径调用） ----------
+#
+# 语义：**严格拒绝，不做迁移**（D13）。这一组函数不改变"拒绝"这个结论，只负责把
+# 「哪一行、哪个字段读不了」指出来——否则运维拿到的是一屏 60 行 traceback，而真正
+# 有用的信息只有最后一句"（收到 str）"。
+#
+# 做法：把该行**逐字段单独解析一遍**，谁抛错就报谁。只在已经确定失败时执行，
+# 所以正常启动路径上一分钱不花。
+
+_PARSE_ERRORS = (WorldError, ValueError, TypeError)
+
+
+def _bad_map_field(description: Any) -> str:
+    """地图行里的坏字段名（`description` 或"整行"= 行本身不合法）。"""
+    if description is not None:
+        try:
+            parse_text_schedule(description)
+        except _PARSE_ERRORS:
+            return "description"
+    return "整行（id / 名称 / 出生点等）"
+
+
+def _bad_location_field(payload: dict) -> str:
+    """地块行里的坏字段名（描述 → 各方向路径的 label → 整行）。"""
+    description = payload.get("description")
+    if description is not None:
+        try:
+            parse_text_schedule(description)
+        except _PARSE_ERRORS:
+            return "description"
+    connections = payload.get("connections")
+    if isinstance(connections, dict):
+        for direction, slot in connections.items():
+            if not isinstance(slot, dict):
+                continue
+            for index, path in enumerate(slot.get("paths") or []):
+                if not isinstance(path, dict) or path.get("label") is None:
+                    continue
+                try:
+                    parse_text_schedule(path["label"])
+                except _PARSE_ERRORS:
+                    return f"connections.{direction}.paths[{index}].label"
+    return "整行（行列号 / 名称 / 连接结构等）"
 
 
 # ---------- 表 SQL ----------
@@ -320,47 +367,87 @@ class WorldStore:
 
     # ---------- 全量载入 ----------
 
+    def _incompatible_error(
+        self, where: str, field: str, cause: Exception
+    ) -> IncompatibleDataError:
+        """构造「数据不兼容」的启动错误：指明位置 + 处理方式（不迁移）。"""
+        return IncompatibleDataError(
+            f"数据不兼容：{where} 的 {field} 读不了 —— {cause}\n"
+            f"本版本不迁移历史数据（DESIGN D13）。"
+            f"处理：删除 {self.db_path} 后重新启动"
+            f"（想先留档就 mv 到 {self.db_path}.old）。\n"
+            "注意：删除会一并清空地图、地块、实体与账户，重建后需重新注册管理员。"
+        )
+
+    def _load_json_field(self, raw: Any, where: str, field: str) -> Any:
+        """启动期读 JSON 列：坏值 → 不兼容错误（而不是裸 JSONDecodeError）。"""
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except ValueError as e:
+            raise self._incompatible_error(where, f"{field}（不是合法 JSON）", e) from e
+
     async def _load_all(self) -> None:
         assert self._conn is not None
         self.maps = {}
         self.loc_by_pos = {}
         cur = await self._conn.execute("SELECT * FROM maps")
         for row in await cur.fetchall():
-            m = parse_map(
-                {
-                    "id": row["id"],
-                    "name": row["name"],
-                    "description": json.loads(row["description_json"])
-                    if row["description_json"]
-                    else None,
-                    "timezone": row["timezone"],
-                    "spawn_row": row["spawn_row"],
-                    "spawn_col": row["spawn_col"],
-                    "visible": row["visible"],
-                }
+            where = f"maps.id={row['id']!r}"
+            description = self._load_json_field(
+                row["description_json"], where, "description"
             )
+            try:
+                m = parse_map(
+                    {
+                        "id": row["id"],
+                        "name": row["name"],
+                        "description": description,
+                        "timezone": row["timezone"],
+                        "spawn_row": row["spawn_row"],
+                        "spawn_col": row["spawn_col"],
+                        "visible": row["visible"],
+                    }
+                )
+            except _PARSE_ERRORS as e:
+                raise self._incompatible_error(
+                    where, _bad_map_field(description), e
+                ) from e
             self.maps[m.id] = m
         cur = await self._conn.execute("SELECT * FROM locations")
         for row in await cur.fetchall():
-            loc = parse_location(
-                {
-                    "map_id": row["map_id"],
-                    "row": row["row"],
-                    "col": row["col"],
-                    "name": row["name"],
-                    "description": json.loads(row["description_json"])
-                    if row["description_json"]
-                    else None,
-                    "connections": json.loads(row["conns_json"] or "{}"),
-                }
+            where = (
+                f"locations(map_id={row['map_id']!r}, "
+                f"row={row['row']}, col={row['col']})"
             )
+            payload = {
+                "map_id": row["map_id"],
+                "row": row["row"],
+                "col": row["col"],
+                "name": row["name"],
+                "description": self._load_json_field(
+                    row["description_json"], where, "description"
+                ),
+                "connections": self._load_json_field(
+                    row["conns_json"], where, "connections"
+                )
+                or {},
+            }
+            try:
+                loc = parse_location(payload)
+            except _PARSE_ERRORS as e:
+                raise self._incompatible_error(
+                    where, _bad_location_field(payload), e
+                ) from e
             self.loc_by_pos[(loc.map_id, loc.row, loc.col)] = loc
         cur = await self._conn.execute("SELECT * FROM templates")
         for row in await cur.fetchall():
+            where = f"templates.id={row['id']!r}"
             self.templates[row["id"]] = WorldTemplate(
                 id=row["id"],
                 name=row["name"],
-                data=json.loads(row["data_json"] or "{}"),
+                data=self._load_json_field(row["data_json"], where, "data") or {},
                 scope=row["scope"] or "location",
             )
         cur = await self._conn.execute("SELECT * FROM entities")
