@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 import pytest
 import uvicorn
+from play_fixtures import install_demo_play
 from world_fixtures import seed_test_world
 
 from worlditor_mcp.world.engine import WorldEngine
@@ -94,10 +95,11 @@ def test_read_tier_rejected_play_tier_allowed(tmp_path):
         engine = WorldEngine(WorldStore(tmp_path / "world.db"))
         await engine.initialize()
         await seed_test_world(engine)  # 内核不再内置世界内容（v0.2.0）
+        install_demo_play(tmp_path / "plays")  # v0.7.0：工具来自夹具玩法包
         loader = PlayLoader(
             engine, plays_dir=tmp_path / "plays", builtin_dir=BUILTIN_DIR
         )
-        await loader.load_all()  # world_look / world_say 等工具来自玩法包
+        await loader.load_all()
         identity = IdentityService(engine, auth_mode="open")
         mcp = build_mcp_server(engine)
         engine.attach_mcp(mcp)
@@ -123,10 +125,10 @@ def test_read_tier_rejected_play_tier_allowed(tmp_path):
             async with httpx.AsyncClient(
                 base_url=f"http://127.0.0.1:{port}", timeout=20.0, trust_env=False
             ) as client:
-                denied = await _call_tool(client, read.token, "world_look", {})
+                denied = await _call_tool(client, read.token, "world_whoami", {})
                 assert "围观" in denied.get("text", ""), denied
-                allowed = await _call_tool(client, player.token, "world_look", {})
-                assert "中央广场" in allowed.get("text", ""), allowed
+                allowed = await _call_tool(client, player.token, "world_whoami", {})
+                assert "我是" in allowed.get("text", ""), allowed
         finally:
             server.should_exit = True
             await asyncio.wait_for(task, timeout=10)

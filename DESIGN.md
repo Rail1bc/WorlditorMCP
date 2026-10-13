@@ -18,7 +18,7 @@
 ## 1. 架构总览
 
 ```
-玩法包 worlditor_play_*（内置领域包 ×6 + 社区包）
+玩法包 worlditor_play_*（社区包；内置只剩世界内容包 ×1——v0.7.0 起行为包全部外置，D31）
   ├─ 行为：on_tick 状态机 / 事件订阅 / 交互 handler / 自定义事件
   │        （执行顺序由 phase/order 声明，D27——不再依赖包加载序）
   ├─ 规则：视野 / 广播 / 行为编排 —— query_entities 按标签/世界/变更游标
@@ -360,8 +360,9 @@ class ItemDef:
   （同 D2 风格：显式错误，不做静默级联）
 
 **物理位置（G4）**：
-- 内置包：服务包内 `worlditor_mcp/builtin_plays/`（6 个领域包），随服务版本分发；
-  管理视为只读——可停用、不可 uninstall
+- 内置包：服务包内 `worlditor_mcp/builtin_plays/`（v0.7.0 起只剩**世界内容包**
+  `worlditor_play_demo_world`——它只导入示例世界数据，不注册工具/视图/服务/过滤器），
+  随服务版本分发；管理视为只读——可停用、不可 uninstall
 - 社区包：`<数据目录>/plays/`，完整管理能力；PlayLoader 扫描两条路径，
   加载管线共用
 
@@ -470,7 +471,8 @@ class ItemDef:
   以 `(function (Vue, UiBlock) {` 开头、`});` 收尾
 - **视图内 MCP 调用必须管理会话**：streamable HTTP 先 `initialize` 取
   `Mcp-Session-Id` 头，后续 `tools/call` 带上（否则 400 Missing session ID）；
-  实现见内置包 `web/*.js` 的 `ensureSession()`
+  实现见参考组件 `tests/fixtures/plays/worlditor_play_demo/web/view.js` 的
+  `ensureSession()`（仓库里唯一提交在案的视图组件，玩法包照此写法）
 - **provider 形态**：`provider = {type: "component", url: "web/xxx.js"}`——WebUI
   按需动态加载组件入口（玩法包自有资源 `web/`）；**url 必须为站内本包资源**
   （`/plays/<play_id>/web/…`，内核校验——WebUI fetch 时附 Bearer，跨站地址
@@ -522,27 +524,32 @@ class ItemDef:
 
 ```
 内核 Entity（kind=player：id/位置/name/desc/attrs/state/user_id）——玩家"存在"
-   ├─ worlditor_play_player     玩家壳：角色视图 + world_profile（零包间依赖）
+   ├─ 玩家壳包（如角色视图 + 角色卡工具）：零包间依赖，只描述"我是谁"
    └─ 部件（可追加，按 entity_id 键控）：
-        ├─ worlditor_play_starter   出生礼包（阶段 1 拆分，硬依赖 items——发货需要）
-        ├─ worlditor_play_items     背包（数据 = 玩家级 KV，跨世界跟人走）
-        ├─ worlditor_play_skills    技能树（未来，同模式）
-        └─ worlditor_play_equipment 装备栏（未来，同模式）
+        ├─ 出生礼包包   新玩家礼包（硬依赖背包包的服务——发货需要）
+        ├─ 背包包       持有数据 = 玩家级 KV，跨世界跟人走
+        ├─ 技能树包     技能树（同模式）
+        └─ 装备栏包     装备栏（同模式）
 ```
+
+> **v0.7.0（D31）**：上面四个部件位与玩家壳原本由内置包示范
+> （`worlditor_play_player` / `starter` / `items`），这些包已废弃——本节保留的是
+> **部件模式的设计**（结论仍然成立、仍然推荐），实现归社区包；可照抄的活例子见
+> §6「参考实现」（夹具包示范了"产出 character 块 + ui_hook 展开"这条聚合链）。
 
 **部件 = 玩法包 + 四项声明**：
 | 维度 | 约定 |
 |---|---|
 | 数据 | `play_data` KV，namespace = 部件包 play_id、key 含 entity_id（如 `bag:<eid>`）；**默认玩家级（跨世界跟人走，不传 world_id）**，世界级隔离为可选（传 world_id，D15 双层隔离） |
 | 服务 | 部件能力出口（bag_add/take/count/get…），供消费方软探测/调用（`list_services` + `call_service`） |
-| 工具/视图 | 部件自带 MCP 工具与视图（独立 tab）；**注入玩家聚合视图**：items 包向玩家壳的 character 角色卡注册 `ui_hook`（after）追加部件面板（背包面板 = list 子块，服务端展开）——玩家视图 = 角色卡 + 各包 hook 追加的面板，无需修改 player 包 |
+| 工具/视图 | 部件自带 MCP 工具与视图（独立 tab）；**注入玩家聚合视图**：部件包向玩家壳的 `character` 角色卡注册 `ui_hook`（after）追加部件面板（如背包面板 = list 子块，服务端展开）——玩家视图 = 角色卡 + 各包 hook 追加的面板，**无需修改玩家壳包** |
 | 生命周期 | 随包启停/卸载——停用即从玩家身上"卸下"该部件；数据保留（disable 不清 KV） |
 
 **依赖规则**：
 - **追加不产生依赖**：部件信息由部件包自己的工具/服务公开（背包文本 =
-  world_bag 工具）；面板 UI 由部件包 ui_hook 注入——**玩家壳零部件引用**
+  背包工具）；面板 UI 由部件包 ui_hook 注入——**玩家壳零部件引用**
   （不 import、不探测、不调用）；`requires.plays` 只用于"需要其原子能力才
-  能工作"的硬依赖（如 starter 发货必须 items 服务）
+  能工作"的硬依赖（如出生礼包包发货必须调背包包的服务）
 - **身份与位置永不依赖部件**：实体存在/移动/身份永远可用（层面归属内核）
 
 **落地状态**：阶段 1 = starter 拆分 + player 零依赖壳（✅ 已落地）；阶段 3 =
@@ -581,39 +588,51 @@ class ItemDef:
 
 ## 5. 行为归属（谁提供什么）
 
+**v0.7.0（D31）起：内置不提供任何行为能力**——下表"玩法包"一律指社区包（或测试
+夹具包）；内核只保留与身份、数据、管理、扩展入口有关的部分。
+
 | 行为 | 提供者 |
 |---|---|
 | 路径移动（默认） | 内核 `move`（可被玩法包覆盖，D11） |
-| 朝向/相对方向移动（第一人称、前进后退…） | 玩法包自定（`override_primitive("move")` 或过滤器链改参 G14）——**内核与内置包均无朝向概念**（v0.1.18：内置 movement 只做绝对方向移动 + 方向别名归一） |
-| 说话：cell 规则 / world 广播（喇叭+冷却） | social 包（D1：内核无 say；喇叭 = 内核物品定义 + 本包持有） |
-| 背包模型 / 整理 / 物品 use 规则 | items 包（D8：持有全下沉） |
-| 视野视图（3×3 或任意形态） | movement 包（register_view） |
-| 玩家出生礼包 | starter 包（阶段 1 从 player 拆分；可停用=无礼包，可替换=自定义礼包） |
-| 角色视图 / world_profile | player 包（零依赖壳；背包摘要软依赖，§4.5） |
-| 交互弹窗编排 / 动作菜单 | interaction 包 |
-| 种子演示实体（商贩/告示牌/木门）的 kind 与交互 | interaction 包（实体由**世界包**放置：worlditor_play_demo_world——v0.2.0 起内核不播种任何世界内容） |
-| 日志视图 | social 包 |
+| 朝向/相对方向移动（第一人称、前进后退…） | 玩法包自定（`override_primitive("move")` 或过滤器链改参 G14）——**内核无朝向概念** |
+| 说话/广播、背包与物品使用、视野视图、交互编排与动作菜单、出生礼包、角色卡 | **玩法包**（v0.7.0 前由内置领域包示范：social / items / movement / interaction / starter / player——这些包已废弃，D31；相应行为与数据模型完全归社区包，内核不提供替代品） |
+| 世界日志（数据） | 内核（`list_world_log` / SSE）；日志**视图**归玩法包 |
 | 登录/注册/身份 | 内核 |
 | 世界/组织树管理（CRUD/激活配置） | 内核（admin，管理端口，D15） |
 | 地图编辑 / 玩法包管理 UI | 内核（admin 人类入口；玩法包经 API 程序化编辑，D14） |
 | 账户管理（检索/凭据/角色） | 内核（admin，管理端口；v0.1.12 检索分页） |
 | 玩法包内容治理（物品定义等） | 玩法包管理页（§4.6：actions 自管，内核代理） |
 
-## 6. 内置领域包（6 个，默认启用，D5）
+## 6. 内置包（1 个世界内容包，默认启用，D5 / D31）
 
 | 玩法包 | 领域 | 贡献 |
 |---|---|---|
-| `worlditor_play_items` | 背包与物品使用（持有下沉，D8） | 背包模型自定（有限格子/单物品多格/堆叠/整理）、物品 use 规则、背包视图、world_bag/world_use 工具；注册基础物品定义（苹果等）并声明字段；**物品管理页**（管理端注册协议，§4.6） |
-| `worlditor_play_starter` | 出生礼包（部件，§4.5） | 新玩家出生礼包（金币 + 物品，attrs 标记只发一次）；可停用/可替换 |
-| `worlditor_play_player` | 玩家 | 玩家壳（零依赖）：角色视图、world_profile 工具（背包摘要为软依赖）；出生礼包见 starter |
-| `worlditor_play_movement` | 移动与视野 | 默认移动 = 内核 move；视野视图（3×3）、world_look/world_move/world_who 工具；可按需 override move |
-| `worlditor_play_interaction` | 交互 | 交互弹窗编排、动作菜单、world_interact 工具；注册种子演示实体的 kind 与交互（merchant/sign/door：talk/trade/read/open） |
-| `worlditor_play_social` | 说话与广播 | cell 说话 / world 广播（喇叭 = 内核物品定义，本包持有 + 冷却自管，D1）、world_say 工具、日志视图 |
+| `worlditor_play_demo_world` | 世界内容（示例） | 导入示例主世界（41 地块：广场 / 步行街 / 迷雾森林 + 商贩·阿福 / 告示牌 / 木门）；**只提供数据**，不注册工具 / 视图 / 服务 / 过滤器 / kind |
 
-**协作模型：事件驱动，零包间调用**——移动包更新位置 → 内核发 `on_entity_move`
-→ 视野/日志包各自订阅刷新。包只依赖内核数据与事件，不依赖其他包存在与否；
-删除任何包世界照常运行（只是少对应能力）。加载顺序只影响"能力何时可用"，
-不影响正确性（事件在包加载后订阅，错过的事件由快照兜底）。
+**行为玩法包不再内置**（v0.7.0 / D31）：移动、背包、说话、交互、玩家档、出生礼包
+全部外置——内置目录里没有"官方玩法"，内核只保证数据、身份、扩展入口、管理。
+
+**协作模型（v0.7.0 修订）**：包之间**允许**三种关系，按耦合强度递增——
+
+1. **事件**（默认，最松）：包订阅内核事件、发自定义事件，彼此不知道对方存在。
+   加载顺序只影响"能力何时可用"，不影响正确性（错过的事件由快照兜底）。
+2. **软依赖**：靠"注册物在不在"自然降级——例如 ui_hook 注册了才注入面板，
+   没注册就没有那块 UI，双方都不需要探测对方。
+3. **硬依赖**：`requires.plays` + 跨包服务调用（`call_service`）——加载器按拓扑
+   先加载被依赖者；停用被依赖者会被**显式拒绝**（D2 风格，不静默级联）。
+
+> **据实修订**：本节早期写的是"协作模型：事件驱动，**零包间调用**……删除任何包
+> 世界照常运行"。这在 v0.2 成立，但 D8/M3 引入**跨包服务机制**后已不成立——
+> 现在确有包间硬依赖（如出生礼包发货必须调背包服务）。仍然成立的是：**关系 1
+> 足够写出完整玩法**，包只依赖内核数据与事件即可工作；关系 2/3 是可选增强，
+> 代价是引入包间契约（名字级耦合，目前无声明机制，见 GAPS G39）。
+
+**参考实现**：行为玩法包的参考实现是**测试夹具包**（提交在案、随测试演进）——
+`tests/fixtures/plays/worlditor_play_demo/`（视图组件与管理页组件参考），
+夹具 Python 代码在 `tests/play_fixtures.py`（`install_demo_play()` 装进临时目录）。
+它各示范一件：MCP 工具（`world_whoami`）、视图、管理页、物品定义、`character`
+块产出 + ui_hook 展开、世界事件、kind 与交互。另有更小的探针包
+（`install_probe_play()`：工具 + 视图），供世界激活过滤类测试做对照。
 
 ## 7. 服务形态与迁移状态
 
@@ -673,7 +692,7 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
    构建推送 ghcr.io/rail1bc/worlditor）——v0.1.0 起已多次走通
 ```
 
-## 9. 决策记录（D1–D30，已全部确认）
+## 9. 决策记录（D1–D31，已全部确认）
 
 > **编号说明（读文档前先看这三行）**：
 > - `D*` = 本文件的决策号，唯一权威，一条一个结论。
@@ -717,6 +736,7 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 | D28 | 变更检测 | **落库那一刻盖章**：实体 `revision`（全局单调写序号，`save_entities` 是唯一盖章点，写入路径不可能漏盖）+ `changed_tick`（tick 窗口，`_tick_once` 每轮 +1，无订阅者也算）。全局号与业务写**同事务**落 `world_meta`，启动在**任何写之前**续号 → 重启不回退（漏报唯一不可接受）。两个游标：`changed_since_revision`（精确）/ `changed_since_tick`（窗口粒度，宁可多报）。出口：`/state` 顶部 + 实体字段 + SSE payload。**不做**字段级脏标记/事件溯源（需要时再说） |
 | D29 | 删字段原语 | **新增 `remove_data`（进分派表：可被过滤/覆盖/禁用）与 `remove_state`**——D23"不静默丢字段"的另一半：能**明确地删**，而不是只能"整体覆盖 attrs"顺手连坐别人的字段。字段不存在 = 幂等返回 False（不落盘、不发事件、不推进变更号）；删除发 `on_entity_changed {attrs_removed:[name]}` |
 | D30 | 与 ECS 的关系 | **不改成 ECS**：数据模型这一半已在门口（实体 + 可组合的能力单元 + 数据容器），执行模型是另一条路（事件/插件 + 中间件分派 + 单锁串行）。补 **A–D 四项**（D26 查询 / D27 调度 / D29 删字段 / D28 变更检测）让玩法包能用 ECS 式写法；**明确不采纳 E**：组件独立存储 / archetype / SoA / 并行系统执行（规模不需要、与"每字段改动都要落盘 + 批量写红线"直接冲突）。**不采纳的硬理由**：ECS 会把 query 语义、组件 schema 归属、系统顺序这三样**策略**塞回内核（撞 §2.3 红线），且 ECS 无对应物承载 D21 世界激活过滤这一治理层。详见 §11 |
+| D31 | 内置行为玩法包废弃 | **删除全部 6 个内置领域包**（items / movement / social / interaction / player / starter）及其包自身测试；内置目录只留世界内容包 `worlditor_play_demo_world`。**理由**：① 它们是按"内核机制逐项验收"切的（M3：一个机制一个包），**不是按玩法切的**——留作社区参考实现会教错地基；② 包间契约（属性键 / `play_data` key / UiBlock kind / 工具名引用）在系统里**没有表示**，包一多就不可见、不可校验、不可查询（GAPS **G39**）；③ 机制覆盖不依赖它们——覆盖在 `test_engine` / `test_filters` / `test_services` / `test_play_runtime` / `test_admin_pages` 等**外壳测试**里，行为集成覆盖移交夹具包。**替代**：夹具包 `tests/fixtures/plays/worlditor_play_demo/`（视图与管理页组件参考**提交在案**）+ `tests/play_fixtures.py`；E2E 把夹具包装进烟雾环境。**代价（如实记录）**：仓库不再有内置"官方玩法"示例，`docs/PLAY_DEV.md` 的示例指向夹具包；玩法包视图组件的版本串守卫改指夹具组件 |
 
 > **G 系列缺口实现**（详见 GAPS.md）：G1 地图可见性（private 在场可见）、G2 delete_map、
 > G11 工具数组参数、G12 感知隐身过滤、G14 通用原语过滤器链——已全部落地。

@@ -38,7 +38,9 @@ ATTR_SEE_INVISIBLE = "see_invisible"
 """attrs：真视——viewer 带此字段为真时可看见 invisible 实体。"""
 
 # 方向 ↔ 坐标偏移（行, 列）：up=行-1 / down=行+1 / left=列-1 / right=列+1。
-# 权威定义；前端视图组件（worlditor_play_movement/web/view.js）按此约定渲染网格。
+# 权威定义；前端视图组件按此约定渲染网格（参考实现：
+# tests/fixtures/plays/worlditor_play_demo/web/view.js——原生内置视图组件已随
+# 内置玩法包一并废弃，v0.7.0）。
 DIR_OFFSETS: dict[str, tuple[int, int]] = {
     "up": (-1, 0),
     "down": (1, 0),

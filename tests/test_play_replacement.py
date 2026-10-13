@@ -21,16 +21,54 @@ from worlditor_mcp.world.store import WorldStore
 
 BUILTIN_DIR = Path(__file__).resolve().parent.parent / "worlditor_mcp" / "builtin_plays"
 WARP_ID = "worlditor_play_warp"
+MOVER_ID = "worlditor_play_mover"
 
-BUILTIN_IDS = (
-    "worlditor_play_demo_world",
-    "worlditor_play_movement",
-    "worlditor_play_items",
-    "worlditor_play_player",
-    "worlditor_play_interaction",
-    "worlditor_play_social",
-    "worlditor_play_starter",
-)
+# v0.7.0：内置玩法包已废弃，内置目录只剩世界内容包（它不注册过滤器/工具/视图）。
+BUILTIN_IDS = ("worlditor_play_demo_world",)
+
+_MOVER_MAIN = '''"""测试过滤器玩法包：给 move 挂一条过滤器（G14 互斥场景的提供方）。"""
+
+from __future__ import annotations
+
+from worlditor_mcp.world.play.api import WorlditorPlayAPI
+
+_ALIASES = {"上": "up", "下": "down", "左": "left", "右": "right"}
+
+
+def setup(api: WorlditorPlayAPI, context) -> None:
+    """入口：登记 move 过滤器（原语覆盖/禁用的互斥方）。"""
+    api.register_primitive_filter("move", _normalize, label="方向别名归一")
+
+
+async def _normalize(api: WorlditorPlayAPI, **params) -> dict:
+    """过滤器（改参）：中文方位 → 绝对方向；其余原样放行（纯函数，只读）。"""
+    direction = params.get("direction")
+    if direction in _ALIASES:
+        params["direction"] = _ALIASES[direction]
+    return params
+
+
+def teardown(api: WorlditorPlayAPI) -> None:
+    """卸载：过滤器随生命周期自动清除。"""
+'''
+
+
+def _install_mover(plays_root: Path) -> Path:
+    play_dir = plays_root / MOVER_ID
+    play_dir.mkdir(parents=True, exist_ok=True)
+    (play_dir / "play.yaml").write_text(
+        "name: worlditor_play_mover\n"
+        "display_name: 过滤器玩法\n"
+        "version: 0.1.0\n"
+        "author: test\n"
+        "requires:\n"
+        '  worlditor: ">=0.1.0"\n'
+        "  plays: []\n",
+        encoding="utf-8",
+    )
+    (play_dir / "main.py").write_text(_MOVER_MAIN, encoding="utf-8")
+    return play_dir
+
 
 _WARP_MAIN = '''"""测试替代玩法包：override move = 传送（无视连接，M4 可替换性验证）。"""
 
@@ -108,10 +146,12 @@ def _scenario(db_path, plays_root, fn):
 
 
 def test_override_blocked_while_movement_filter(tmp_path):
-    """movement 包的 move 过滤器在场 → warp 包 override 被拒（G14 互斥）。"""
+    """mover 包的 move 过滤器在场 → warp 包 override 被拒（G14 互斥）。"""
 
     async def fn(engine, loader):
         await loader.load_all()
+        _install_mover(tmp_path / "plays")
+        await loader.enable(MOVER_ID)
         _install_warp(tmp_path / "plays")
         # enable → setup 里 override 被拒 → 加载失败（原因保留在 load_errors）
         with pytest.raises(WorldError, match="玩法包加载失败"):
@@ -122,12 +162,14 @@ def test_override_blocked_while_movement_filter(tmp_path):
 
 
 def test_disable_movement_frees_override(tmp_path):
-    """停用 movement → 过滤器清除 → warp override 成功并生效。"""
+    """停用 mover 包 → 过滤器清除 → warp override 成功并生效。"""
 
     async def fn(engine, loader):
         await loader.load_all()
+        _install_mover(tmp_path / "plays")
+        await loader.enable(MOVER_ID)
         _install_warp(tmp_path / "plays")
-        await loader.disable("worlditor_play_movement")
+        await loader.disable(MOVER_ID)
         assert engine.list_primitive_filters() == []
         await loader.enable(WARP_ID)
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
@@ -147,14 +189,16 @@ def test_disable_replacement_restores_default(tmp_path):
 
     async def fn(engine, loader):
         await loader.load_all()
+        _install_mover(tmp_path / "plays")
+        await loader.enable(MOVER_ID)
         _install_warp(tmp_path / "plays")
-        await loader.disable("worlditor_play_movement")
+        await loader.disable(MOVER_ID)
         await loader.enable(WARP_ID)
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         await engine.move(player.id, "up")  # warp 生效
         await loader.disable(WARP_ID)
-        # 恢复默认：重新启用 movement 后按连接走
-        await loader.enable("worlditor_play_movement")
+        # 恢复默认：重新启用带过滤器的包后按连接走
+        await loader.enable(MOVER_ID)
         await engine.move_entity(player.id, "default", 0, 0)
         scene = await engine.move(player.id, "up")
         assert (scene.row, scene.col) == (-1, 0)  # 连接目标（非 warp 目标）
@@ -166,16 +210,8 @@ def test_disable_replacement_restores_default(tmp_path):
 
 
 async def _disable_all(loader) -> None:
-    """按依赖拓扑从叶子到根停用全部内置包（含世界内容包）。"""
-    for play_id in (
-        "worlditor_play_social",
-        "worlditor_play_player",
-        "worlditor_play_interaction",
-        "worlditor_play_starter",
-        "worlditor_play_items",
-        "worlditor_play_demo_world",
-        "worlditor_play_movement",
-    ):
+    """按依赖拓扑从叶子到根停用全部内置包（v0.7.0：只剩世界内容包）。"""
+    for play_id in (MOVER_ID, *BUILTIN_IDS):
         await loader.disable(play_id)
 
 
@@ -184,6 +220,8 @@ def test_empty_state_world_usable(tmp_path):
 
     async def fn(engine, loader):
         await loader.load_all()  # 含世界包：load_all 时已导入演示世界（41 地块）
+        _install_mover(tmp_path / "plays")
+        await loader.enable(MOVER_ID)  # 带过滤器的包在场（验证停用/启用生命周期）
         await _disable_all(loader)
         assert not loader.plays  # 全部卸载出内存（世界数据保留在库里）
         # 世界仍可编辑
@@ -200,11 +238,11 @@ def test_empty_state_world_usable(tmp_path):
         # 管理端视角：状态列表显示全部 disabled
         status = {s["play_id"]: s["status"] for s in loader.list_plays()}
         assert all(status.get(p) == "disabled" for p in BUILTIN_IDS), status
-        # 重新启用 → 恢复（含依赖拓扑）
-        await loader.enable("worlditor_play_movement")
-        assert "worlditor_play_movement" in loader.plays  # noqa: SLF001
+        # 重新启用 → 恢复（过滤器随包生命周期回来）
+        await loader.enable(MOVER_ID)
+        assert MOVER_ID in loader.plays  # noqa: SLF001
         filters = engine.list_primitive_filters()
-        assert any(f["play_id"] == "worlditor_play_movement" for f in filters)
+        assert any(f["play_id"] == MOVER_ID for f in filters)
 
     _run(_scenario(tmp_path / "world.db", tmp_path / "plays", fn))
 

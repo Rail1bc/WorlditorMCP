@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.7.0（2026-09-25）
+
+**废弃全部内置行为玩法包（BREAKING，D31 / GAPS G39）**——内置目录里不再有"官方玩法"。
+
+### 破坏性变更
+- **删除 6 个内置领域包**：`worlditor_play_items` / `movement` / `social` /
+  `interaction` / `player` / `starter`（1139 行 Python + 1013 行 JS + 其包自身测试
+  43 个）。**内置只剩世界内容包** `worlditor_play_demo_world`（只导入示例世界数据，
+  不注册工具/视图/服务/过滤器/kind）。
+- **影响**：全新安装不再自带背包/视野/说话/交互/角色卡/出生礼包；玩家端默认**没有
+  视图 tab**，世界数据仍在（有地可站）。升级现有实例：这些包的数据（`play_data`）
+  留在库里，但没有任何包再读写它们。
+- **理由**（完整论证见 DESIGN D31 与 GAPS G39）：这些包是按"内核机制逐项验收"切的
+  （M3：一个机制一个包），**不是按玩法切的**；留作社区参考实现会教错地基。同时审计
+  确认：**包间契约（属性键 / `play_data` key / UiBlock kind / 名字引用）在系统里没有
+  任何表示**——不可见、不可校验、不可查询，包一多必然失去控制。
+
+### 覆盖没有跟着被删（本轮的重点工作）
+- **机制覆盖本来就在外壳测试里**，已逐一核实不依赖内置包：`test_engine`
+  （ui_hook before/after/replace/递归）、`test_filters`（过滤器链三态/互斥/遮蔽）、
+  `test_services`（跨包服务/异常隔离/清理）、`test_play_runtime`（视图注册/冲突/清理）、
+  `test_admin_pages` 前四个（管理页协议，用夹具包）。
+- **行为集成覆盖移交夹具包**：`tests/play_fixtures.py` 扩展——物品定义
+  （apple/megaphone）、视图注册、`world_whoami` 产出 `character` 块并 `apply_ui_hooks`
+  展开（部件聚合链）；新增更小的**探针夹具包**（工具 + 视图，供世界激活对照）。
+- **新增提交在案的参考组件**（仓库里唯一的视图/管理页组件，也是文档的活例子）：
+  `tests/fixtures/plays/worlditor_play_demo/web/view.js`（MCP 会话 + `wt-*` 样式约定）
+  与 `web/admin-shop.js`（管理页代理端点）。夹具包安装时**复制**它们，而不是就地写占位符。
+- **两处"目标消失后会静默空转"的守卫改指参考组件**：`test_web_view_styles`
+  （视图组件样式约定）与 `test_version_consistency`（组件上报的 `clientInfo.version`）。
+  两者原本扫 `builtin_plays/*/web/*.js`——包删掉后一个会红、一个会变成空循环。
+- **重指受影响的内核测试**：`test_play_replacement`（原以 movement 包的 `move` 过滤器
+  为互斥方 → 改为内联 mover 夹具包）、`test_world_activation`（原以 `world_look`/
+  `world_say`/三个视图验世界激活 → 改为夹具包 demo + probe 对照）、`test_mcp_tier`
+  （原调 `world_look` → 改调夹具工具）、`test_admin_pages`（G31「停用保留用户物品
+  定义」回归测试 → 改用夹具包 + `api.save_item_def`）。
+- 测试总数 **344 → 300**（删 43 个包自身测试、删 1 个内置包管理页端点测试，新增/改写
+  的重指测试计入既有文件）；`ruff check` / `ruff format --check` / UTF-8 普查 / 4 套
+  浏览器 E2E 全绿。
+
+### 设计文档同步
+- DESIGN：§1 架构图、§4.3 物理位置、§4.5 部件模式（**保留设计、标注实现归社区包**）、
+  §5 行为归属表（内置不再提供任何行为能力）、§6 重写为「内置包（1 个世界内容包）」并
+  **据实修订协作模型**（原文"零包间调用"在 D8/M3 引入跨包服务后已不成立，改为三档
+  关系：事件 / 软依赖 / 硬依赖）、新增 **D31**。
+- GAPS：新增 **G39**（含根因诊断与四条残留）、G6/G19/G20 状态更新（G19 已失效、
+  G20 守卫改指参考组件）；编号范围更新为 `G1–G39`。
+
 ## v0.6.0（2026-09-24）
 
 **按 ECS 对照清单补齐 A–D 四项**：一次架构自问"我们现在算 ECS 吗"引出逐项盘点

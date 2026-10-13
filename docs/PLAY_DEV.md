@@ -1,14 +1,16 @@
 # 玩法包开发指南（PLAY_DEV）
 
 > worlditor 的所有**行为**都由玩法包承载：内核只有数据 + 原语 + 注册表。
-> 内置 6 个领域包（`worlditor_mcp/builtin_plays/`）即参考实现；社区包
-> 放 `<数据目录>/plays/worlditor_play_*/`。本文档 = 玩法包唯一权威开发说明
+> **v0.7.0 起 6 个内置领域包已删除**——行为玩法包不再随仓库分发；行为包的
+> 参考实现 = 测试夹具包（`tests/play_fixtures.py` 装入的 `worlditor_play_demo`，
+> 组件文件提交在案：`tests/fixtures/plays/worlditor_play_demo/web/`，见 §12）；
+> 社区包放 `<数据目录>/plays/worlditor_play_*/`。本文档 = 玩法包唯一权威开发说明
 > （与 DESIGN.md 一致；GAPS.md 记录平台缺口历史）。
 >
 > **SDK 稳定出口**：玩法包只允许 `from worlditor_mcp.world.play.api import
 > WorlditorPlayAPI` 与 `from worlditor_mcp.world import ...`（WorldError /
 > 数据模型 / DIRECTIONS）——**禁止 import 内核内部模块**（engine / store /
-> model 路径可能随重构变化，已据此统一全部内置包）。
+> model 路径可能随重构变化；该约束对内置包与社区包一体适用）。
 
 ---
 
@@ -71,7 +73,7 @@ worlditor_play_xxx/
 
 - play_id = `name`，必须 `worlditor_play_` 前缀；命名 `^[A-Za-z0-9_-]+$`
 - `requires.plays`：依赖的玩法包 id 列表——加载拓扑保证先加载；enable 时自动先启用依赖；disable 时仍有依赖者则拒绝
-- **内置包 vs 社区包**：内置包随服务分发（只读，可停用不可卸载）；社区包在数据目录（可卸载，卸载删目录含数据，不可逆）
+- **内置包 vs 社区包**：内置包随服务分发（只读，可停用不可卸载）；社区包在数据目录（可卸载，卸载删目录含数据，不可逆）。**内置目录 `worlditor_mcp/builtin_plays/` 现在只剩世界内容包** `worlditor_play_demo_world`——行为玩法包（工具/视图/服务/过滤器/kind）不再内置，参考实现见 §12
 
 ## 3. 生命周期
 
@@ -209,7 +211,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 **账户生命周期（内核提供，玩法包感知）**：
 - 玩家可永久注销（`POST /auth/delete-account`，级联吊销凭据 + 删除玩家实体）；管理员可删除账户/变更角色（`PATCH /admin/accounts/{id}`，变更即吊销旧凭据强制重登）
-- **对玩法包的影响**：注销 = 身份化实体被**受控删除**（非玩法包 remove_entity 通道），会触发 `on_entity_removed` / `on_world_edited`——需要按实体清理自身数据的包订阅该事件（如 items 包背包、social 包冷却）
+- **对玩法包的影响**：注销 = 身份化实体被**受控删除**（非玩法包 remove_entity 通道），会触发 `on_entity_removed` / `on_world_edited`——需要按实体清理自身数据的包订阅该事件（如背包类包的持有数据、说话类包的广播冷却）
 
 ## 5. 原语、查询、顺序与变更（D11 / G14 / D26–D28）
 
@@ -235,7 +237,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 - 同包可注册多个过滤器（各带 label）；生命周期随包卸载自动清理（内核恢复默认）
 - 管理页可见（谁、顺序）
 
-> 经典用法：movement 包的"方向别名归一"过滤器（上/北/north → up）、
+> 经典用法：方向别名归一过滤器（上/北/north → up，原内置 movement 包的做法）、
 > 束缚/锁血/遮蔽类效果包。
 
 ### 5.2 实体查询（D26）
@@ -316,12 +318,12 @@ await api.kv_set("cursor", api.world_revision())
 玩法包的数据在自己 namespace 里，其他包**不能直接读写**——跨包协作走服务：
 
 ```python
-# 提供方（如 items 包）：
+# 提供方（如背包包）：
 api.register_service("bag_add", _bag_add)   # async (api, **params) -> Any
                                             # api = 提供方自己的 API 实例
 
-# 调用方（如 player 包）：
-total = await api.call_service("worlditor_play_items", "bag_add",
+# 调用方（任意其他包）：
+total = await api.call_service("worlditor_play_yourpack", "bag_add",
                                entity_id=..., item_id="apple", count=3)
 ```
 
@@ -330,17 +332,18 @@ total = await api.call_service("worlditor_play_items", "bag_add",
 - 管理页 `/admin/services` 可见（谁提供了什么）
 - 信任边界：玩法包间互信（社区包都是管理员装的）；跨包权限约定见 §11
 
-> 内置参考：items 包提供 `bag_add/bag_take/bag_count/bag_get` 四个服务；
-> starter 包出生礼包（阶段 1 拆分自 player）、interaction 包商贩交易、
-> social 包喇叭消耗都经服务调用。
+> 出处：原内置 items 包曾提供 `bag_add/bag_take/bag_count/bag_get` 四个服务，
+> starter 出生礼包、interaction 商贩交易、social 喇叭消耗都经服务调用——这些包
+> v0.7.0 起已删除。服务机制本身的用例见 `tests/test_services.py`（用 `pkg_a` /
+> `pkg_b` 两个内联假包演示注册、跨包调用、namespace 与异常隔离）。
 
 ## 7. MCP 工具
 
 ```python
 api.register_tool(
-    "world_look",
-    _world_look,
-    description="查看 3×3 视野……（agent 的世界观入口，写清楚！）",
+    "world_around",
+    _world_around,
+    description="查看你周围的情况……（agent 的世界观入口，写清楚！）",
     params={"direction": "string", "path": "integer"},  # 可选：声明了即可选
 )
 ```
@@ -352,7 +355,7 @@ api.register_tool(
   handler 自己完成（`raise WorldError("xxx 必填")`）
 - 同名工具冲突报错（D2）；工具随包卸载自动从 MCP server 移除
 - 身份：handler 内 `api.caller()` 读取调用者；**工具是 agent 的唯一动作通道**，
-  权限（谁能做什么）由玩法包自行裁定（参考 items 包"只看自己背包"）
+  权限（谁能做什么）由玩法包自行裁定（例如背包类包只回答"我自己身上有什么"）
 
 ## 8. 视图（WebUI）
 
@@ -382,13 +385,15 @@ Vue 组件选项）：
   （加载器 body = `return (<code>)(Vue, UiBlock);`）；加载失败前端显示
   「视图加载失败」
 - 组件 props 收到 `view`（注册元数据）；**数据通道 = MCP 工具**（视图内嵌轻量
-  callTool，见内置包 `web/*.js` 参考）或只读 REST（/scene 等），不新增数据通道（D7）
+  callTool，参考实现 `tests/fixtures/plays/worlditor_play_demo/web/view.js`）
+  或只读 REST（/scene 等），不新增数据通道（D7）
 - **MCP 会话必须管理**（视图内 callTool 实现）：streamable HTTP 要求先
   `initialize` 拿响应头 `Mcp-Session-Id`，后续 `tools/call` 请求头带上——
-  否则返回 400 `Missing session ID`（内置包参考实现：`ensureSession()` +
-  模块级 `_sessionId` 缓存）
+  否则返回 400 `Missing session ID`（夹具参考实现：`tests/fixtures/plays/
+  worlditor_play_demo/web/view.js` 的 `ensureSession()` + 模块级 `_sessionId` 缓存）
 - **请求需带 Bearer**：`/plays/<id>/web/*`、`/scene` 等要求认证——视图内部
-  fetch 一律带 `Authorization: Bearer <localStorage 的 worlditor_token>`（内置包示例）
+  fetch 一律带 `Authorization: Bearer <localStorage 的 worlditor_token>`
+  （参考实现同上）
 - **provider.url 必须站内本包**：`/plays/<play_id>/web/…`（内核校验，阶段 3）——
   WebUI 对该 url fetch 时附 Bearer，因此拒绝相对/跨站/跨包地址
 - `UiBlock` 参数 = 内核 UiBlockRenderer 组件（用 UiBlock 树渲染列表/表单/文本
@@ -412,8 +417,9 @@ Vue 组件选项）：
     （浏览器系统按钮样式是浅色的）
   - 颜色只走 CSS 变量：`--bg` / `--bg-2` / `--bg-3` / `--text` / `--text-dim` /
     `--accent` / `--danger`（如 `background: "var(--bg-2)"`）
-  - 参考实现：`items/web/bag.js`、`movement/web/view.js`、`social/web/log.js`；
-    防回归测试 `tests/test_web_view_styles.py`（硬编码浅色或裸按钮直接失败）
+  - 参考实现：`tests/fixtures/plays/worlditor_play_demo/web/view.js`；防回归测试
+    `tests/test_web_view_styles.py`（扫描 `tests/fixtures/plays/*/web/*.js`，
+    硬编码浅色或裸按钮直接失败）
 - `/meta` 返回 `{mode: "play"|"admin"}`：同一前端按端口切换界面（玩家视图宿主
   vs 管理面板）——视图只在玩家模式加载（D16 界面分离）
 
@@ -459,40 +465,48 @@ SSE 推送；`log=True` 才写 world_log（高频事件勿写，5000 条上限�
   （跨世界跟人走，kv 不传 world_id）；世界级隔离为可选（传 world_id）
 - **服务**：部件能力出口（bag_add/take/…），供其他包软探测/调用
 - **UI 注入（追加到玩家界面）**：注册 `ui_hook("character", "after", provider)`——
-  玩家壳的 world_profile 生成角色卡并经 `api.apply_ui_hooks` 服务端展开；
-  部件包 hook 追加自己的面板（items 背包面板 = list 子块，provider 内调服务
-  读取数据）。**软依赖天然**：部件包未装 → hook 不存在 → 玩家视图无该面板，
-  无需任何探测代码
+  产出 `character` 块的包（夹具参考：`world_whoami`）把块交给
+  `api.apply_ui_hooks` 服务端展开；部件包 hook 追加自己的面板（背包面板 = list
+  子块，provider 内调服务读取数据）。**软依赖天然**：部件包未装 → hook 不存在
+  → 玩家视图无该面板，无需任何探测代码
 - **软依赖（玩家壳零部件引用）**：部件信息通道归部件包——文本 = 部件包自己
-  的工具（背包 = `world_bag`）；面板 = `ui_hook` 注入。**玩家壳不 import、
-  不探测、不调用部件包**（内置示范：worlditor_play_player 的 main.py 无任何
-  部件 play_id，有测试强制此契约）；`requires.plays` 只用于原子能力硬依赖
-  （如 starter 发货必须 items 服务）
-- **不写硬依赖**：`requires.plays` 仅用于"没有它部件无法工作"（如 starter 发货
-  必须 items）；纯展示/可选功能一律软依赖
-- 参考实现：`worlditor_play_starter`（出生礼包）与 `worlditor_play_items`（背包）
+  的工具（如背包工具）；面板 = `ui_hook` 注入。**玩家壳不 import、不探测、
+  不调用部件包**（夹具示范：`worlditor_play_demo` 的 `world_whoami` 只产出
+  `character` 块 + `apply_ui_hooks`，不引用任何部件包 play_id）；
+  `requires.plays` 只用于原子能力硬依赖（如礼包包发货必须背包包的服务）
+- **不写硬依赖**：`requires.plays` 仅用于"没有它部件无法工作"（如礼包发货必须
+  背包包的服务）；纯展示/可选功能一律软依赖
+- 参考实现：`tests/play_fixtures.py` 的夹具包 `worlditor_play_demo`——出生礼包 =
+  `on_world_edited` 给新玩家发初始金币（`"gold" not in attrs` 即"只发一次"的标记）；
+  部件面板注入 = `world_whoami` 的 `character` 块 + `apply_ui_hooks`（见 §12）
 
 ### 命名契约（G6，社区共同遵守）
 
-| 领域 | 建议字段/事件名 |
+| 领域 | 建议字段/事件名（附原提供方） |
 |---|---|
-| 金币 | attrs `gold`——interaction/player 包 |
-| 精力 | attrs `energy`——interaction 包（eat 效果） |
-| 说话 | 事件 `say`（cell）/ `broadcast`（world）——social 包 |
-| 礼包标记 | attrs `starter_granted`——player 包 |
-| 广播冷却 | kv `broadcast_cd:<entity_id>`——social 包 |
+| 金币 | attrs `gold`——原内置 interaction/player 包 |
+| 精力 | attrs `energy`——原内置 interaction 包（eat 效果） |
+| 说话 | 事件 `say`（cell）/ `broadcast`（world）——原内置 social 包 |
+| 礼包标记 | attrs `starter_granted`——原内置 player 包 |
+| 广播冷却 | kv `broadcast_cd:<entity_id>`——原内置 social 包 |
 
-> **朝向不在内置约定内**（v0.1.18）：地块连接槽的方向（up/right/down/left）是
-> 内核数据模型，但"实体朝向/视角"属于具体玩法的自由发挥——内置 movement 包
-> 不做朝向，若你的包需要（第一人称/相对移动），自行约定字段名并登记到本表。
+> **v0.7.0 起 6 个内置领域包已删除**：上表"原提供方"只是**出处记录**——那些包
+> 不再分发，也不再提供这些字段/事件；**名字本身是社区包的建议名，谁都可以采用**
+> （已无包"拥有"它们）。若你的包要与别的包共享字段/事件，仍建议登记到本表
+> （PR 更新），让"谁提供、谁消费"有据可查。
+>
+> **朝向不在约定内**（v0.1.18）：地块连接槽的方向（up/right/down/left）是
+> 内核数据模型，但"实体朝向/视角"属于具体玩法的自由发挥——原内置 movement 包
+> 不做朝向（该包已删除），若你的包需要（第一人称/相对移动），自行约定字段名并
+> 登记到本表。
 
 跨包读写**约定字段**前先查提供方包的服务/文档；通用字段建议进本表（PR 更新）。
 
 ### 编辑权限（G7）
 
 编辑地图/实体前**先查其 ACL**：家地图的写权限由家玩法包判定（读其服务/
-记录），内核不做"家"概念强制（D14：内容治理责任归玩法包）。示例：
-interaction 包商贩交易 = 金币 attrs + items 服务，无内核强制。
+记录），内核不做"家"概念强制（D14：内容治理责任归玩法包）。示例：商贩交易 =
+金币 attrs + 背包数据操作，无内核强制（夹具包的 `trade` / `buy_apple` 即此写法）。
 
 ### 性能与并发（G5）
 
@@ -514,19 +528,48 @@ interaction 包商贩交易 = 金币 attrs + items 服务，无内核强制。
 - 管理端可见性：注册的东西（工具/视图/服务/过滤器/覆盖）都会显示在管理页，
   命名要人能看懂（label 字段）
 
-## 12. 内置领域包一览（参考实现）
+## 12. 参考实现（测试夹具包）
+
+**v0.7.0 起 6 个内置领域包已删除**：仓库不再分发行为玩法包（工具/视图/服务/
+过滤器/kind）；内置目录 `worlditor_mcp/builtin_plays/` 只剩世界内容包。
+行为玩法包的参考实现搬到了测试夹具：
+
+- `tests/play_fixtures.py`——夹具源码：`install_demo_play(plays_root)` 把演示包
+  `worlditor_play_demo` 写进临时目录（`play.yaml` / `main.py` / `data/shop.json` /
+  `web/*.js`），测试与 E2E 都用它；`install_probe_play(plays_root)` 是更小的探针包
+  `worlditor_play_probe`（工具 `world_ping` + 视图 `ping`，用于世界激活过滤的对比验证）。
+- `tests/fixtures/plays/worlditor_play_demo/web/view.js`——**视图组件参考实现**
+  （IIFE 协议 / `ensureSession()` 会话管理 / `wt-*` 样式约定 / 版本串上报），
+  也是防回归测试 `tests/test_web_view_styles.py` 的对象。
+- `tests/fixtures/plays/worlditor_play_demo/web/admin-shop.js`——**管理页组件参考
+  实现**（数据通道 = `fetch /admin/play-pages/{play_id}/{page_key}/{action}`）。
+
+夹具包 `worlditor_play_demo` 覆盖的机制（照它抄就够起步）：
+
+| 机制 | 夹具包里的样子 |
+|---|---|
+| MCP 工具 | `world_whoami`（`api.caller()` 读身份） |
+| 视图组件 | `register_view("demo", …)` → `web/view.js` |
+| 管理页 | `register_admin_page("shop", …)`：货单管理，action = `list` / `set_price` |
+| 物品定义 | `ItemDef` apple / megaphone（`register_item_def`） |
+| kind + 交互 | merchant（talk/trade/buy_apple/buy_megaphone/bye）、sign（read）、door（open + `block_move`）；`eat` 走 `on_item_used` |
+| ui_hook 产出 | `world_whoami` 产出 `character` 块，经 `api.apply_ui_hooks` 服务端展开（部件注入点，见 §11） |
+| 世界事件 | `on_tick`（告示牌状态）/ `on_entity_enter`（进迷雾区发自定义事件）/ `on_item_used`（吃苹果加精力）/ `on_world_edited`（新玩家初始金币） |
+| 玩法数据自管 | attrs（`gold` / `energy`）+ kv（`bag` 背包、`bulletin_reads`、`shop_prices` 覆盖层） |
+| 世界激活语义 | 与 `worlditor_play_probe` 对照验证（D21：未启用该包的世界里工具被拒、视图不出现） |
+
+> 夹具包**不注册跨包服务**（`world_whoami` 与背包都走本包 kv）——跨包服务的
+> 注册/调用用法见 §6，完整用例在 `tests/test_services.py`（`pkg_a` / `pkg_b`
+> 两个内联假包）。
+
+内置只剩一个世界内容包：
 
 | 包 | 能力 | 关键机制 |
 |---|---|---|
-| `worlditor_play_demo_world` | **世界内容包**：导入示例主世界（41 地块：广场/步行街/AstrBot大道/开源小区/迷雾森林 + 商贩·阿福/告示牌/木门） | `async setup` 读取本包 `world.json`（地图/地块/连接/实体）并写入世界；**地图已存在则跳过**（不覆盖用户改动）；不注册 kind/交互（行为归 interaction 包）；换世界主题 = 停用本包换成你自己的世界包 |
-| `worlditor_play_items` | 背包（20 格/堆叠 99）+ world_bag/use + 苹果/面包 | **服务** bag_add/take/count/get；持有下沉（D8）；**ui_hook 注入玩家聚合视图**（character after → 背包面板）；**物品管理页**（管理员可维护物品定义，§13） |
-| `worlditor_play_starter` | 出生礼包（金币+物品，只发一次） | 部件模式（§11）：事件 on_world_edited + 跨包服务；可停用/替换 |
-| `worlditor_play_player` | 角色视图 + world_profile | 玩家壳**零引用**：背包信息由 items 包工具/hook 单向提供（§11）；**玩家聚合界面**——角色卡 + items hook 注入的背包面板（world_profile 返回 ui，视图通用渲染）；出生礼包见 starter |
-| `worlditor_play_movement` | 方向移动 + 3×3 视野 + world_look/move/who | move 过滤器（方向别名归一：上/北/north → up）+ register_view；**无朝向概念** |
-| `worlditor_play_interaction` | 种子实体 kind/交互 + world_interact | 商贩交易跨包；door block_move |
-| `worlditor_play_social` | cell 说话 + world 广播（喇叭+冷却）+ 日志视图 | 自定义事件 + kv 冷却自管 |
+| `worlditor_play_demo_world` | **世界内容包**：导入示例主世界（41 地块：广场/步行街/AstrBot大道/开源小区/迷雾森林 + 商贩·阿福/告示牌/木门） | `async setup` 读取本包 `world.json`（地图/地块/连接/实体）并写入世界；**地图已存在则跳过**（不覆盖用户改动）；只导入内容，**不注册 kind/交互/工具/视图**——行为由你自己的包（或夹具参考包）提供；换世界主题 = 停用本包换成你自己的世界包 |
 
-> 想看真实代码？`worlditor_mcp/builtin_plays/` 每个包就是一个完整示例。
+> 想看真实代码？内容导入型包看 `worlditor_mcp/builtin_plays/worlditor_play_demo_world/`；
+> 行为玩法包看 `tests/play_fixtures.py`（Python）+ `tests/fixtures/plays/worlditor_play_demo/web/*.js`（组件）。
 
 ## 13. 玩法包管理页（管理端注册协议，DESIGN §4.6）
 
@@ -537,15 +580,13 @@ interaction 包商贩交易 = 金币 attrs + items 服务，无内核强制。
 
 ```python
 api.register_admin_page(
-    key="items",              # 本包内唯一 key
-    title="物品管理",          # 管理端导航显示名
-    icon="⚗️",
-    component_url=f"/plays/{api.play_id}/web/admin-items.js",  # 必须本包资源
+    key="shop",               # 本包内唯一 key
+    title="货单管理",          # 管理端导航显示名
+    icon="🧺",
+    component_url=f"/plays/{api.play_id}/web/admin-shop.js",  # 必须本包资源
     actions={
-        "list": _admin_list,     # async def handler(api, **params) -> JSON 可序列化
-        "create": _admin_create,
-        "update": _admin_update,
-        "delete": _admin_delete,
+        "list": _admin_list,        # async def handler(api, **params) -> JSON 可序列化
+        "set_price": _admin_set_price,
     },
 )
 ```
@@ -574,4 +615,5 @@ api.register_admin_page(
   `.btn-danger`、`.card`、`.table` 或 CSS 变量（`var(--bg-2)`…），不要硬编码浅色
   （管理页组件 `admin-*.js` 不在视图防回归测试范围内，但同属一条约定）。
 - **管理面不扩展内核**：不要用管理页绕过玩法包语义去裸写其他包的 play_data。
-- 参考实现：`worlditor_play_items/web/admin-items.js`（物品定义 CRUD）。
+- 参考实现：`tests/fixtures/plays/worlditor_play_demo/web/admin-shop.js`（货单管理，
+  `list` / `set_price` 两个 action；对应的 Python 在 `tests/play_fixtures.py`）。

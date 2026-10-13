@@ -1,9 +1,0 @@
-name: worlditor_play_player
-display_name: 玩家
-version: 0.1.1
-author: worlditor
-desc: 玩家档——角色视图 + world_profile 工具（零包间依赖；出生礼包见 worlditor_play_starter，背包为软依赖）
-icon: 🧍
-requires:
-  worlditor: ">=0.1.0"
-  plays: []

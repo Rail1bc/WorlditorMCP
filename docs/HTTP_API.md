@@ -59,7 +59,7 @@
 | POST | `/admin/plays/install` | 安装社区包（请求体 = zip 字节流，`Content-Type: application/zip`） |
 | POST | `/admin/plays/{play_id}/enable` | 启用（自动先启用 `requires.plays` 依赖） |
 | POST | `/admin/plays/{play_id}/disable` | 停用（有已加载包依赖它 → 拒绝） |
-| POST | `/admin/plays/{play_id}/uninstall` | 卸载社区包（删目录，**不可逆**；内置包拒绝） |
+| POST | `/admin/plays/{play_id}/uninstall` | 卸载社区包（删目录，**不可逆**；内置包拒绝——当前内置的只有世界内容包 `worlditor_play_demo_world`，只能停用） |
 | GET | `/admin/overrides` | 原语覆盖 / 禁用 / 过滤器链状态（谁挂在哪个原语、顺序） |
 | GET | `/admin/tools` | 已注册 MCP 工具 |
 | GET | `/admin/views` | 已注册视图 |

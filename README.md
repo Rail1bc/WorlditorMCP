@@ -5,8 +5,8 @@ Claude / Cursor / 自建 agent…）都可接入；自带 WebUI——人类玩�
 拥有者经独立管理端口可视化管理（双端口，D16）。
 
 内核纯数据：世界/组织树/地块/连接/实体/物品定义/玩法数据，行为与**世界内容**
-都由**玩法包**承载（社区包放 `<数据目录>/plays/`；内置 1 个世界包 + 6 个领域包，
-见 `DESIGN.md` §6）。
+都由**玩法包**承载（社区包放 `<数据目录>/plays/`；内置只剩 1 个世界内容包，
+行为玩法包的参考实现见 `tests/fixtures/plays/`——`docs/PLAY_DEV.md` §12）。
 
 ## 快速开始（本地）
 
@@ -127,9 +127,10 @@ disable/过滤器链，D11/G14）、跨包服务（M3）、spawn/编辑实体与
 「玩法包 → 安装玩法包（zip）」上传（zip 内单个顶层目录 `<play_id>/`，
 含 play.yaml 与 main.py）。
 
-- 内置包：**世界包** `worlditor_play_demo_world`（示例主世界：41 地块 +
-  商贩·阿福/告示牌/木门）+ 6 个领域包（items/starter/player/movement/
-  interaction/social）
+- 内置包只有**世界内容包** `worlditor_play_demo_world`（示例主世界：41 地块 +
+  商贩·阿福/告示牌/木门；只导入内容，不注册行为）；行为玩法包（工具/视图/
+  服务/kind）不再随仓库分发，参考实现见 `tests/fixtures/plays/`
+  （`docs/PLAY_DEV.md` §12）
 - 身份只有一种 `player`：人类玩家与 agent 不作区分（脚本/agent 可用登录页
   「agent / 脚本接入」无密码注册）
 - `docs/PLAY_DEV.md`：玩法包开发指南（API 全量 + 约定 + 示例）

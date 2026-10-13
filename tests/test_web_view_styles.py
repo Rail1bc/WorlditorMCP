@@ -18,7 +18,9 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 _WEBUI = _ROOT / "webui" / "src"
-_BUILTIN = _ROOT / "worlditor_mcp" / "builtin_plays"
+# 玩法包视图组件的参考实现（提交在案，夹具包安装时复制进 tmp 玩法包目录）。
+# v0.7.0 起内置玩法包不再随仓库携带视图组件，本目录是唯一的视图组件来源。
+_VIEW_COMPONENTS = _ROOT / "tests" / "fixtures" / "plays"
 
 # 玩家端布局/组件样式类（styles.css 缺失即布局崩坏——v0.1.17 回归点）
 _REQUIRED_CSS = (
@@ -64,7 +66,9 @@ _BUTTON_CLASSES = ("wt-btn", "btn")
 def _view_component_files() -> list[Path]:
     """玩法包视图组件（排除管理页组件 admin-*.js）。"""
     return sorted(
-        p for p in _BUILTIN.glob("*/web/*.js") if not p.name.startswith("admin-")
+        p
+        for p in _VIEW_COMPONENTS.glob("*/web/*.js")
+        if not p.name.startswith("admin-")
     )
 
 
@@ -293,7 +297,7 @@ def test_map_grid_supports_multi_select_and_arrows():
 def test_view_components_use_no_hardcoded_light_colors():
     """视图组件不得硬编码浅色（否则暗色主题下白底/白底白字）。"""
     files = _view_component_files()
-    assert files, "未找到内置玩法包视图组件"
+    assert files, "未找到玩法包视图组件参考实现（tests/fixtures/plays/*/web/）"
     for path in files:
         text = path.read_text(encoding="utf-8").lower()
         hits = [color for color in _FORBIDDEN_COLORS if color in text]

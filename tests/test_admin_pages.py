@@ -18,6 +18,7 @@ from play_fixtures import PLAY_ID, install_demo_play
 from world_fixtures import seed_test_world
 
 from worlditor_mcp.admin import build_admin_app
+from worlditor_mcp.world import ItemDef
 from worlditor_mcp.world.engine import WorldEngine
 from worlditor_mcp.world.identity import IdentityService
 from worlditor_mcp.world.mcp import build_mcp_server
@@ -196,7 +197,9 @@ def test_admin_page_web_and_uninstall(tmp_path):
         h = {"Authorization": f"Bearer {await _admin_token(identity)}"}
         resp = await admin_client.get(f"/plays/{PLAY_ID}/web/admin-shop.js", headers=h)
         assert resp.status_code == 200, resp.text
-        assert "测试夹具管理页组件" in resp.text
+        # 服务的是仓库提交在案的参考组件（夹具从 tests/fixtures 复制而来）
+        assert "AdminShop" in resp.text
+        assert f"/admin/play-pages/{PLAY_ID}/shop" in resp.text
         # uninstall → 注册清理 + 资源 404
         resp = await admin_client.post(f"/admin/plays/{PLAY_ID}/uninstall", headers=h)
         assert resp.status_code == 200, resp.text
@@ -211,20 +214,25 @@ def test_admin_page_web_and_uninstall(tmp_path):
 # ---------- 内置包管理页（v0.1.12：物品管理端到端） ----------
 
 
-async def _scenario_builtin(tmp_path, fn):
-    """内置包场景：loader 指向 builtin_plays（物品管理页测试用）。"""
+async def _scenario_with_play(tmp_path, fn):
+    """带玩法包的场景：内置世界内容包 + 夹具玩法包（物品定义/管理页测试用）。
+
+    v0.7.0：内置玩法包已废弃，物品定义与工具/视图改由 ``play_fixtures``
+    的夹具玩法包提供（它声明 apple/megaphone 两条代码定义 + shop 管理页）。
+    """
     from pathlib import Path
 
     BUILTIN_DIR = (
         Path(__file__).resolve().parent.parent / "worlditor_mcp" / "builtin_plays"
     )
+    install_demo_play(tmp_path / "plays")
     engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
     loader = PlayLoader(
         engine,
         plays_dir=tmp_path / "plays",
         builtin_dir=BUILTIN_DIR,
-        worlditor_version="0.1.11",
+        worlditor_version="0.7.0",
     )
     await loader.load_all()
     identity = IdentityService(engine, auth_mode="open", admin_key="sekret")
@@ -245,106 +253,46 @@ async def _scenario_builtin(tmp_path, fn):
         await engine.terminate()
 
 
-def test_builtin_items_admin_page_endpoint(tmp_path):
-    """内置包管理页：清单 + 代理 action + 组件资源服务。"""
-
-    async def fn(admin_client, play_client, identity, engine, loader):
-        h = {"Authorization": f"Bearer {await _admin_token(identity)}"}
-        # 清单
-        resp = await admin_client.get("/admin/play-pages", headers=h)
-        assert resp.status_code == 200
-        assert any(
-            p["play_id"] == "worlditor_play_items" and p["key"] == "items"
-            for p in resp.json()["pages"]
-        )
-        # 代理 list
-        resp = await admin_client.post(
-            "/admin/play-pages/worlditor_play_items/items/list", json={}, headers=h
-        )
-        assert resp.status_code == 200, resp.text
-        ids = {i["id"] for i in resp.json()["data"]["items"]}
-        assert {"apple", "bread", "megaphone"} <= ids
-        # 代理 create + list 反映
-        resp = await admin_client.post(
-            "/admin/play-pages/worlditor_play_items/items/create",
-            json={"id": "gold_ore", "name": "金矿石", "stackable": True},
-            headers=h,
-        )
-        assert resp.status_code == 200, resp.text
-        resp = await admin_client.post(
-            "/admin/play-pages/worlditor_play_items/items/list", json={}, headers=h
-        )
-        assert "gold_ore" in {i["id"] for i in resp.json()["data"]["items"]}
-        # 组件资源（认证后）
-        resp = await admin_client.get(
-            "/plays/worlditor_play_items/web/admin-items.js", headers=h
-        )
-        assert resp.status_code == 200
-        assert "AdminItemsView" in resp.text
-        # 未认证 401
-        assert (
-            await admin_client.get("/plays/worlditor_play_items/web/admin-items.js")
-        ).status_code == 401
-
-    _run(_scenario_builtin(tmp_path, fn))
-
-
 def test_disable_keeps_admin_item_defs(tmp_path):
-    """G31（v0.5.2）：停用 items 包只清代码声明，管理页建的物品定义必须留下。
+    """G31（v0.5.2）：停用玩法包只清代码声明，管理页建的物品定义必须留下。
 
     原先 disable/uninstall 不区分来源全删：管理员手工维护的物品定义会在
     "停一下包"之后永久消失（与 DESIGN §4.3"disable 保留数据"直接矛盾）。
+
+    v0.7.0：内置 items 包已废弃，本测试改用夹具玩法包（它代码声明
+    apple/megaphone，并且 ``api.save_item_def`` = 管理页动作写用户数据的同一入口）。
     """
 
     async def fn(admin_client, play_client, identity, engine, loader):
         import aiosqlite
 
         h = {"Authorization": f"Bearer {await _admin_token(identity)}"}
-        # 管理员建一条自定义物品（走管理页 action，即"用户数据"形态）
-        resp = await admin_client.post(
-            "/admin/play-pages/worlditor_play_items/items/create",
-            json={"id": "gold_ore", "name": "金矿石"},
-            headers=h,
-        )
-        assert resp.status_code == 200, resp.text
+        # 代码声明（夹具包 setup 里注册）
+        assert engine.store.items.get("apple") is not None
+        # 管理员建一条自定义物品：与 items 管理页 create 动作同一条入口
+        pkg = loader.plays[PLAY_ID]  # noqa: SLF001
+        pkg.api.save_item_def(ItemDef(id="gold_ore", name="金矿石", stackable=True))
+        await pkg.api.flush_item_defs()
         assert engine.store.items.get("gold_ore") is not None
 
-        # 依赖拓扑：interaction/social/starter 都依赖 items，按叶子→根依次停用
-        for dependent in (
-            "worlditor_play_social",
-            "worlditor_play_player",
-            "worlditor_play_interaction",
-            "worlditor_play_starter",
-        ):
-            resp = await admin_client.post(
-                f"/admin/plays/{dependent}/disable", headers=h
-            )
-            assert resp.status_code == 200, resp.text
-        resp = await admin_client.post(
-            "/admin/plays/worlditor_play_items/disable", headers=h
-        )
+        resp = await admin_client.post(f"/admin/plays/{PLAY_ID}/disable", headers=h)
         assert resp.status_code == 200, resp.text
 
-        # 代码声明（apple）随包卸载；用户数据（gold_ore）内存与库都要在
+        # 代码声明（apple）随包停用消失；用户数据（gold_ore）内存与库都要在
         assert engine.store.items.get("apple") is None
         assert engine.store.items.get("gold_ore") is not None
         async with aiosqlite.connect(tmp_path / "world.db") as conn:
             cur = await conn.execute("SELECT id FROM items")
             ids = {row[0] for row in await cur.fetchall()}
-        assert "gold_ore" in ids, f"停用后用户物品定义应从库里消失：{ids}"
+        assert "gold_ore" in ids, f"停用后用户物品定义不应从库里消失：{ids}"
 
         # 重新启用 → 代码声明回来，用户数据不受影响
-        resp = await admin_client.post(
-            "/admin/plays/worlditor_play_items/enable", headers=h
-        )
+        resp = await admin_client.post(f"/admin/plays/{PLAY_ID}/enable", headers=h)
         assert resp.status_code == 200, resp.text
         assert engine.store.items.get("apple") is not None
         assert engine.store.items.get("gold_ore") is not None
 
-    _run(_scenario_builtin(tmp_path, fn))
-
-
-# ---------- 管理端地图/模板读端点 ----------
+    _run(_scenario_with_play(tmp_path, fn))
 
 
 def test_map_read_endpoints(tmp_path):
@@ -390,7 +338,7 @@ def test_map_read_endpoints(tmp_path):
         assert "不存在" in resp.json()["error"]
 
     # 断言演示世界内容（41 地块/小镇广场）→ 用内置包场景（世界包导入该世界）
-    _run(_scenario_builtin(tmp_path, fn))
+    _run(_scenario_with_play(tmp_path, fn))
 
 
 # ---------- 账户检索 ----------

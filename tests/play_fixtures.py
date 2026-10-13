@@ -4,14 +4,25 @@ demo_play 已按 D3 删除（领域包即 SDK 模板）；玩法包机制测试�
 行为完整的参考玩法包，此处以字符串常量写入 tmp 目录，覆盖：
 kind（merchant/sign/door）、交互（talk/trade/read/open/eat/bye/buy_*）、
 事件（on_tick / on_entity_enter / on_item_used / on_world_edited）、
-物品（apple/megaphone）、kv 读写、出生礼包。
+物品定义（apple/megaphone）、**视图组件**（view.js）、**部件聚合**
+（world_whoami 产出 character 块 + ui_hook 展开）、管理页（shop）、
+kv 读写、出生礼包。
+
+组件文件（web/*.js）不是字符串常量，而是从 ``tests/fixtures/plays/`` 下
+**提交在案**的参考实现复制——那两份文件同时是"视图组件样式约定"与
+"版本串一致性"两条守卫的对象，也是玩法包作者可照抄的活例子。
 """
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 PLAY_ID = "worlditor_play_demo"
+PROBE_ID = "worlditor_play_probe"
+_REFERENCE_WEB = (
+    Path(__file__).resolve().parent / "fixtures" / "plays" / PLAY_ID / "web"
+)
 
 _SHOP_JSON = """{
   "apple": { "price": 5, "label": "苹果" },
@@ -31,6 +42,7 @@ from worlditor_mcp.world.play.api import WorlditorPlayAPI
 from worlditor_mcp.world import (
     InteractionRequest,
     InteractionResult,
+    ItemDef,
     MenuButton,
     UiBlock,
 )
@@ -91,6 +103,20 @@ def setup(api: WorlditorPlayAPI, context) -> None:
         _whoami,
         description="查看你的当前身份",
     )
+    # 物品定义（D13：定义归注册它的包）：货单引用的两个货品在此登记
+    api.register_item_def(
+        ItemDef(id=APPLE_ITEM, name="苹果", desc="红彤彤的苹果。", stackable=True)
+    )
+    api.register_item_def(
+        ItemDef(id=MEGAPHONE_ITEM, name="喇叭", desc="全图广播道具。", stackable=True)
+    )
+    # 视图组件（G3/D7）：参考实现 = tests/fixtures/plays/.../web/view.js
+    api.register_view(
+        "demo",
+        title="演示",
+        icon="🧪",
+        provider={"type": "component", "url": f"/plays/{api.play_id}/web/view.js"},
+    )
     # 管理页（v0.1.12 协议）：货单管理——actions 演示玩法包自管数据语义
     api.register_admin_page(
         "shop",
@@ -133,8 +159,24 @@ async def _admin_shop_set_price(api: WorlditorPlayAPI, **params) -> dict:
 
 
 async def _whoami(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
-    """MCP 动态工具演示：身份经 api.caller() 读取（G2）。"""
-    return {"text": f"我是 {api.caller()}"}
+    """MCP 动态工具演示：身份经 api.caller() 读取（G2）。
+
+    同时演示**部件聚合**（DESIGN §4.5）：返回 character 块并交给 ui_hook
+    服务端展开——其他包向 character 注入的面板会追加进来；无人注入时
+    就是块本身（软依赖：注册与否决定，而非由本包探测）。
+    """
+    entity_id = api.caller()
+    entity = api.get_entity(entity_id) if entity_id else None
+    card = UiBlock(
+        kind="character",
+        title=entity.name if entity else "（无身份）",
+        data={"attrs": dict(entity.attrs) if entity else {}},
+    )
+    card = await api.apply_ui_hooks(card)
+    return {
+        "text": f"我是 {entity_id}",
+        "ui": card.to_dict() if card else None,
+    }
 
 
 async def _talk(api: WorlditorPlayAPI, req: InteractionRequest) -> InteractionResult:
@@ -292,6 +334,61 @@ def teardown(api: WorlditorPlayAPI) -> None:
 '''
 
 
+_PROBE_MAIN = '''"""测试探针玩法包：一个工具 + 一个视图（世界激活过滤的对比方）。
+
+与 worlditor_play_demo 分开成两个包，才能验证"某世界只启用其中一个"时
+工具被拒、视图消失（D21 激活过滤的端到端行为）。
+"""
+
+from __future__ import annotations
+
+from worlditor_mcp.world.play.api import WorlditorPlayAPI
+
+
+def setup(api: WorlditorPlayAPI, context) -> None:
+    """入口：注册探针工具与探针视图。"""
+    api.register_tool("world_ping", _ping, description="探针：返回 pong")
+    api.register_view(
+        "ping",
+        title="探针",
+        icon="📡",
+        provider={"type": "component", "url": f"/plays/{api.play_id}/web/view.js"},
+    )
+
+
+async def _ping(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
+    return {"text": "pong"}
+
+
+def teardown(api: WorlditorPlayAPI) -> None:
+    """卸载钩子：无自管资源。"""
+'''
+
+
+def install_probe_play(plays_root: Path) -> Path:
+    """装一个最小玩法包（工具 world_ping + 视图 ping），供激活过滤对比用。"""
+    play_dir = plays_root / PROBE_ID
+    play_dir.mkdir(parents=True, exist_ok=True)
+    (play_dir / "play.yaml").write_text(
+        "name: worlditor_play_probe\n"
+        "display_name: 探针玩法包\n"
+        "version: 0.1.0\n"
+        "author: test\n"
+        "requires:\n"
+        '  worlditor: ">=0.1.0"\n'
+        "  plays: []\n",
+        encoding="utf-8",
+    )
+    (play_dir / "main.py").write_text(_PROBE_MAIN, encoding="utf-8")
+    web_dir = play_dir / "web"
+    web_dir.mkdir(exist_ok=True)
+    (web_dir / "view.js").write_text(
+        "// 探针视图组件（占位；本体只在世界激活测试里被列举）\n",
+        encoding="utf-8",
+    )
+    return play_dir
+
+
 def install_demo_play(plays_root: Path) -> Path:
     """把演示玩法包写入 plays_root/，返回其目录（供 PlayLoader 发现）。"""
     play_dir = plays_root / PLAY_ID
@@ -312,8 +409,9 @@ def install_demo_play(plays_root: Path) -> Path:
     (data_dir / "shop.json").write_text(_SHOP_JSON, encoding="utf-8")
     web_dir = play_dir / "web"
     web_dir.mkdir(exist_ok=True)
-    (web_dir / "admin-shop.js").write_text(
-        "// 测试夹具管理页组件（真实组件协议见 DESIGN §4.4 视图注入）\n",
-        encoding="utf-8",
-    )
+    # 组件文件从仓库**提交在案**的参考实现复制，而不是就地写占位符：
+    # 视图组件样式约定（v0.1.17）与版本串一致性（v0.5.2）两条守卫因此指向
+    # 真实文件（tests/fixtures/plays/…/web/），而不是测试自己刚写的东西。
+    for name in ("view.js", "admin-shop.js"):
+        shutil.copyfile(_REFERENCE_WEB / name, web_dir / name)
     return play_dir

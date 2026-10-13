@@ -19,6 +19,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from play_fixtures import install_demo_play, install_probe_play
 from world_fixtures import seed_test_world
 
 from worlditor_mcp.world.engine import WorldEngine, WorldError
@@ -100,6 +101,10 @@ def test_tools_and_views_follow_world_activation(tmp_path):
         engine = WorldEngine(WorldStore(tmp_path / "world.db"))
         await engine.initialize()
         await seed_test_world(engine)
+        # v0.7.0：内置玩法包已废弃——用两个测试夹具包做激活对比
+        # （demo = 工具 world_whoami + 视图 demo；probe = 工具 world_ping + 视图 ping）
+        install_demo_play(tmp_path / "plays")
+        install_probe_play(tmp_path / "plays")
         loader = PlayLoader(
             engine, plays_dir=tmp_path / "plays", builtin_dir=BUILTIN_DIR
         )
@@ -121,27 +126,27 @@ def test_tools_and_views_follow_world_activation(tmp_path):
             ) as client:
                 h = {"Authorization": f"Bearer {player.token}"}
                 # 基线：默认世界 play_ids=[]（全部激活）
-                looked = await _call_tool(client, player.token, "world_look", {})
-                assert "中央广场" in looked.get("text", ""), looked
+                who = await _call_tool(client, player.token, "world_whoami", {})
+                assert "我是" in who.get("text", ""), who
+                pinged = await _call_tool(client, player.token, "world_ping", {})
+                assert "pong" in pinged.get("text", ""), pinged
                 views = (await client.get("/views", headers=h)).json()["views"]
-                assert {v["key"] for v in views} >= {"items", "movement", "social_log"}
+                assert {v["key"] for v in views} >= {"demo", "ping"}
 
-                # 只留 social：movement/items 在该世界失效
-                await engine.update_world("default", play_ids=["worlditor_play_social"])
-                denied = await _call_tool(client, player.token, "world_look", {})
+                # 只留 demo：probe 在该世界失效
+                await engine.update_world("default", play_ids=["worlditor_play_demo"])
+                denied = await _call_tool(client, player.token, "world_ping", {})
                 assert "未启用该玩法包" in denied.get("text", ""), denied
-                assert "worlditor_play_movement" in denied.get("text", ""), denied
-                said = await _call_tool(
-                    client, player.token, "world_say", {"text": "还在"}
-                )
-                assert "还在" in said.get("text", ""), said
+                assert "worlditor_play_probe" in denied.get("text", ""), denied
+                still = await _call_tool(client, player.token, "world_whoami", {})
+                assert "我是" in still.get("text", ""), still
                 views = (await client.get("/views", headers=h)).json()["views"]
-                assert {v["key"] for v in views} == {"social_log"}, views
+                assert {v["key"] for v in views} == {"demo"}, views
 
                 # 放开 → 恢复
                 await engine.update_world("default", play_ids=[])
-                restored = await _call_tool(client, player.token, "world_look", {})
-                assert "中央广场" in restored.get("text", ""), restored
+                restored = await _call_tool(client, player.token, "world_ping", {})
+                assert "pong" in restored.get("text", ""), restored
         finally:
             server.should_exit = True
             await asyncio.wait_for(task, timeout=10)
@@ -163,6 +168,8 @@ def test_views_filter_uses_caller_world_not_default(tmp_path):
         engine = WorldEngine(WorldStore(tmp_path / "world.db"))
         await engine.initialize()
         await seed_test_world(engine)  # 默认世界的地图
+        install_demo_play(tmp_path / "plays")
+        install_probe_play(tmp_path / "plays")
         loader = PlayLoader(
             engine, plays_dir=tmp_path / "plays", builtin_dir=BUILTIN_DIR
         )
@@ -171,9 +178,9 @@ def test_views_filter_uses_caller_world_not_default(tmp_path):
         mcp = build_mcp_server(engine)
         app = build_http_app(mcp, identity, engine=engine, loader=loader)
         try:
-            # 乙世界：只启用 social；玩家站在乙世界的地图上
+            # 乙世界：只启用 demo；玩家站在乙世界的地图上
             await engine.create_world(
-                "world_b", "乙世界", play_ids=["worlditor_play_social"]
+                "world_b", "乙世界", play_ids=["worlditor_play_demo"]
             )
             await engine.create_map("m_b", "乙世界地图", spawn_row=0, spawn_col=0)
             await engine.create_location("m_b", 0, 0, "乙世界广场")
@@ -185,18 +192,18 @@ def test_views_filter_uses_caller_world_not_default(tmp_path):
                 transport=httpx.ASGITransport(app=app), base_url="http://play"
             ) as client:
                 h = {"Authorization": f"Bearer {player.token}"}
-                # 已登录：按玩家所在世界 → 只有 social 的视图
+                # 已登录：按玩家所在世界 → 只有 demo 的视图
                 views = (await client.get("/views", headers=h)).json()["views"]
-                assert {v["key"] for v in views} == {"social_log"}, views
+                assert {v["key"] for v in views} == {"demo"}, views
 
                 # 匿名（无凭据）仍按默认世界算（默认世界全启用，视图齐全）
                 anon = (await client.get("/views")).json()["views"]
-                assert {v["key"] for v in anon} >= {"items", "movement", "social_log"}
+                assert {v["key"] for v in anon} >= {"demo", "ping"}
 
                 # 放开乙世界 → 恢复
                 await engine.update_world("world_b", play_ids=[])
                 views = (await client.get("/views", headers=h)).json()["views"]
-                assert {v["key"] for v in views} >= {"items", "movement", "social_log"}
+                assert {v["key"] for v in views} >= {"demo", "ping"}
         finally:
             await engine.terminate()
 
