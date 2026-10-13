@@ -54,7 +54,10 @@
       </dl>
     </div>
 
-    <!-- custom：自定义组件（v4.1 先显示 fallback_text；组件加载 v4.2） -->
+    <!-- custom：⚠️ 预留未实现（不是可用能力）——只渲染 fallback_text，
+         data.component / data.props 无人消费；服务端 register_ui_component 也是
+         只写不读的注册表（无 list、无 HTTP 出口）。要自定义界面请用 register_view
+         的 provider 组件；要往块里加内容用 register_ui_hook。详见 GAPS G35。 -->
     <div v-if="block.kind === 'custom'" class="ui-custom">
       <p class="ui-text">{{ fallbackText }}</p>
     </div>

@@ -175,7 +175,13 @@ const currentWorld = computed(
 const current = computed(() => {
   const key = route.value;
   return {
-    key,
+    // 管理页宿主的身份 = (play_id, page_key)：并进 key 后，切换管理页 =
+    // 换 key = 宿主重新挂载（PlayPageHost 在 setup 里按新身份重新拉清单 +
+    // 重新加载组件）。原先 key 恒等于 "pages"，切页只换标题不换组件。
+    key:
+      key === "pages"
+        ? `pages/${routeInfo.value.playId}/${routeInfo.value.pageKey}`
+        : key,
     comp: PAGES[key] || PAGES.accounts,
     // 只有世界上下文的页面收 worldId（其余页面不吃这个 prop）
     props: key === "plays" || key === "maps" ? { worldId: worldId.value } : {},

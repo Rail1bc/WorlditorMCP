@@ -23,6 +23,7 @@ PROBE_ID = "worlditor_play_probe"
 _REFERENCE_WEB = (
     Path(__file__).resolve().parent / "fixtures" / "plays" / PLAY_ID / "web"
 )
+_PROBE_WEB = Path(__file__).resolve().parent / "fixtures" / "plays" / PROBE_ID / "web"
 
 _SHOP_JSON = """{
   "apple": { "price": 5, "label": "苹果" },
@@ -334,10 +335,13 @@ def teardown(api: WorlditorPlayAPI) -> None:
 '''
 
 
-_PROBE_MAIN = '''"""测试探针玩法包：一个工具 + 一个视图（世界激活过滤的对比方）。
+_PROBE_MAIN = '''"""测试探针玩法包：一个工具 + 一个视图 + 一个管理页。
 
-与 worlditor_play_demo 分开成两个包，才能验证"某世界只启用其中一个"时
-工具被拒、视图消失（D21 激活过滤的端到端行为）。
+与 worlditor_play_demo 分开成两个包，才能验证：
+- "某世界只启用其中一个"时工具被拒、视图消失（D21 激活过滤的端到端行为）
+- SSE 自动刷新：停用本包 → 玩家端「探针」tab 消失（`plays_changed` 信号）
+- **管理页之间切换**：宿主必须重新加载组件，否则会渲染成上一个页面的界面
+  （`web/admin-ping.js` 里的 `PROBE-PAGE-MARKER` 是验收锚点）
 """
 
 from __future__ import annotations
@@ -346,7 +350,7 @@ from worlditor_mcp.world.play.api import WorlditorPlayAPI
 
 
 def setup(api: WorlditorPlayAPI, context) -> None:
-    """入口：注册探针工具与探针视图。"""
+    """入口：注册探针工具、探针视图与管理页。"""
     api.register_tool("world_ping", _ping, description="探针：返回 pong")
     api.register_view(
         "ping",
@@ -354,10 +358,22 @@ def setup(api: WorlditorPlayAPI, context) -> None:
         icon="📡",
         provider={"type": "component", "url": f"/plays/{api.play_id}/web/view.js"},
     )
+    api.register_admin_page(
+        "ping",
+        title="探针面板",
+        icon="📡",
+        component_url=f"/plays/{api.play_id}/web/admin-ping.js",
+        actions={"info": _admin_info},
+    )
 
 
 async def _ping(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
     return {"text": "pong"}
+
+
+async def _admin_info(api: WorlditorPlayAPI, **params) -> dict:
+    """管理页动作：返回一个可断言的固定文案。"""
+    return {"text": "探针面板已连接"}
 
 
 def teardown(api: WorlditorPlayAPI) -> None:
@@ -366,7 +382,7 @@ def teardown(api: WorlditorPlayAPI) -> None:
 
 
 def install_probe_play(plays_root: Path) -> Path:
-    """装一个最小玩法包（工具 world_ping + 视图 ping），供激活过滤对比用。"""
+    """装一个最小玩法包（工具 + 视图 + 管理页），供激活过滤/SSE/切页对比用。"""
     play_dir = plays_root / PROBE_ID
     play_dir.mkdir(parents=True, exist_ok=True)
     (play_dir / "play.yaml").write_text(
@@ -382,10 +398,9 @@ def install_probe_play(plays_root: Path) -> Path:
     (play_dir / "main.py").write_text(_PROBE_MAIN, encoding="utf-8")
     web_dir = play_dir / "web"
     web_dir.mkdir(exist_ok=True)
-    (web_dir / "view.js").write_text(
-        "// 探针视图组件（占位；本体只在世界激活测试里被列举）\n",
-        encoding="utf-8",
-    )
+    # 组件文件从**提交在案**的参考实现复制（同 install_demo_play 的约定）
+    for name in ("view.js", "admin-ping.js"):
+        shutil.copyfile(_PROBE_WEB / name, web_dir / name)
     return play_dir
 
 

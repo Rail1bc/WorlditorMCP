@@ -72,8 +72,28 @@
   决定，只覆盖包生命周期是不够的。供前端 SSE 订阅，装/卸玩法包或改世界激活后自动刷新
   视图 tab，不再需要手动整页刷新（载荷 `{"event":"plays_changed","data":{"reason":…,…}}`，
   自定义事件的数据在 `data` 键下；刻意不写 world_log）。
-- 新增回归测试 `tests/test_review_fixes.py`（8 条，逐条注明发现来源、位置与
-  "不修会怎样"）；测试 300 → **308**。
+- 新增回归测试 `tests/test_review_fixes.py`（8 条 → 后补世界激活一条共 9 条，逐条注明
+  发现来源、位置与"不修会怎样"）；测试 300 → **309**。
+- **玩家端 SSE 自动刷新视图 tab（第 4 条前端半边）**：`App.vue` 用原生 `EventSource`
+  订阅 `/events?token=…`，只在 `payload.event === "plays_changed"` 时重拉 `/views`——
+  选中视图仍在列表就原样不动（组件不重挂、状态不丢），消失了就回退到第一个可用视图或
+  空态。生命周期：未登录 / 管理端口（无 `/events`）/ 退出登录一律不连，失败只
+  `console.warn`（零 toast），403 后不重连。装/卸玩法包或改世界激活集合后，**玩家端
+  无需整页刷新**。
+- **管理页切页重载组件（第 2b 条）**：`PlayPageHost` 原先只在 `onMounted` 里 load，
+  而宿主用常量 key 渲染 → 从管理页 A 切到 B 会渲染成 **B 的标题 + A 的界面**。
+  改为身份化重载（`watch([playId, pageKey], load, {immediate:true})` + 加载期清空
+  `comp` + `loadSeq` 竞态守卫丢弃迟到结果），`AdminPanel` 的宿主 key 也带上
+  `play_id/page_key`（结构层保证"实例身份 = 路由身份"）；顺带修掉一个每次挂载都
+  加、从不摘除的 `hashchange` 监听泄漏，以及"错误行与加载中同时显示"。
+- **夹具包新增第二个管理页**：`tests/fixtures/plays/worlditor_play_probe/` 现在含
+  视图与管理页组件（`PROBE-PAGE-MARKER` 作为切页验收锚点），两个夹具组件文件都
+  **提交在案**并由夹具安装时复制（与 demo 包同一约定）。
+- 独立的浏览器验收（`.uitools/`，不入库）：`verify_sse_refresh.mjs`（停用/启用包 →
+  tab 自动增减，且用 window 标记证明**全程未重载**）与 `verify_page_switch.mjs`
+  （A→B→A 切换无错组件、无残留）——两条既有 4 套 E2E 都不覆盖。E2E 结果：
+  `EDITOR V0.5 UI OK` / `MAP GOVERNANCE UI OK` / `WORLD GOVERNANCE UI OK` /
+  `V0.2.0 UI OK`，外加 `SSE REFRESH OK` / `PAGE SWITCH OK`。
 - **`custom` UiBlock kind / `register_ui_component` 统一文档口径（不实现）**：
   内核注册表只写不读、既无 list 也无 HTTP 出口，前端渲染器只显示 `fallback_text`
   （`component`/`props` 一个字节都不读；旧注释写着"组件加载 v4.2"，从没来）——
