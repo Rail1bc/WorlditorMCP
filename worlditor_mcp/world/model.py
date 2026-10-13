@@ -827,7 +827,10 @@ class UiBlock:
     custom。character 与 custom 的结构数据放 ``data``：
     - character: {"avatar": str, "attrs": [{"label", "value"}]}（角色卡）
     - custom: {"component": "namespace.name", "props": {...},
-      "fallback_text": "..."}（自定义界面组件，MCP 侧取 fallback_text 降级）
+      "fallback_text": "..."}——⚠️ **预留未实现**：前端渲染器当前只显示
+      fallback_text，``component`` / ``props`` 无人消费；``register_ui_component``
+      也是只写不读的注册表（无 list、无 HTTP 出口）。要自定义界面请用
+      ``register_view``（provider 组件）；要往块里加内容用 ``register_ui_hook``。
     blocks 为子块（B9 界面钩子注入点；内核渲染时按序展开）。
     """
 

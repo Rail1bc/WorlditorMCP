@@ -72,6 +72,14 @@
   自定义事件的数据在 `data` 键下；刻意不写 world_log）。
 - 新增回归测试 `tests/test_review_fixes.py`（8 条，逐条注明发现来源、位置与
   "不修会怎样"）；测试 300 → **308**。
+- **`custom` UiBlock kind / `register_ui_component` 统一文档口径（不实现）**：
+  内核注册表只写不读、既无 list 也无 HTTP 出口，前端渲染器只显示 `fallback_text`
+  （`component`/`props` 一个字节都不读；旧注释写着"组件加载 v4.2"，从没来）——
+  包作者照文档做自定义界面只会看到一句降级文本，**无报错、无日志、也无法自救**。
+  DESIGN §4.1 / PLAY_DEV §4 / `model.py` 的 kind 说明统一标注**预留未实现**，并给出
+  替代路径（自定义界面用 `register_view` + provider；往块里加内容用 `register_ui_hook`）。
+  GAPS G35 同步。**不实现**：`register_view` 已覆盖其全部价值，`custom` 的唯一额外
+  能力是"UiBlock 树内联自定义组件"，当前无真实需求，真做时代价一样。
 
 ## v0.6.0（2026-09-24）
 

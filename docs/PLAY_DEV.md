@@ -133,7 +133,8 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `capabilities(entity)` | 某实体合并后的能力：`tags / active_tags / inactive_tags / unknown_tags / block_move / interactions / fields` |
 | `register_interaction(action, handler, label)` | 全局交互动作；`async (api, req) -> InteractionResult` |
 | `register_world_event(event, handler, interval=0, phase="simulate", order=0)` | 事件订阅；on_tick 必须给 interval（秒）；**phase/order 声明跨包执行顺序**（D27，见 §5.3） |
-| `register_ui_component(name, web_entry)` / `register_ui_hook(block_kind, position, provider)` | 自定义界面组件 / UiBlock 注入（before/after/replace） |
+| `register_ui_hook(block_kind, position, provider)` | UiBlock 注入（before/after/replace，**可用**；服务端展开，见 §11） |
+| `register_ui_component(name, web_entry)` | ⚠️ **预留未实现**（勿用）：注册表只写不读、无 list 也无 HTTP 出口，`UiBlock(kind="custom")` 前端只渲染 `fallback_text`。要自定义界面请用 `register_view` + provider（§8）；要往块里加内容用 `register_ui_hook` |
 | `apply_ui_hooks(block)` | 对一棵 UiBlock 树应用全部已注册钩子（服务端展开，锁内）；玩家壳生成角色卡后调它，部件包的面板即被追加（§11） |
 | `register_tool(name, handler, description, params)` | MCP 工具（见 §7） |
 | `register_view(key, title, icon, provider)` | WebUI 视图（见 §8） |

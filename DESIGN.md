@@ -319,7 +319,7 @@ class ItemDef:
 | `register_entity_kind` / `add_kind_fields` / `add_category_fields` | 实体类型、字段、分类 |
 | `register_interaction` | 交互动作 handler |
 | `register_world_event` | 任意事件名订阅（on_tick 带间隔）；**phase / order 声明执行顺序**（D27，§2.5） |
-| `register_ui_component` / `register_ui_hook` | 自定义界面组件 / 界面注入（before/after/replace） |
+| `register_ui_component` / `register_ui_hook` | 界面注入（before/after/replace，**可用**）/ `register_ui_component`：**预留未实现**——注册表只写不读、无 list 也无 HTTP 出口，`UiBlock(kind="custom")` 前端只渲染 `fallback_text`（能力已被 `register_view` 的 provider 取代；要做"UiBlock 树内联自定义组件"时再实现，见 GAPS G35） |
 | `register_tool` | MCP 工具；handler 签名 `handler(api, ctx, **args)`——api 注入统一（与 §2.4 一致），ctx = MCP Context（读请求 _meta/进度），身份经 `api.caller()` 读取、内核裁定权限；参数类型 string/integer/number/boolean/**array**（G11） |
 | `register_view` | WebUI 页面（协议见 §4.4 视图宿主） |
 | `override_primitive` / `disable_primitive` / `call_default_primitive` | 原语覆盖 / 禁用 / 调默认实现（D11，§2.4） |

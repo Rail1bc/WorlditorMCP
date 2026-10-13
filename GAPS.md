@@ -545,8 +545,19 @@
 - **商贩购买非原子**：`interaction/main.py` 先扣金再 `bag_add`，背包满时钱花了货
   没到（错误还被吞成"交互执行出错"）。修法：先 `bag_add` 成功再扣金，或失败回滚。
 - **`_bag_take` 只从第一格扣**：同一物品跨多格（30+30）取 50 会误报"数量不足"。
-- **`_ui_components` 是只写不读的死注册表**：`register_ui_component` 零调用者，
-  但 DESIGN §4.1 / PLAY_DEV §4 仍列为 API（能力已被 `register_view` provider 取代）。
+- **`_ui_components` 是只写不读的死注册表 → v0.7.0 已统一文档口径（不再宣称可用）**：
+  `register_ui_component(name, web_entry)` 把 `"<play_id>.<name>" → url` 存进
+  `engine._ui_components`（`engine.py:555/1544-1551`），但**既无 list 方法、也无任何
+  HTTP 端点**暴露它，且**零调用者**。配套的 `UiBlock(kind="custom")`（结构
+  `{"component": "ns.name", "props": …, "fallback_text": …}`）前端
+  `UiBlockRenderer.vue:57-60` **只渲染 `fallback_text`**，`component`/`props` 一个字节
+  都不读（旧注释写着"组件加载 v4.2"，v4.2 从没来）——所以包作者照文档做自定义界面，
+  只会看到那句降级文本，**无报错、无日志、也无法自救**。
+  **处置（v0.7.0）**：DESIGN §4.1 / PLAY_DEV §4 已标注"预留未实现"，`model.py` 的
+  kind 说明同步标注；**不实现**——`register_view` 的 provider 已能做自定义界面组件的
+  全部事情（同一套组件协议），`custom` 的唯一额外价值是"在 UiBlock 树里**内联**一个
+  自定义组件"，而该场景目前**没有真实需求**（ui_hook 能注入内核认识的 kind，但不是
+  任意 Vue 组件）。真需要时再实现，代价一样（注册表出口 + 前端一个分支 + 降级路径）。
 - **引擎命名/注释漂移**：`available_actions` 注释仍写"kind 声明 ∪ 全局注册表"、
   `model.py` 注释仍写"优先于 kind spec 的 block_move"（D18 后应说"标签"）。
 

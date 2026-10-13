@@ -164,5 +164,12 @@ curl -s -X POST http://127.0.0.1:6288/world/mcp \
   客户端缓存失效判定：`revision` 没变 = 世界没写盘；单实体用 `entity.revision`
   比对（相等 = 这条没被改过）。玩法包侧精确增量用
   `api.query_entities(changed_since_revision=cursor)`。
+- **SSE 载荷形状**：**自定义事件的数据在 `data` 键下**，预置事件把各自字段摊在顶层。
+  例：`{"event": "plays_changed", "ts": …, "entity": null, "revision": N, "tick": M,
+  "data": {"reason": "install", "plays": ["worlditor_play_x"]}}`。
+  `plays_changed` 由内核在玩法包 load_all / enable / disable / install / uninstall
+  之后发出（v0.7.0 新增），**前端据此刷新 `/views`**——装/卸玩法包后玩家端不必整页
+  刷新。注意：SSE 只发 `data:` 行、**没有 `id:` 行**，断线重连（`retry: 3000`）无法
+  补发丢失的事件，客户端应把 `/state` 快照当作兜底；`read` 围观档不能订阅 `/events`。
 - **实体查询（D26）不走 HTTP**：`query_entities` 是玩法包/内核 API（`api.query_entities`），
   面向 agent 的查询能力由玩法包自己注册 MCP 工具暴露。
