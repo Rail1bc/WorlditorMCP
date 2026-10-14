@@ -150,7 +150,12 @@ def test_map_visibility_state_filter(tmp_path):
         home = next(m for m in state["maps"] if m["id"] == "home_a")
         assert home["visible"] == "private"
         assert any(loc["map_id"] == "home_a" for loc in state["locations"])
-        assert any(e["map_id"] == "home_a" for e in state["entities"])
+        # v2 / D36：位置在 core:position 组件里，`/state` 的实体 dict 不再有顶层 map_id
+        assert any(
+            (e.get("components", {}).get("core:position") or {}).get("map_id")
+            == "home_a"
+            for e in state["entities"]
+        )
         # read 档（无实体）看不到 private
         read = (await client.get("/auth/read-token")).json()["token"]["token"]
         hr = {"Authorization": f"Bearer {read}"}
@@ -175,7 +180,12 @@ def test_invisible_filter(tmp_path):
         engine = await _engine(tmp_path)
         try:
             spy = await engine.place_entity(
-                "player", "default", 0, 0, name="潜行者", attrs={"invisible": True}
+                "player",
+                "default",
+                0,
+                0,
+                name="潜行者",
+                components={"core:perception": {"invisible": True}},
             )
             guard = await engine.place_entity("player", "default", 0, 0, name="守卫")
             # 守卫看不到潜行者
@@ -187,8 +197,10 @@ def test_invisible_filter(tmp_path):
             # 无 viewer（机制层/管理）不过滤
             all_entities = engine.list_entities()
             assert spy.id in {e.id for e in all_entities}
-            # 守卫获得真视
-            await engine.set_attrs(guard.id, {"see_invisible": True})
+            # 守卫获得真视（v2：字段归属组件，core:perception 是内核协议组件）
+            await engine.set_data(
+                guard.id, "see_invisible", True, component="core:perception"
+            )
             peers = engine.list_entities(viewer_id=guard.id)
             assert spy.id in {e.id for e in peers}
         finally:

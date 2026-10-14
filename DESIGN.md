@@ -31,8 +31,8 @@
 内核 worlditor（v5）
   ├─ 事实层：世界（激活玩法包集合）+ 组织树（多层）+ 地块/连接/模板
   │          + 实体（字段化 + revision/changed_tick 变更戳，D28）
-  │          + 物品定义（字段化）+ 玩法数据 KV + 日志
-  │          （SQLite WAL，全量内存快照；无背包持有表）
+  │          + 玩法数据 KV + 日志
+  │          （SQLite WAL，全量内存快照；无背包 / 物品表——D37）
   ├─ 原语（默认实现；行为原语可被玩法包覆盖/禁用 D11，place/remove
   │    仅可调用不可覆盖 D14）：place_entity / remove_entity / move_entity /
   │    move（路径移动：读 connections → 抽目标）/
@@ -41,7 +41,7 @@
   │    （无背包原语——D8 持有下沉；无 say——D1）
   │    查询原语（只读，不可覆盖）：query_entities（D26）
   ├─ 身份：账户 / token 三档 / auth_mode / 邀请码 / 吊销（不可下沉，全局）
-  ├─ 编辑：世界/组织树/地块/连接/地图/实体与物品定义编辑
+  ├─ 编辑：世界/组织树/地块/连接/地图/实体与组件编辑
   │        （admin 人类入口 + 玩法包 API 程序入口，D14）
   ├─ 管理：玩法包 list / enable / disable / uninstall + 状态持久化（内置能力）
   └─ 传输（双端口，D16）：
@@ -60,9 +60,8 @@
 | 世界 / 组织树 | worlds（玩法包激活集合）+ world_folders（多层纯管理，D15，见 §3.0） |
 | 地块 / 连接 / 模板 | 多地图；4 方向槽位 + 平行路径 + 加权目标 + **分时段文本（v3 模型原样保留）**；地图归属世界与组织节点；**可见性 visible（public/private，G1）** |
 | 文本（TextSchedule） | 地图/地块 `description` 与出口路径 `label` **只有一种格式**：`{"periods": [{"start": "HH:MM", "end": "HH:MM", "items": [{"text": "…", "weight": 1}]}]}`——`None` = 无文案；**纯字符串与非结构一律报错**（v0.5.2 统一，见 GAPS G28：两种写法并存必然引出静默丢字段）。解析：`parse_text_schedule`（**不再静默丢弃非法条目**） |
-| 实体 | 字段化统一模型（见 §3.1），位置持久化；`revision` / `changed_tick` 变更戳（D28） |
+| 实体 | 字段化统一模型（见 §3.1），位置持久化（`map_id` / `row` / `col` **仍是表列**，§12.4）；**名字 / 描述 / 账户绑定在组件里**（`core:info` / `core:account`，§12.4）；`revision` / `changed_tick` 变更戳（D28） |
 | 变更检测 | `revision`（全局写序号，world_meta 持久化、重启续号）+ 实体 `changed_tick`（tick 窗口）；增量游标见 D26/D28 |
-| 物品定义 | 字段化 ItemDef（见 §3.2），**仅定义不持有** |
 | 玩法数据 KV | play_data（namespace = 世界 + 玩法包 双层隔离） |
 | 世界日志 | world_log（5000 上限） |
 | 身份 | accounts / tokens / invite_codes（全局，跨世界） |
@@ -76,8 +75,8 @@
 | `place_entity` / `remove_entity` | 实体生命周期（玩法包可 spawn/despawn，D14；身份化实体不可 remove） | 内核 |
 | `move` | 路径移动（身份化实体） | 内核：读 connections → 按权重抽目标（死引用剔除） |
 | `move_entity(map,row,col)` | 直接位移（行为驱动，传送语义） | 内核 |
-| `set_data` / `get_data` | 字段读写（合并写 / 全量读；容器 = attrs） | 内核 |
-| `remove_data` | **删字段**（D29；容器 = attrs，与 set_data 同走分派表——可被过滤/覆盖/禁用）。字段不存在 = 幂等返回 False，不落盘、不发事件 | 内核 |
+| `set_data` / `get_data` / `remove_data` | 字段读写删——**字段 = 组件内的一个键**（v2：`component` 必填，容器不再是扁平 attrs） | 内核 |
+| `add_component` / `set_component` / `remove_component` | 组件级整块增 / 写 / 删（v2 / D32；走分派表，`core:` 除外）。`get_component` / `list_components` 只读、**不进分派表** | 内核 |
 | `query_entities` | **实体查询**（D26：按标签 / 排除标签 / 地图 / 世界 / 坐标 / 感知 viewer / 变更游标筛一批实体；稳定排序 + limit）。只读、**不可覆盖**（查询是数据面，不是行为面） | 内核 |
 | `interact` | 交互通道：handler 命令式调内核原语（无 effects 清单，D12）；结果 = text + ui | 内核：按 register_interaction 注册表分发（动作校验 → handler → on_interact 事件）；override 则整体替换该通道（校验/事件语义由覆盖者决定，同 §2.4 末句） |
 
@@ -218,7 +217,7 @@ emit / kv_set…）为同一任务重入，安全且多段「读-判-写」天�
   不等于"没有规则"；管理端建图即归属当前世界，并提供孤儿地图一键归属
 - 切换即时生效：给某世界停用一个包 = 该世界失去对应行为，其他世界不受影响
 - **仍为全局**：跨包服务（服务是包与包之间的调用约定，不是世界内能力）、
-  物品定义等注册表本身（实例按世界过滤的是"能力面"）；世界间的数据可见性
+  组件声明 / 类型等注册表本身（实例按世界过滤的是"能力面"）；世界间的数据可见性
   （`/state` 返回哪些地图）与出生点选择见 GAPS G15 遗留项
 
 **跳转（MCP，⚠ 未实现——见 `GAPS.md` G15）**：
@@ -231,8 +230,16 @@ emit / kv_set…）为同一任务重入，安全且多段「读-判-写」天�
 
 ### 3.1 实体（字段化 + 标签组合，D9 / D10 / D18）
 
-实体只保留**最小身份与位置**，一切数据以**字段**承载（容器为 `attrs` 与
-`state` 两个 dict）；**能力由标签承载**——基底 `kind` 是"预设的标志位"，
+> ⚠ **本节部分已被 §12（实体模型 v2）取代**——**第 1 期 + 1c 期已落地**：
+> `attrs` / `state` 两个容器**已删除**，数据改按**组件**分组（`Entity.components`，
+> 组件名 = `source:name` 信封）；`block_move` 与**阻挡机制已整体移除**（D34）；
+> `name` / `desc` / `user_id` **已从表列搬进组件**（`core:info` / `core:account`，§12.4）
+> ——它们只剩**只读 property**（派生视图），不再是可写字段。
+> **仍按本节描述的部分**：`kind` / `tags` 能力模型、**位置**仍是表列
+> （`map_id` / `row` / `col`）。第 2 期会把 `kind` / `tags` 也折叠为组件。
+
+实体只保留**最小身份与位置**，一切数据以**字段**承载（v2 起容器是
+`components`，见 §12.4）；**能力由标签承载**——基底 `kind` 是"预设的标志位"，
 实例级 `tags[]` 与之叠加，能力取并集（D18/D19）。
 
 ```python
@@ -243,11 +250,11 @@ class Entity:
     map_id: str      # 位置
     row: int
     col: int
-    name: str        # 显示主元素
-    desc: str = ""
-    attrs: dict = {}  # 玩法数据（hp/exp/gold...，内核不解释；set_attrs/set_data 写）
-    state: dict = {}  # 动态状态（门开/关、block_move 动态覆盖...；set_state 写，不经分派）
-    user_id: str | None = None   # 身份化实体绑定
+    name: str        # ⚠ 只读 property（v2 1c）——派生自 core:info.name，缺失 → id 前 8 位
+    desc: str = ""   # ⚠ 只读 property——派生自 core:info.desc，缺失 → ""
+    attrs: dict = {}  # ⚠ 已删除（v2 第 1 期）——见本节顶部标注与 §12
+    state: dict = {}  # ⚠ 已删除；数据统一为 components：{组件名: 数据}，组件名 = source:name
+    user_id: str | None = None   # ⚠ 只读 property——派生自 core:account.user_id，缺失 → None
     last_active_ts: float = 0.0
     tags: list[str] = []         # 实例级标签（有序，参与能力并集与字段覆盖顺序）
     revision: int = 0            # D28：落库分配的全局变更号
@@ -259,7 +266,7 @@ class Entity:
 ```
 有效标签 = 基底 kind + 类型预设标签（register_entity_type(kind, tags=[...])）+ 实例 tags
 能力     = ∪ 各标签的声明（**逐标签按世界激活过滤**，D21；未注册标签不贡献）
-block_move   = 任一标签为真即阻挡（state["block_move"] 仍是最高优先的动态覆盖）
+block_move   = ⚠ **已整体移除**（v2/D34：所有实体都不阻挡）；标签只贡献 interactions / fields
 interactions = 并集
 fields       = 隐式 kind 标签 → 实例 tags（数组序）→ 分类字段（越实例化越优先）
 ```
@@ -279,7 +286,7 @@ fields       = 隐式 kind 标签 → 实例 tags（数组序）→ 分类字段
 |---|---|---|
 | 标签/类型声明字段 | `register_entity_kind(kind, ..., fields=[{name,label,type,default?}])` / `register_entity_tag` | 声明级 schema，UI 通用渲染（角色卡/编辑表单）；类型 str/int/float/bool/json |
 | 向已有标签追加字段 | `add_tag_fields(tag, fields)`（旧名 `add_kind_fields`） | 玩法包 B 给**带该标签的实体**加字段（D18 起语义扩张） |
-| 实例任意字段 | `set_data(entity_id, name, value)`（容器 = attrs，走原语分派） | buff 等临时效果，无需声明；未声明字段 UI 降级原始 JSON。同容器的 `set_attrs` 为合并写（不经分派），二选一 |
+| 实例任意字段 | `set_data(entity_id, name, value, component=…)`（v2：**必填组件名**，走原语分派） | buff 等临时效果，无需声明；未声明字段 UI 降级原始 JSON。整块覆盖用 `set_component`（走分派），逐键合并写由玩法包自行读改写 |
 | 删字段 | `remove_data(entity_id, name)`（走原语分派，D29）/ `remove_state(entity_id, name)` | 显式删掉一个字段（D23 的另一半：不能只保证"不静默丢"，还要能"明确地删"）；字段不存在 = 幂等 False |
 
 **分类标签（D10）**：`register_entity_kind(..., categories=("生物",))`——标签挂
@@ -287,27 +294,16 @@ fields       = 隐式 kind 标签 → 实例 tags（数组序）→ 分类字段
 分类全部标签获得字段（运行时合并，且在字段覆盖顺序里**排最后**）；
 `list_kinds(category=None)` 精准选取（"给所有生物加血量" / "战斗目标 = 同地块生物"）。
 
-**其他规则**：阻挡判定 `state["block_move"]` 优先于 kind 声明（门开/关玩法包写
-state）；实体无内置背包字段（D8）。
+**其他规则**：~~阻挡判定 `state["block_move"]` 优先于 kind 声明~~ → **阻挡机制已整体移除**（v2/D34），实体不再挡路；实体无内置背包字段（D8）。
 
-### 3.2 物品定义（D8：定义回内核，持有下沉）
+### 3.2 物品定义（已移除）
 
-物品与实体同构：**内核只定义物品类型，字段可玩法包扩展；持有（背包）下沉**。
-
-```python
-@dataclass
-class ItemDef:
-    id: str          # 类型键（如 apple），物品定义即"类型"
-    name: str
-    desc: str = ""
-    attrs: dict = {}  # 字段（同实体字段机制：玩法数据容器）
-```
-
-- `register_item_def(item, fields=[...])` 定义物品类型；`add_item_fields(item_id,
-  fields)` 向已有物品类型追加字段（如给苹果加 price）。
-- 物品字段与实体字段**共用同一套"数据字段"设施**（schema 声明 / 合并 / UI 通用渲染）。
-- **持有/背包不在内核**：谁持有多少、有限格子、堆叠、整理，全由玩法包实现
-  （可存实体实例字段、KV 或自定义结构）。
+**v2 / D37：物品定义与持有都下沉玩法包，内核只有实体**——原 D8"定义回内核、持有
+下沉"作废：**类型 → 组件声明，实例 → 实体 + 组件**（替换关系表见 §12.8）。
+`ItemDef` / `items` 表 / 物品注册与落库 API（`register_item_def` / `save_item_def` /
+`add_item_fields` / `get_item_def` / `list_item_defs` / `delete_item_def` /
+`flush_item_defs`）/ `InteractionRequest.item_id` 槽位 / `on_item_used` 内核事件
+**全部删除**——本节不再描述任何内核机制。
 
 ## 4. 玩法包体系
 
@@ -315,8 +311,7 @@ class ItemDef:
 
 | API | 内容 |
 |---|---|
-| `register_item_def` / `add_item_fields` | 物品类型定义与字段追加 |
-| `register_entity_kind` / `add_kind_fields` / `add_category_fields` | 实体类型、字段、分类 |
+| `register_entity_kind` / `register_entity_tag` / `add_tag_fields` / `add_category_fields` | 实体类型、**组件声明**（名字 + 字段 schema + 归属）、字段追加（旧名 `add_kind_fields`）、分类 |
 | `register_interaction` | 交互动作 handler |
 | `register_world_event` | 任意事件名订阅（on_tick 带间隔）；**phase / order 声明执行顺序**（D27，§2.5） |
 | `register_ui_component` / `register_ui_hook` | 界面注入（before/after/replace，**可用**）/ `register_ui_component`：**预留未实现**——注册表只写不读、无 list 也无 HTTP 出口，`UiBlock(kind="custom")` 前端只渲染 `fallback_text`（能力已被 `register_view` 的 provider 取代；要做"UiBlock 树内联自定义组件"时再实现，见 GAPS G35） |
@@ -348,7 +343,7 @@ class ItemDef:
 | 能力 | 说明 |
 |---|---|
 | list | 名称/版本/作者/desc/requires/**状态**（loaded/disabled/加载失败+错误详情）/**builtin 标志** |
-| enable / disable | 即时生效：复用 load_one / teardown / clear_play_registrations（扩展版）；**disable 仅卸载代码注册，play_data KV 与 data/、web/ 资源保留**，enable 重新加载即恢复。**物品定义分两种生命周期**（v0.5.2）：包代码声明的（`api.register_item_def`）随停用清理、重新启用即恢复；**用户数据形态**的（管理页维护，走 `api.save_item_def`）停用与整体卸载都保留——只有真卸载（删包目录）才一并删（`purge=True`） |
+| enable / disable | 即时生效：复用 load_one / teardown / clear_play_registrations（扩展版）；**disable 仅卸载代码注册，play_data KV 与 data/、web/ 资源保留**，enable 重新加载即恢复。**"包声明 vs 落库内容"的区分由存储位置天然承担**（v2 / D37：原"物品定义分两种生命周期"与 `keep_user_items` 参数一并删除）：包代码声明的（`register_entity_kind` / `register_entity_tag` / 交互 / 事件 / 字段 / 包注册的模板内存表）随停用清理、重新启用即恢复；**落库内容**（`templates` 表里 `save_template` 的本地实体模板、play_data KV）停用与整体卸载都保留——真卸载（删包目录）只删包目录，`purge=True` 另清标签归属记忆（D26） |
 | uninstall | 删除社区包目录（含其数据，不可逆）；内置包仅可停用 |
 | 状态持久化 | enabled 标记落库，重启按标记加载（内置包默认启用，D5） |
 | 整体重载 | 随内核（C2 保持：不做代码热重载） |
@@ -523,7 +518,7 @@ class ItemDef:
 但*不依赖*部件（无包间硬依赖；部件从玩家身上"追加/卸下"）。
 
 ```
-内核 Entity（kind=player：id/位置/name/desc/attrs/state/user_id）——玩家"存在"
+内核 Entity（kind=player：id + 位置表列 + components（含 core:info / core:account））——玩家"存在"
    ├─ 玩家壳包（如角色视图 + 角色卡工具）：零包间依赖，只描述"我是谁"
    └─ 部件（可追加，按 entity_id 键控）：
         ├─ 出生礼包包   新玩家礼包（硬依赖背包包的服务——发货需要）
@@ -559,7 +554,7 @@ class ItemDef:
 ## 4.6 玩法包管理页（管理端注册协议，v0.1.12）
 
 **管理端不是内核的终端——玩法包可注册自己的管理页**（可多页），管理端以
-导航入口 + actions 代理承载"玩法包内容治理"（物品定义、商店配置等）：
+导航入口 + actions 代理承载"玩法包内容治理"（自有数据：货单 / 商店配置 / 背包等）：
 
 - **注册**：`api.register_admin_page(key, title, icon, component_url, actions)`。
   - `component_url` 校验同视图：必须指向本站本包资源（`/plays/<play_id>/web/…`）
@@ -578,13 +573,13 @@ class ItemDef:
   自身页面也不放"返回玩法包"按钮——它就是管理端的一个导航页面。
   多个玩法包都注册管理页时，条目补显示所属包名。
 - **数据语义归玩法包**：内核**不**裸露 play_data/edit 类读写——背包 slots、
-  物品定义字段等只有玩法包懂；管理动作 = 玩法包在锁内以自己的 API 读写
+  货单字段等只有玩法包懂；管理动作 = 玩法包在锁内以自己的 API 读写
   （kv/服务/工具/注册表），校验与不变量由玩法包负责。
 - **组件协议**：与视图组件一致（`new Function("Vue", "UiBlock", code)`）；
   组件内 fetch 代理端点（同源 + Bearer），可构建任意管理界面。
-- **落地示例**：items 包注册「物品管理」页（物品定义 list/create/update/delete，
-  创建/更新即 `flush_item_defs` 落库）；管理端侧栏「玩法包管理页」分组下
-  出现入口，点进去动态加载组件。
+- **落地示例**：夹具包 `worlditor_play_demo` 注册「货单管理」页（action =
+  `list` / `set_price`，数据 = 本包 kv 叠加 `data/shop.json`）；管理端侧栏
+  「玩法包管理页」分组下出现入口，点进去动态加载组件。
 
 ## 5. 行为归属（谁提供什么）
 
@@ -601,7 +596,7 @@ class ItemDef:
 | 世界/组织树管理（CRUD/激活配置） | 内核（admin，管理端口，D15） |
 | 地图编辑 / 玩法包管理 UI | 内核（admin 人类入口；玩法包经 API 程序化编辑，D14） |
 | 账户管理（检索/凭据/角色） | 内核（admin，管理端口；v0.1.12 检索分页） |
-| 玩法包内容治理（物品定义等） | 玩法包管理页（§4.6：actions 自管，内核代理） |
+| 玩法包内容治理（自有数据：货单 / 背包 / 商店配置等） | 玩法包管理页（§4.6：actions 自管，内核代理） |
 
 ## 6. 内置包（1 个世界内容包，默认启用，D5 / D31）
 
@@ -630,7 +625,7 @@ class ItemDef:
 **参考实现**：行为玩法包的参考实现是**测试夹具包**（提交在案、随测试演进）——
 `tests/fixtures/plays/worlditor_play_demo/`（视图组件与管理页组件参考），
 夹具 Python 代码在 `tests/play_fixtures.py`（`install_demo_play()` 装进临时目录）。
-它各示范一件：MCP 工具（`world_whoami`）、视图、管理页、物品定义、`character`
+它各示范一件：MCP 工具（`world_whoami`）、视图、管理页、组件声明、`character`
 块产出 + ui_hook 展开、世界事件、kind 与交互。另有更小的探针包
 （`install_probe_play()`：工具 + 视图），供世界激活过滤类测试做对照。
 
@@ -664,17 +659,31 @@ WorlditorMCP 以独立服务重开：
 ### 7.3 数据策略：全新数据目录，零债务（D13）
 
 - 服务使用独立数据目录（`WORLDITOR_DATA_DIR`，默认 `./data`），无历史数据
-- 插件时代库不迁移、不兼容；无 schema_version 检测/迁移逻辑
+- 插件时代库不迁移、不兼容；**没有迁移逻辑**（版本检测 = 拒绝启动，见下一条）
 - **读到不兼容的既有内容 = 拒绝启动，并指出删哪个文件**（`IncompatibleDataError`）：
   拒绝 ≠ 容忍，也 ≠ 迁移——库里读不了的字段（旧格式文案、坏 JSON 等）会指名
   「表 / 行键 / 字段」，并给出「删除 `<数据目录>/world.db` 后重新启动」的处理方式；
   CLI 打印这段话而**不打栈**。取舍：一屏 traceback 里唯一有用的信息是最后那句
   "（收到 str）"，而运维真正要回答的是"删哪个文件"。**不自动清理**不兼容的行：
   数据删除必须是操作者按下去的动作（格式再变时，自动清理会静默吃掉世界）。
+- **表结构也走同一道闸**（v2 起，`_check_schema`）：读 `world_meta.schema_version`
+  **和**一张「后加列清单」**和**一张「**不该存在的列**」清单，任一不符即拒绝启动。
+  **原来的"缺列就 ALTER 补上"（`_ensure_columns`）已删除**——补出来的列是空默认值，
+  等于**静默清空旧数据**（v2 尤其致命：补出来的 `components_json` 会把实体的全部数据变成
+  `{}`）。三道检查缺一不可——后两道是给「没有版本记录 / 版本记录不可信」的库兜底的：
+  - **后加列清单**：只查版本记录的话，**没有版本记录的极老库 / 手造库**会一路走到载入期
+    撞出裸 `IndexError`（一屏栈、没有可操作的指引）；
+  - **不该存在的列**（v9 新增，v10 扩到六列）：只查"需要的列在不在"的话，**多出来的旧列**查不出来——
+    还带着 `entities.name` / `desc` / `user_id` 的库（v9 已把这三样搬进 `core:info` /
+    `core:account` 组件）会**载入成功**，而名字 / 描述 / 账户绑定**被静默丢掉**
+    （载入只读 `components_json`，那三列再没人看）。所以这三列在库里出现即**拒绝启动**，
+    错误消息把它们逐个列出来。**v10 同理**：`map_id` / `row` / `col` 也进了这张名单——
+    一个 v9 的库若被放行，载入出来的会是**"全世界实体都没有位置"**，比报错危险得多
+    （所有实体静默从地图上消失，但库看着是好的）。
 - **内核不播种任何世界内容**（v0.2.0）：空库只建一个空的「默认世界」容器，
   地图/地块/实体由**世界包**导入（内置参考：worlditor_play_demo_world，含
-  41 地块与 3 个演示实体）或用户经管理端地图编辑器创建；物品定义由玩法包注册
-  （苹果归 items 包、喇叭归 social 包）；实体 kind 与交互由 interaction 包注册
+  41 地块与 3 个演示实体）或用户经管理端地图编辑器创建；组件声明由玩法包注册
+  （如原 items 包的苹果、原 social 包的喇叭）；实体 kind 与交互由 interaction 包注册
 
 ## 8. 分阶段路线（每阶段可独立发布/验证）
 
@@ -712,14 +721,14 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 
 | # | 决策点 | 结论 |
 |---|---|---|
-| D1 | 说话能力归属 | **内核无 say**：单地块说话与全图喇叭广播全部下沉玩法包（social 包：cell 说话、world 广播消耗喇叭+冷却；通道 = 自定义事件 emit；喇叭 = 内核物品定义 + 本包持有） |
+| D1 | 说话能力归属 | **内核无 say**：单地块说话与全图喇叭广播全部下沉玩法包（social 包：cell 说话、world 广播消耗喇叭+冷却；通道 = 自定义事件 emit；喇叭 = 本包组件声明 + 本包持有） |
 | D2 | 同名工具冲突 | **报错并拒绝注册**（管理页可见错误，避免静默替换） |
 | D3 | demo_play | **删除**（领域包兼作 SDK 模板，避免双份维护；测试用 play_fixtures 夹具替代） |
 | D4 | ~~同仓库重开~~ | **已修订**：插件仓库作废（仅代码参考），新仓库 WorlditorMCP 以**独立服务**重开——pip 包 worlditor-mcp / Docker 镜像，`worlditor serve` 一行部署，版本 v0.1.0 从零 |
 | D5 | 内置包默认状态 | **默认全部启用**，管理页可停用（停用有"将失去对应能力"提示） |
 | D6 | ~~移动规则归属~~ | **已被 D11 取代**（移动回归内核默认实现，玩法包可覆盖） |
 | D7 | 视图宿主形态 | WebUI 仅渲染玩法包视图；内核保留登录、token、数据通道与兜底"无视图"提示 |
-| D8 | 物品与背包归属 | **定义回内核，持有下沉**：物品 = 内核 ItemDef（类型，字段化，玩法包可追加字段）；背包（有限格子/单物品多格/堆叠/整理）与持有关系全由玩法包自定；无 inventories 表 |
+| D8 | 物品与背包归属 | **（已被 D37 取代）** 原结论 **定义回内核，持有下沉**：物品 = 内核 ItemDef（类型，字段化，玩法包可追加字段）；背包（有限格子/单物品多格/堆叠/整理）与持有关系全由玩法包自定；无 inventories 表。**D37 后**：类型定义 → 组件声明、实例 → 实体 + 组件（内核不再有物品定义）；"持有下沉"继续有效 |
 | D9 | 实体数据形态 | **字段化**：实体 = id/kind/位置/name/desc + data 字段（内核不解释）；kind 注册可声明字段 schema（UI 通用渲染）；可向已有 kind 追加字段；实例可写任意未声明字段（buff 等临时效果） |
 | D10 | 实体分类标签 | kind 可挂 categories 标签；分类字段（add_category_fields）使该分类全部 kind 获得字段；list_kinds(category) 精准选取（如"给所有生物加血量"） |
 | D11 | 移动与内核能力覆盖 | **移动收束内核**（默认 = 路径移动：读 connections → 抽目标）；**全部原语可被玩法包 override/disable**（每原语至多一个覆盖者，第二个报错；禁用后调用报错）；**过滤器链（G14）**：可覆盖原语支持多过滤器（否决/改参/短路，注册序，链尾默认实现），与 override/disable 互斥；覆盖/过滤器状态管理页可见 |
@@ -743,6 +752,17 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 | D29 | 删字段原语 | **新增 `remove_data`（进分派表：可被过滤/覆盖/禁用）与 `remove_state`**——D23"不静默丢字段"的另一半：能**明确地删**，而不是只能"整体覆盖 attrs"顺手连坐别人的字段。字段不存在 = 幂等返回 False（不落盘、不发事件、不推进变更号）；删除发 `on_entity_changed {attrs_removed:[name]}` |
 | D30 | 与 ECS 的关系 | **不改成 ECS**：数据模型这一半已在门口（实体 + 可组合的能力单元 + 数据容器），执行模型是另一条路（事件/插件 + 中间件分派 + 单锁串行）。补 **A–D 四项**（D26 查询 / D27 调度 / D29 删字段 / D28 变更检测）让玩法包能用 ECS 式写法；**明确不采纳 E**：组件独立存储 / archetype / SoA / 并行系统执行（规模不需要、与"每字段改动都要落盘 + 批量写红线"直接冲突）。**不采纳的硬理由**：ECS 会把 query 语义、组件 schema 归属、系统顺序这三样**策略**塞回内核（撞 §2.3 红线），且 ECS 无对应物承载 D21 世界激活过滤这一治理层。详见 §11 |
 | D31 | 内置行为玩法包废弃 | **删除全部 6 个内置领域包**（items / movement / social / interaction / player / starter）及其包自身测试；内置目录只留世界内容包 `worlditor_play_demo_world`。**理由**：① 它们是按"内核机制逐项验收"切的（M3：一个机制一个包），**不是按玩法切的**——留作社区参考实现会教错地基；② 包间契约（属性键 / `play_data` key / UiBlock kind / 工具名引用）在系统里**没有表示**，包一多就不可见、不可校验、不可查询（GAPS **G39**）；③ 机制覆盖不依赖它们——覆盖在 `test_engine` / `test_filters` / `test_services` / `test_play_runtime` / `test_admin_pages` 等**外壳测试**里，行为集成覆盖移交夹具包。**替代**：夹具包 `tests/fixtures/plays/worlditor_play_demo/`（视图与管理页组件参考**提交在案**）+ `tests/play_fixtures.py`；E2E 把夹具包装进烟雾环境。**代价（如实记录）**：仓库不再有内置"官方玩法"示例，`docs/PLAY_DEV.md` 的示例指向夹具包；玩法包视图组件的版本串守卫改指夹具组件 |
+| D32 | 实体数据模型 v2 | **实体 = `id` + 组件字典**（`components`）：组件是**唯一的数据单位**，`attrs` / `state` 两个容器消失。**没有任何必填组件**（只有 `id` 本身必填）——位置、名字、身份、能力全部以组件承载，故"实体不在任何地方"是**合法状态**。`revision` / `changed_tick` 留表列（D38）。落库 14 列 → 4 列、`idx_entities_pos` 删除（实测无任何 SQL 使用，v4 遗留死重）。形态、`core:` 清单、缺失语义、分期见 **§12**。**取代 D9**，修订 D23 |
+| D33 | 组件信封与写入分派 | 组件 key = **`source:name`**（`core` / `<play_id>` / `local`），组件内部**不重复存** source/name（key 即身份，两处存同一事实必然不一致）。**`core:` 组件的写入不经原语分派表**——一条规则同时解决两件事：① 身份保护（玩法包写不进 `core:player` → **D20 的"删标签绕过身份保护"路径被命名空间堵死**）；② 内核协议字段不被玩法包的 override / 过滤器拦截。`source` 分隔符用 `:` 安全（`play_id` 正则 `^[A-Za-z0-9_-]+$` 不含冒号） |
+| D34 | `state` 退役 + 阻挡机制移除 | **取消 `state` 容器名**（语义过载：同一句 docstring 里 `hp` 既是 `attrs` 的例子又是 `state` 的例子；且内核两个容器都读，"引擎只认 state" 的原始理由已失效）。它仅存的机制价值是 `block_move` 的"动态覆盖优先"，而 v2 **整体移除阻挡**：标签声明 `block_move`、`state` 动态覆盖、`_is_blocking` / `_blocker_at`、`move()` 的阻挡检查全部删除，`move()` 退化为"读 connections → 抽目标 → 目标格在地图上吗"。门的开关 / 机关 / 墙 / NPC 挡路 → **全部归玩法包**（D11 已支持覆盖 `move`）。将来若需要，**另立一个"描述阻挡能力"的内核组件**（见 GAPS G44）。影响面实测：内核 27 处 / 前端 3 处 / 测试 41 处（含 D21 世界激活过滤的观测点须改用 `interactions`） |
+| D35 | 能力即组件（`tags` / `kind` 折叠） | `kind` 与 `tags` **折叠为组件**：**实体带某组件 = 具备该能力**。D18 / D19 / D21 的三条规则**原样保留**（interactions 并集 / 字段覆盖顺序定死 / 逐组件按世界激活过滤），只是"标签"改称"组件"。**纯能力组件 = 无数据的组件**（`{}`）；**虚构组件**（无任何声明）允许存在、界面标注、不贡献任何能力——沿用 D19"允许未注册标签"的既定范式。组件声明（原 `TagSpec`）= 组件类型：名字 + 字段 schema + 归属 + 能力声明 |
+| D36 | 位置组件化与"无位置实体" | `core:position`（`map_id` / `row` / `col`）是**可选**组件；**缺失 = 实体不在世界上**（合法，如玩家下线）。内核**不规定**"下线回原位还是回出生点"（归玩法包治理）。内核已有两处守卫可直接复用（`move()` 与 `_build_scene()` 的"实体不在任何地块"）。`Entity` 暴露只读 property 使内核约 30 处读点不必改写，但**缺失时返回 `None`（不返回 `""`/`0` 兜底——那会把"缺失"变成静默错误）**，另给显式 `require_position()` 供"必须在场"的路径 |
+| D37 | 内核移除物品（取代 D8） | **内核只有实体。** 物品定义与持有**都下沉**（原 D8"定义回内核、持有下沉"作废）：物品定义 → **组件声明**（内核注册表，归属与卸载清理沿用现有机制；**不是包私有 KV**——否则跨包共享能力真的丢失，回到 G6/G39 的坑）；物品实例 → **实体 + 组件**；`use_action` → interaction 名（`interactions` 完全覆盖）；`add_item_fields` → `add_tag_fields`（同一套设施）；管理员手工物品（`user_data`）→ **实体模板**（`templates` 表 `scope="entity"`，已持久化、已可管理端编辑）；`InteractionRequest.item_id` 槽位 → `args`；`on_item_used` 内核事件 → 玩法包自定义事件（事件总线本就支持任意事件名）；`items` 表 / `ItemDef` / 注册与落库路径**删除** |
+| D38 | 变更戳留在表列上 | `revision` / `changed_tick` **不进组件**，保留 `entities` 表列——它们是**存储元数据**而非实体数据；留列上使 D28 的"唯一盖章点"一眼可见（塞进 JSON 会把"盖章"变成"改数据"，模糊掉 D28 最关键的保证），且排查时可用 SQL 直查（全部数据进 JSON 后这种能力会大幅减少）。机制本身不变：全局号与业务写同事务落 `world_meta`、启动在任何写之前续号、`_tick_once` 无订阅者也 +1 |
+| D39 | 地块 → 实体 id 索引策略 | **只存内存（`store.entities_at`），不落库**——它是纯派生数据，落库只增加跨表不一致风险、零收益（启动本就全量载入），重启即重建。维护点收敛到 **`save_entities`**（**须配反查表 `entity_id → pos_key`**：`save_entities` 拿到的实体位置**已被就地改过**，看不出旧格）+ **`delete_entity`**。配自检"索引 id 总数 == 实体总数"（占位搁置后不变式简化为**每个实体恰好出现一次**）。**暂不实施**——现状内存线性扫描几千实体微秒级够用，且 D13 无迁移 → 随时可加（见 GAPS G42） |
+| D40 | 观察方式归玩法（内核不提供视图渲染） | **内核不新增任何"观察世界"的能力**：不做"通用实体渲染"、不做组件声明端点（`/components`）、不做组件渲染器（G35 的实现）。**理由**：**观察世界的方式也是玩法的一部分**——与 §0 内核定位（"不知道玩家怎么移动、**视野多大**、怎么说话、**页面长什么样**"）和 §2.3 红线同源，不是新增约束而是把已有原则执行到底。**内核保留的是通道与宿主，不是内容**：数据出口（`/state` / `/scene` / `/events` 的原始数据）、视图路由与加载（`register_view` provider）、UiBlock 渲染协议与 `ui_hook` 注入通道——即 §2.3 的"通道留内核，内容玩法包提供"。**代价（如实记录）**：全新安装玩家端**仍然是空界面**——G39 残留 4 **不由此解决**，要有视图必须装玩法包；组件化**不改变**这一点。**连带**：`core:info` 保留，但理由从"供渲染"变为"**内核自己的文案**"（lint / 删除保护 / 日志）；客户端要不要用它兜底显示是玩法包的事 |
+
+> **实施跟踪**：实体模型 v2（D32–D40）**已决策、未实施**，分期与影响面见 §12 与 `GAPS.md` G40。
 
 > **G 系列缺口实现**（详见 GAPS.md）：G1 地图可见性（private 在场可见）、G2 delete_map、
 > G11 工具数组参数、G12 感知隐身过滤、G14 通用原语过滤器链——已全部落地。
@@ -761,13 +781,18 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 事件/插件式行为 + 原语中间件分派"。数据模型那一半已在 ECS 门口，执行模型那一半
 是另一条路；差的不是实现深度，补上 D26–D29 之后玩法包就能用 ECS 式写法写逻辑。
 
+> ⚠ **v2 已翻牌本表部分行**（§12 / D32–D35）：`Component（数据单元）` ❌→✅（数据以组件为单位）、
+> `Component（查询键）` 从"用标签代替"**部分**走向"就是组件"（`kind`/`tags` 折叠属第 2 期）、
+> `attrs`/`state` 两容器**已消失**、`block_move` 与 `_is_blocking` **已移除**。
+> **执行模型（系统 / 调度 / 锁 / 延迟命令缓冲）不变。**
+
 **逐项对号**：
 
 | ECS 要素 | 现状 | 说明 |
 |---|---|---|
 | Entity | ✅ 有 | `Entity`（uuid4 hex），`store.entities` 内存表 + SQLite 一行一实体 |
-| Component（声明） | ✅ 有 | `TagSpec` / 三层次字段 schema（§3.1）：组件"长什么样"是声明出来的 |
-| Component（数据单元） | ❌ 无 | 数据在 `attrs` / `state` 两个容器里，不是 `(实体, 组件类型) → 数据`；"加/删组件"= 写/删字段（D29） |
+| Component（声明） | ✅ 有 | `TagSpec` / 三层次字段 schema（§3.1）：组件"长什么样"是声明出来的——**原"物品类型定义"就沉在这里**（v2 / D37，§12.8） |
+| Component（数据单元） | ✅ 有（v2） | 数据以组件为单位：`(实体, 组件类型) → 数据`（`Entity.components`，D32）；"加/删组件"= `add_component` / `remove_component`（不再是写/删扁平字段） |
 | Component（查询键） | ⚠️ 用标签代替 | 能力 = 各标签声明的并集（D19），**每次现算 + 规格缓存**；不是位掩码，也不做 archetype 迁移 |
 | Query | ✅ 有（D26） | `query_entities`：标签 AND / 排除 / 世界 / 坐标 / 感知 / 变更游标 |
 | System | ⚠️ 分四条通道 | 交互 handler / 世界事件 / 原语覆盖与过滤器 / on_tick——**全部被动触发**，没有"遍历一套 query"的显式系统对象 |
@@ -780,8 +805,14 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 **明确不采纳（E 项）及理由**：
 
 1. **组件独立存储 / archetype / SoA**：世界服务规模是几百到几千实体、每 tick 几毫秒；
-   ECS 的性能红利≈0，而拆成组件行会把"改一个 hp"变成"拆行合行 + 多表事务"，
-   直接撞 §2.4 的**批量写红线**（WAL 下 N 行 = N 次 fsync = 世界冻结）。
+   ECS 的性能红利≈0，而拆成组件行会把"改一个 hp"变成"拆行合行 + 多表事务"。
+   > **2026-10-14 据实修订**：本条原文写的是"直接撞 §2.4 的批量写红线（WAL 下 N 行 =
+   > N 次 fsync = 世界冻结）"——**这句不成立**：`save_entities` 已是 `executemany` +
+   > 单次 `_commit`（`store.py`），同一事务内写 N 行只有**一次** commit。**结论不变；
+   > 真正的代价是**：① 加载路径从"1 条 SELECT"变成多次 SELECT / JOIN + 组装；② 级联删除要
+   > 管；③ **D28 的"唯一盖章点"从 1 个变 N 个**，那条"写入路径不可能漏盖"的结构性保证
+   > 会降级成"靠纪律"。另有一条更硬的理由（见 §12 的定位与 D39）：**本项目的 SQLite 是
+   > 存档格式，不是查询引擎**——`query_entities` 是内存线性扫描，拆存储**连查询性能都不改善**。
 2. **并行系统执行**：行为有意跑在同一把锁里（读-判-写原子），换来的正确性远比吞吐值钱；
    而且每个字段改动都必须落盘（D23 + 崩溃恢复），并行写没有意义。
 3. **字段级脏标记 / 事件溯源**：D28 只做到"实体级戳"。字段级要做就得给每个字段挂号，
@@ -797,3 +828,272 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
   这个世界失效"这个概念；它在这里是**治理层**，也是产品差异点。
 - ECS 框架普遍假设"世界是进程内产物、可重启重建"；worlditor 的前提是**世界必须持久化
   且可被管理端治理**（编辑器 / 模板 / 级联清理 / 身份保护）。
+
+## 12. 实体模型 v2：实体 = id + 组件（已决策，分阶段实施中）
+
+> **状态**：🚧 **分阶段实施中**（2026-10-14 立项；决策 = D32–D40）。
+> **第 1 期已落地**：数据面组件化（`components` + 信封 + `core:` 命名空间 + 组件原语）
+> 与**阻挡机制移除**——后者原排第 2 期，但 D33 使玩法包再也写不了 `core:state`，
+> 也就关不掉门（阻挡）了，两步存在**硬依赖**，故合并落地。
+> **1c 期已落地**（原属第 2 期）：**`core:info` / `core:account`**——名字 / 描述 / 账户绑定
+> 从表列搬进组件（表结构 **v9**，`entities` **10 列**）。
+> **1d 期已落地**：**`core:position`**——位置从表列搬进组件（表结构 **v10**，`entities`
+> **7 列**，`map_id` / `row` / `col` **三列删除**）。**D36 的"不在任何地方"从此可表示**：
+> 实体可以合法地不属于任何地块，`list_entities` / `query_entities` **默认跳过**它们。
+> **第 2 期只剩一件**：`kind` / `tags` 折叠为组件 + `core:player`——**卡在 G47**
+> （能力名要不要遵守 `source:name` 信封尚未决定，见 §12.4 / GAPS G47）。
+> **第 3 期已落地**：内核移除物品（D37，见 §12.0 / §12.8——`ItemDef` / `items` 表 /
+> 7 个注册与落库 API / `item_id` 槽位 / `on_item_used` 事件全删）。
+> **实施跟踪**：`GAPS.md` G40；**影响面实测**：内核 105 处 / 前端 74 处 / 测试约 263 处。
+
+### 12.0 实施进度
+
+| 期 | 内容 | 状态 |
+|---|---|---|
+| **1** | 数据面组件化：`components` + 信封 + `core:` 命名空间 + **无必填** + 组件原语（`add` / `set` / `remove` / `get` / `list_component`）+ `core:perception` | ✅ **已落地**（`components` 落 `components_json`；当时收窄为"数据面容器 + 感知组件"，表结构 v8——现为 **v10 / 7 列**，见 12.3） |
+| **1b** | **阻挡机制整体移除**（D34 的一半，原排第 2 期） | ✅ **已落地**（`block_move` / `_is_blocking` / `_blocker_at` / `core:state` 全删，见 12.7） |
+| **1c** | **名字 / 描述 / 账户绑定进组件**（原属第 2 期）：`core:info`（`name` / `desc`）+ `core:account`（`user_id`） | ✅ **已落地**（表结构 **v9**、`entities` **10 列**——`name` / `desc` / `user_id` 三列删除；`to_dict()` 不再给顶层三键，见 12.3 / 12.4） |
+| **1d** | **位置进组件**：`core:position`（`map_id` / `row` / `col`）+ **D36"不在任何地方"**（原属第 2 期） | ✅ **已落地**（表结构 **v10**、`entities` **7 列**——位置三列删除；`Entity.map_id` / `row` / `col` 变**只读 property**（缺失 → `None`，**不是** `""` / `0`），新增 `has_position()` / `pos_key()` / `require_position()`；`list_entities` / `query_entities` 默认 `include_absent=False` 跳过无位置实体；`move()` 对无位置实体报错"实体不在任何地块"；前端位置读点收进 `entity.js` 的 `entityPosition()` / `positionLabel()` / `positionSortKey()`） |
+| **2** | `kind` / `tags` 折叠为组件 + `core:player` | ⏸ **未做**（能力面仍是 D18/D19/D21 的标签模型，身份仍看表列 `kind`）。⚠ **原排在本期的 `core:info` / `core:account` 已随 1c 落地、`core:position` 已随 1d 落地**，所以本期**只剩能力面折叠 + `core:player`**，且**卡在 G47**（能力名与 `source:name` 信封的关系未决——定了才能动） |
+| **3** | 内核移除物品（D37） | ✅ **已落地**（落地面全删：`ItemDef` / `items` 表 / 7 个注册与落库 API（`register_item_def` / `save_item_def` / `add_item_fields` / `get_item_def` / `list_item_defs` / `delete_item_def` / `flush_item_defs`）/ `InteractionRequest.item_id` 槽位 / `on_item_used` 内核事件——见 12.8） |
+| **4** | 索引（G42） | ⏸ 不做（可无限期推迟） |
+
+> **落地时的偏差（如实记录）**：第 1 期文档原本把"`core:position` / `core:info`"列在内，
+> 实际实施收窄为**只做数据面容器 + 感知组件**——因为位置与名字是**列**（不是组件）时
+> 改动面小一个数量级，且不影响"数据按组件分组"这一核心收益。
+> **补记（1c）**：名字 / 描述 / 账户绑定（`core:info` / `core:account`）已按原计划补做，
+> 表结构随之 **v8 → v9**。
+> **补记（1d）**：位置（`core:position`）也已补做（表结构 **v9 → v10**，7 列），
+> **D36 落地后"实体不在世界上"是合法状态**——这条语义走完了，第 2 期就只剩能力面。
+> 另：落地时发现原文档漏数了一个位置读点（`_event_payload` 的 `on_entity_move` 事件
+> 在实体"从世界外移回来"时会对 `None` 调 `list()`）——`from` / `to` 两侧都已加空值守卫。
+
+### 12.1 一句话形态
+
+```python
+Entity(id="9f2c1a4b…", components={…}, revision=1638, changed_tick=412)
+```
+
+**实体 = 一个 id + 一个组件字典。** 没有必填组件，没有特权数据位（`id` 本身除外）；
+`revision` / `changed_tick` 是存储元数据，留在表列上（D38）。
+
+```python
+# 一个实体的完整样子（商贩·阿福）
+Entity(
+    id="9f2c1a4b7e03d5c8a6b1f0e2d4c3b5a7",
+    components={
+        "core:position": {"map_id": "default", "row": 0, "col": 0},   # ✅ 1d 已落地（v10）
+        "core:info":     {"name": "商贩·阿福", "desc": "广场上的胖商贩…"},  # ✅ 1c 已落地（v9）
+        "core:perception": {},
+        "worlditor_play_trade:merchant": {"gold": 120, "stock": ["apple", "lamp"]},
+        "local:qqq":     {"随便": "手写的"},          # 虚构组件：允许、标注、无能力
+    },
+    revision=1638, changed_tick=412,
+)
+```
+
+### 12.2 组件信封
+
+组件 key = **`source:name`**：
+
+| source | 谁可写 | 用途 |
+|---|---|---|
+| `core` | **仅内核**（玩法包写入 → 报错拒绝） | 内核协议组件（见 12.4） |
+| `<play_id>`（如 `worlditor_play_trade`） | 该包 | 该包声明的组件 |
+| `local` | 编辑器 / 人手写 | 本地与虚构组件的落点（保证"信封必填"**无例外**） |
+
+- 组件内部**不重复存** `source` / `name`——key 即身份；两处存同一事实必然不一致
+- 分隔符用 `:` 是安全的：`play_id` 正则 `^[A-Za-z0-9_-]+$`（`play/__init__.py`）不含冒号
+- **`core:` 组件的写入不经原语分派表**（D33）——一条规则同时解决：
+  ① 身份保护（玩法包写不进 `core:player`，**D20 的"删标签绕过身份保护"被命名空间堵死**）；
+  ② 内核协议字段不被玩法包的 override / 过滤器拦截
+- **清单开放**：增删 `core:` 成员 = 加/删一行。**但每个成员必须带着"缺失语义"一起定义**——
+  清单可以慢慢长，语义不能欠（否则内核读点会炸）
+- **规则不放宽，能力不丢失**：`core:` 直写只有内核能做，但"本来就是玩法包正当能力"的
+  协议字段走**内核拥有的窄口受控入口**——目前只有一个：`api.set_perception(eid, {...})`
+  （只收 `invisible` / `see_invisible`，布尔）。这与 D20"NPC 升格必须经身份服务这个
+  受控通道"是同一种做法；也避免出现"重构把玩法包的能力吃掉"的回退
+- **管理端不受此限**：`PATCH /admin/entities/{id}` 经 `engine.update_entity` 直接写
+  `components`，**管理员可以写 `core:`**（操作者是内核侧的人，编辑器需要能修协议数据）。
+  其中 **`name` / `desc` 参数只动 `core:info` 里的那一个键**——不碰同一组件下的其它数据；
+  传空 `desc` = 删该键（`name` 随即回落到 id 兜底，§12.4）。**`components=` 仍是整体替换**，
+  两者可以同传（显式 `name` / `desc` 覆盖 `core:info` 里的同名键），但**建议不要在同一次
+  PATCH 里混用**（整体替换会盖掉显式键以外的 `core:info` 数据，读起来容易误会）
+
+### 12.3 落库形态
+
+```sql
+-- 当前落库形态（v10）：7 列
+CREATE TABLE entities (
+    id              TEXT PRIMARY KEY,
+    kind            TEXT NOT NULL,               -- 能力：kind / tags 折叠未落地（第 2 期，卡 G47）
+    components_json TEXT NOT NULL DEFAULT '{}',  -- 唯一的数据单位（含 core:position / core:info / core:account）
+    last_active_ts  REAL NOT NULL DEFAULT 0,
+    tags_json       TEXT NOT NULL DEFAULT '[]',
+    revision        INTEGER NOT NULL DEFAULT 0,  -- D38
+    changed_tick    INTEGER NOT NULL DEFAULT 0   -- D38
+);
+-- idx_entities_pos 删除：实测无任何 SQL 使用（实体相关 SQL 只有 SELECT * 与 DELETE WHERE id）
+
+-- 第 2 期目标形态（能力折叠后）：4 列
+-- CREATE TABLE entities (
+--     id              TEXT PRIMARY KEY,
+--     components_json TEXT NOT NULL DEFAULT '{}',
+--     revision        INTEGER NOT NULL DEFAULT 0,
+--     changed_tick    INTEGER NOT NULL DEFAULT 0
+-- );
+```
+
+- **版本沿革**：14 列 →（v8）13 列（`attrs_json` + `state_json` → **`components_json`**）→
+  （**v9**）**10 列**（`name` / `desc` / `user_id` 三列删除，数据进 `core:info` / `core:account`）
+  →（**v10**）**7 列**（`map_id` / `row` / `col` 三列删除，数据进 `core:position`）
+  →（第 2 期目标）4 列
+- **无迁移（D13）**：旧库按"不兼容内容"处理，CLI 已会指名 `world.db` 让操作者删除；
+  v9 另加**"不该存在的列"检查**（§12.5 / §7.3）——v10 起 `map_id` / `row` / `col`
+  就在这张**禁列名单**里，所以 v9 及更早的库会被明确拒绝而不是被静默读成"全都没有位置"
+- **写放大不变**：改一个字段仍是 1 行 UPDATE + 1 次 `_commit`；`save_entities` 仍是**唯一盖章点**（D28 强度不变）
+- **能力与数据共用一个命名空间**：`components` 的键就是组件类型，所以"这个实体有哪些能力"与
+  "它有哪些数据"第一次可以互相印证（v0.7.0 里 `tags` 与 `attrs` 是两个对不上的平行世界）
+
+### 12.4 `core:` 组件清单与缺失语义
+
+> **落地状态**：
+> ✅ **已实现**：**`core:perception`**（第 1 期）、**`core:info` / `core:account`**（1c，表结构 v9）、
+> **`core:position`**（1d，表结构 **v10**）
+> ——`name` / `desc` 落在 `components["core:info"]`、账户绑定落在
+> `components["core:account"]`、位置落在 `components["core:position"]`，
+> `entities` 表相应**删掉了这六列**（写入仍只走 `core:`
+> 组件，玩法包不能直写，见 12.2）。
+> ⏸ **未做**：**`core:player`**（身份仍看表列 `kind`）——属**第 2 期**，下表这一行是**目标形态**，
+> 且**卡在 G47**（能力名与信封的关系未决）。
+>
+> **缺失语义已生效**（下表取值即 `Entity` 的只读 property 实现）：`core:info` 缺失 →
+> `name` 兜底 **`id` 前 8 位**、`desc` = `""`；`core:account` 缺失 → `user_id` = `None`；
+> `core:position` 缺失 → `map_id` / `row` / `col` **全是 `None`**（**不是** `""` / `0`）。
+> **这六个键不再出现在 `to_dict()` 顶层**——消费者读 `components["core:info"]["name"]`，
+> **兜底到 `id` 前 8 位是既定语义**；`Entity.from_dict` 仍接受顶层六键作为**输入便利**
+> （折进对应组件，管理端 `PATCH` 参数照旧可用；位置三键要求**全有或全无**）。
+
+| 组件 | 语义 | **缺失时的行为** |
+|---|---|---|
+| ✅ `core:position` | 位置（`map_id` / `row` / `col`） | **实体不在世界上**（合法，如玩家下线 / 尚未投放）：不参与 `/state` 与场景，`list_entities` / `query_entities` **默认跳过**，按位置的筛选不匹配，`move()` **报错**（"实体不在任何地块"） |
+| ✅ `core:info` | 实体名与描述（**内核文案用**：lint / 删除保护 / 日志；客户端要不要用它显示归玩法） | `name` 兜底为 `id` 前 8 位；`desc` 为空 |
+| ⏸ `core:player` | 身份化实体（原 `kind in IDENTITY_KINDS`） | 非身份化实体 |
+| ✅ `core:account` | 账户绑定（原 `user_id`） | 无绑定 |
+| ✅ `core:perception` | `invisible` / `see_invisible`（G1 / G12） | 不隐身、无真视 |
+
+> 内核协议键从散落的 `attrs` / `state` 收进上述组件。原 `block_move` 已随阻挡机制移除（12.7）。
+> `core:perception` 的**玩法包写入入口**是 `api.set_perception(eid, {...})`（12.2 的窄口）。
+
+**读点策略**：`Entity` 暴露只读 property（`map_id` / `row` / `col` / `pos_key()` / `name` …）让内核
+原有约 30 处读点不必改写。**已全部落地**：`name` / `desc` / `user_id` / `map_id` / `row` / `col`
+都是**派生视图**——读 `core:info` / `core:account` / `core:position`，缺失按上表兜底
+（`id` 前 8 位 / `""` / `None` / `None` / `None` / `None`），
+**没有可写的顶层字段**（写入走组件；管理端经 `update_entity(name=…)` 只动 `core:info` 里那一个键）。
+位置缺失**返回 `None`、不返回 `""` / `0`**——空值兜底会把"缺失"变成静默错误；另给显式的
+`has_position()` / `require_position()` 让两类路径在代码里可分辨（`require_position()` 用于
+"必须在场"的路径：`move()` / `_build_scene()`；`pos_key()` 在无位置时返回 `None`，
+排序处改用哨兵值而不是拿 `None` 去比大小）。
+
+**前端同规矩**：位置/名字的读法只允许 `webui/src/entity.js` 知道
+（`entityPosition()` / `hasPosition()` / `positionLabel()` / `positionSortKey()` /
+`withoutPosition()`），
+组件不许直接读 `e.row` / `e.col` / `e.map_id`——那些键**已经不存在**，读到的是 `undefined`，
+而 `undefined` 不会报错：过滤会静默返回空、排序会静默退化、网格会画到 (0,0)。
+守卫在 `tests/test_editor_integrity.py`。
+
+**"不在世界上"必须是可造、可看、可管的状态**（否则 D36 只是内核内部的一个状态）：
+- **可造**：`place_entity` 的位置三参数**可选**，**全有或全无**——全不给 = 不在世界上；
+  半截坐标 → 报错（`""` / `0` 兜底会把"忘了给"变成静默出现在 (0,0) 的实体）。
+  管理端 `POST /admin/entities` 与玩法包 `api.place_entity` 同一规则。
+- **可看**：`GET /admin/entities`（跨地图，含不在世界上的；`?absent=0|1`）——
+  地图详情是**地图视角**，按 `core:position` 裁，不在世界上的实体**一个都看不见**。
+  没有这条全局入口就等于"内核造得出、编辑器管不着"，与本节的目标直接冲突（G46）。
+- **可管**：管理台「全部实体」页复用 `EntityManager`，加「放进世界」开关；
+  「定位」跳到地图编辑器并选中该格（`#/admin/maps/{map}/{tab}/{row}/{col}`）。
+- **模板不带位置**：模板是"这东西是什么"，不是"它在哪"——带上位置会让套用**静默搬人**。
+
+### 12.5 无必填原则
+
+**没有任何组件是必填的，只有 `id` 是。** 由此推出三件事（外加一条同源的落库纪律）：
+
+1. **12.4 那张"缺失语义"表是本设计的地基**，不是补充——因为"无必填"意味着每个读点都要有兜底
+2. **"实体不在任何地方"是可表示且合法的状态**（玩家下线、物品在容器里、传送中）
+3. 内核**不规定**下线后回原位还是回出生点——它只提供"位置可缺失"这一个能力（见 12.9）
+4. **版本闸要查两半**（v9 起）：只查"**需要的列在不在**"查不出**多出来的旧列**——一个还带着
+   `entities.name` / `desc` / `user_id` 的库（尤其**没有版本记录的极老库 / 手造库**）会
+   **载入成功**，而名字 / 描述 / 账户绑定**被静默丢掉**（载入只读 `components_json`，那三列
+   再没人看）。所以 `_check_schema` 加了第二半「**不该存在的列**」检查：查到这三列任一个
+   → **拒绝启动**，错误消息把它们列出来。这与第 1 条同源：**"无必填"不等于"可以悄悄少"**，
+   缺与多都必须显式（§7.3 / D13 / D23）。**v10 把名单扩到六列**（加 `map_id` / `row` /
+   `col`）——理由同上，而且第 2 条在这里正好咬合：一个位置在表列里的旧库若被放行，
+   会变成"**每个实体都不在世界**"，那是第 2 条语义的**最坏误用**（合法状态被用来掩盖迁移事故）
+
+### 12.6 能力即组件（`kind` / `tags` 折叠）
+
+- **实体带某组件 = 具备该能力**；组件类型 = 声明（原 `TagSpec`）：名字 + 字段 schema + 归属 + 能力声明
+- D18 / D19 / D21 的三条规则**原样保留**，只是"标签"改称"组件"：
+  interactions 并集 / 字段覆盖顺序定死（实例化越强越优先）/ **逐组件按世界激活过滤**
+- **纯能力组件** = 无数据的组件（`components["x"] == {}`）——合法且常见
+- **删字段不会删组件**：`remove_data` 删掉最后一个字段后组件仍在（`{}`）——
+  空组件是**纯能力标记**，顺手删等于静默摘掉能力；要删组件必须显式 `remove_component`
+- **虚构组件** = 无任何声明的组件——**允许存在、界面标注、不贡献任何能力**
+  （沿用 D19"允许未注册标签"的既定范式，不需要新机制）
+
+### 12.7 `state` 退役与阻挡机制移除
+
+- **取消 `state` 容器名**：语义过载（同一句 docstring 里 `hp` 既是 `attrs` 的例子又是 `state` 的例子），
+  且内核**两个容器都读**（`attrs` 读 `invisible` / `see_invisible`，`state` 读 `block_move`），
+  "引擎只认 state"这个原始理由已失效
+- 它**仅存的机制价值**是 `block_move` 的"动态覆盖优先于标签声明"，而 v2 **整体移除阻挡**：
+  标签声明 `block_move`、`state` 动态覆盖、`_is_blocking` / `_blocker_at`、`move()` 的阻挡检查
+  —— 全部删除；`move()` 退化为"读 connections → 抽目标 → 目标格在地图上吗"
+- 门的开关 / 机关 / 墙 / NPC 挡路 → **全部归玩法包**（`override_primitive("move")` 或过滤器链，D11 已支持）
+- 将来若需要阻挡，**另立一个"描述阻挡能力"的内核组件**（名字与语义未定，GAPS G44）
+- ⚠ **测试观测点**：`block_move` 目前是 **D21 世界激活过滤**的主要观测点
+  （`test_world_activation` 用它验证"未激活那个包的世界里墙不挡路"）——移除后该测试须改用 `interactions`
+
+### 12.8 物品移除（取代 D8）
+
+> **状态：✅ 已落地。** `ItemDef` / `items` 表 / 7 个注册与落库 API /
+> `InteractionRequest.item_id` 槽位 / `on_item_used` 内核事件**全部删除**；
+> 内核事件现为 **7 个**（"用了一个东西"由玩法包自定义事件承担）。
+
+**内核只有实体。** 物品定义与持有**都下沉**：
+
+| 原 | 去向 |
+|---|---|
+| 物品定义（名字 / 字段 schema / `use_action` / `stackable` / `icon`） | **组件声明**（内核注册表；归属 `_tag_owner` 与卸载清理沿用） |
+| 物品实例 | **实体 + 组件**（"苹果在地上" = 一个实体带苹果组件） |
+| `use_action` | **interaction 名**（`TagSpec.interactions` 完全覆盖） |
+| `add_item_fields`（跨包追加字段） | **`add_tag_fields`**（同一套设施） |
+| 管理员手工物品（`user_data=True`） | **实体模板**（`templates` 表 `scope="entity"`，已持久化、已可管理端编辑） |
+| `InteractionRequest.item_id` 槽位 | **`args`**（自由 dict） |
+| `on_item_used` 内核事件 | **玩法包自定义事件**（`api.emit("item_used", {...})`；事件总线本就支持任意事件名，§1——内核事件由 8 个降回 7 个） |
+| `items` 表 / `ItemDef` / 注册与落库路径 | **删除** |
+
+> 🔑 **落点是关键**：物品定义沉到"**组件声明**"（内核注册表，有归属），**不是**包私有 KV——
+> 否则跨包共享能力会真的丢失，回到 G6 / G39 那个"包间契约没有系统表示"的坑。
+> 这样沉完之后，**对物品的治理能力一点没少**，少的只是一张表和一个 `ItemDef` 类。
+
+### 12.9 不在本节范围
+
+| 主题 | 归属 |
+|---|---|
+| 背包（格子 / 上限 / 堆叠 / 整理） | **玩法包**（D8 的"持有下沉"部分继续有效） |
+| 下线回原位还是回出生点 | **玩法包**（内核只提供"位置可缺失"） |
+| 物品堆叠的表示（三档：匿名数量 / 批次 / 具名个体） | 拟作为 **PLAY_DEV 约定 + 参考实现**，不属内核协议（存档见 GAPS G45） |
+| 占位（footprint，多格实体） | **搁置**，设计已存档：GAPS G41 |
+| 地块 → 实体 id 索引 | 策略已定（只内存、可重建），**暂不实施**：GAPS G42 |
+| 渲染协议 / 观察方式 | **已决策：归玩法，内核不做**（D40）——不做通用实体渲染、不做 `/components` 声明端点、不做组件渲染器；内核只留通道与宿主。**代价：零包 = 空界面**（G39 残留 4 保持）→ GAPS G43 |
+| 通用实体管理页（含不在世界上的实体） | ✅ **已落地**（随 1d）：`GET /admin/entities` + 管理台「全部实体」页 → GAPS G46 |
+| 阻挡能力内核组件 | **后续再考虑**：GAPS G44 |
+
+### 12.10 分期建议
+
+| 期 | 内容 | 关键约束 |
+|---|---|---|
+| **1** | 数据面组件化：`components` + 信封 + `core:` 命名空间 + 无必填 + ~~`core:position` / `core:info`~~ / `core:perception`（**落地时收窄**：`core:info` 见 1c、`core:position` 见第 2 期） | 其余靠 property 兜住内核约 30 处读点；`require_position()` 显式化"必须在场"路径 |
+| **2** | `kind` / `tags` 折叠为组件 + `core:player`（身份进组件）+ `core:position`（位置进组件） | 牵动能力面（D18 / D19 / D21）；须同步改测试观测点。**`state` 退役 + 阻挡移除已在第 1 期落地；`core:info` / `core:account` 已在 1c 落地** |
+| **3** | 物品移除（D37） | ✅ **已落地**（原估约 31 处测试 / 8 文件；见 12.0 / 12.8） |
+| **4** | 索引（G42） | 纯增量、可无限期推迟 |

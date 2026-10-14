@@ -21,6 +21,10 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+# v2（D32）：玩法数据按组件分组（组件名 = source:name 信封）
+_STAT = "local:stat"
+
+
 async def _make(
     tmp_path: Path, *, seed_world: bool = True
 ) -> tuple[WorldEngine, PlayLoader]:
@@ -157,9 +161,9 @@ def test_dynamic_tool_serialized_under_lock(tmp_path):
 
             async def racing(api, ctx, **kw):
                 eid = api.caller()
-                n = api.get_attrs(eid).get("n", 0)
+                n = await api.get_data(eid, "n", component=_STAT) or 0
                 await asyncio.sleep(0.01)  # 让出点：另一协程在此插入读-写
-                await api.set_attrs(eid, {"n": n + 1})
+                await api.set_data(eid, "n", n + 1, component=_STAT)
                 return {"text": "ok"}
 
             api.register_tool("world_race", racing, description="并发读-写")
@@ -178,7 +182,7 @@ def test_dynamic_tool_serialized_under_lock(tmp_path):
                 request_context = FakeReqCtx()
 
             await asyncio.gather(dyn(FakeCtx()), dyn(FakeCtx()))
-            assert engine.get_attrs(player.id)["n"] == 2
+            assert await engine.get_data(player.id, "n", component=_STAT) == 2
         finally:
             await engine.terminate()
 
@@ -315,7 +319,12 @@ def test_edit_primitives_via_api(tmp_path):
             engine.attach_play_api("pkg_a", api)
             # spawn
             npc = await api.place_entity(
-                "wolf", "default", 0, 0, name="野狼", attrs={"hp": 10}
+                "wolf",
+                "default",
+                0,
+                0,
+                name="野狼",
+                components={_STAT: {"hp": 10}},
             )
             assert npc.id in engine.store.entities
             # despawn

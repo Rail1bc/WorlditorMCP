@@ -17,12 +17,12 @@ from world_fixtures import install_demo_world, seed_test_world  # noqa: E402
 from worlditor_mcp.world import (  # noqa: E402
     InteractionRequest,
     InteractionResult,
-    ItemDef,
 )
 from worlditor_mcp.world.engine import (  # noqa: E402
     WorldEngine,
     WorldError,
 )
+from worlditor_mcp.world.play.api import WorlditorPlayAPI  # noqa: E402
 from worlditor_mcp.world.store import (  # noqa: E402
     WorldStore,
 )
@@ -74,24 +74,21 @@ def test_seed_world(tmp_path):
     """v0.2.0：内核只建空容器；41 地块 + 3 实体由内置演示世界包导入。"""
 
     async def fn(engine: WorldEngine, clock=None):
-        # 内核不再内置世界内容/物品：初始化后 0 地图、0 地块、0 实体、0 物品
+        # 内核不再内置世界内容（v2/D37 起也不再有物品）：初始化后 0 地图、0 地块、0 实体
         assert engine.store.maps == {}
         assert engine.list_locations() == []
         assert engine.list_entities() == []
-        assert engine.store.items == {}
+        assert not hasattr(engine.store, "items")
         # 世界内容来自世界包（worlditor_play_demo_world）
         await install_demo_world(engine)
         assert len(engine.list_locations()) == SEED_LOCATION_COUNT
         assert len(engine.list_entities()) == SEED_ENTITY_COUNT
-        # 物品不随世界导入：喇叭归 items 包注册（D13），世界包不播种物品
-        assert "megaphone" not in engine.store.items
-        assert "apple" not in engine.store.items
         kinds = {e.kind for e in engine.list_entities()}
         assert kinds == {"merchant", "sign", "door"}
         plaza = engine.list_entities(row=0, col=0)
         assert any(e.kind == "merchant" for e in plaza)
         door = [e for e in engine.list_entities() if e.kind == "door"][0]
-        assert door.state.get("open") is False
+        assert door.component("local:door").get("open") is False
 
     _run(_scenario(tmp_path, fn))
 
@@ -109,7 +106,6 @@ def test_seed_is_idempotent(tmp_path):
             await install_demo_world(engine2)
             assert len(engine2.list_locations()) == SEED_LOCATION_COUNT
             assert len(engine2.list_entities()) == SEED_ENTITY_COUNT
-            assert len(engine2.store.items) == 0  # 物品同样不播种（内核不内置）
         finally:
             await engine2.terminate()
 
@@ -185,20 +181,22 @@ def test_move_identity_entity(tmp_path):
     _run(_scenario(tmp_path, fn))
 
 
-def test_move_blocked_by_door(tmp_path):
-    """block_move：木门（kind 声明）阻挡移动；开门（state 覆盖）后可通过。"""
+def test_move_not_blocked_by_door(tmp_path):
+    """阻挡机制已移除：木门（kind 声明）不再挡路，也不需要"开门"才能通过。"""
 
     async def fn(engine: WorldEngine, clock=None):
         await install_demo_world(engine)  # 木门在 (3,0)
-        engine.register_entity_kind("door", block_move=True, interactions=("open",))
-        player = await engine.place_entity("player", "default", 2, 0, name="小明")
-        # (2,0) 老路 → 南 (3,0) 林间路口（木门在此）
-        with pytest.raises(WorldError, match="挡住了"):
-            await engine.move(player.id, "down")
+        engine.register_entity_kind("door", interactions=("open",))
         door = [e for e in engine.list_entities() if e.kind == "door"][0]
-        await engine.set_state(door.id, {"open": True, "block_move": False})
+        # block_move 已从能力面（capabilities / list_kinds）整体消失
+        assert "block_move" not in engine.capabilities(door)
+        kinds = {k["tag"]: k for k in engine.list_kinds()}
+        assert "block_move" not in kinds["door"]
+        player = await engine.place_entity("player", "default", 2, 0, name="小明")
+        # (2,0) 老路 → 南 (3,0) 林间路口（木门在此）：门不挡路，直接走过去
         scene = await engine.move(player.id, "down")
         assert (scene.row, scene.col) == (3, 0)
+        assert door.component("local:door") == {"open": False}  # 门依然关着
 
     _run(_scenario(tmp_path, fn))
 
@@ -222,11 +220,11 @@ def test_move_entity_teleport(tmp_path):
     _run(_scenario(tmp_path, fn))
 
 
-# ---------- attrs / state ----------
+# ---------- 组件 / 字段 ----------
 
 
-def test_attrs_state_patch(tmp_path):
-    """set_attrs/set_state 合并写；on_entity_changed 事件；重复实体不存在报错。"""
+def test_component_and_field_patch(tmp_path):
+    """set_component 整块写 + set_data 字段写；on_entity_changed 事件；实体不存在报错。"""
 
     async def fn(engine: WorldEngine, clock=None):
         await seed_test_world(engine)  # 中央广场 (0,0)
@@ -235,14 +233,24 @@ def test_attrs_state_patch(tmp_path):
             "on_entity_changed", lambda api, e, c: changed.append((e.id, c))
         )
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
-        await engine.set_attrs(player.id, {"gold": 10})
-        await engine.set_attrs(player.id, {"gold": 8, "level": 2})
-        assert engine.get_attrs(player.id) == {"gold": 8, "level": 2}
-        await engine.set_state(player.id, {"hungry": True})
-        assert engine.get_state(player.id) == {"hungry": True}
+        comp = "local:stat"
+        await engine.set_component(player.id, comp, {"gold": 10})
+        # set_component 是**整体替换**："合并写"要调用方自己把旧值并进来
+        await engine.set_component(
+            player.id,
+            comp,
+            {**(engine.get_component(player.id, comp) or {}), "gold": 8, "level": 2},
+        )
+        assert engine.get_component(player.id, comp) == {"gold": 8, "level": 2}
+        # set_data 是组件内的单字段合并写（组件不存在则隐式建出）
+        await engine.set_data(player.id, "hungry", True, component="local:vital")
+        assert engine.get_component(player.id, "local:vital") == {"hungry": True}
+        assert await engine.get_data(player.id, component="local:vital") == {
+            "hungry": True
+        }
         assert len(changed) == 3
         with pytest.raises(WorldError, match="实体不存在"):
-            engine.get_attrs("missing")
+            engine.get_component("missing", comp)
 
     _run(_scenario(tmp_path, fn))
 
@@ -275,8 +283,8 @@ async def _talk_handler(api, req: InteractionRequest) -> InteractionResult:
 
 
 async def _trade_handler(api, req: InteractionRequest) -> InteractionResult:
-    # D12：命令式——handler 直接调原语（api.set_attrs / api.kv_set）
-    await api.set_attrs(req.entity_id, {"gold": -5})
+    # D12：命令式——handler 直接调原语（api.set_data / api.kv_set）
+    await api.set_data(req.entity_id, "gold", -5, component="local:stat")
     await api.kv_set("bag", {"apple": 1})
     return InteractionResult(text="货单：苹果 5 金。")
 
@@ -311,7 +319,7 @@ def test_interact_flow_command_mode(tmp_path):
         # 命令式原语调用即时生效（无 effects 结算）
         result2 = await engine.interact(player.id, merchant.id, "trade")
         assert engine.kv_get("test_play", "bag") == {"apple": 1}
-        assert engine.get_attrs(player.id) == {"gold": -5}
+        assert engine.get_component(player.id, "local:stat") == {"gold": -5}
         assert result2.text == "货单：苹果 5 金。"
         # 未声明且未注册的动作
         with pytest.raises(WorldError, match="没有"):
@@ -325,8 +333,8 @@ def test_interact_flow_command_mode(tmp_path):
     _run(_scenario(tmp_path, fn))
 
 
-def test_interact_use_item(tmp_path):
-    """物品 use 交互：item_id 注入 + on_item_used 事件。"""
+def test_interact_carries_play_owned_item_id_in_args(tmp_path):
+    """D37：物品标识由玩法包放进 ``args``——内核不解释内容，也不再代发事件。"""
 
     async def fn(engine: WorldEngine, clock=None):
         # handler 需要 api：挂一个真实 WorlditorPlayAPI 实例（模拟 PlayLoader 绑定）
@@ -334,30 +342,34 @@ def test_interact_use_item(tmp_path):
 
         await seed_test_world(engine)  # 中央广场 (0,0)
         engine.attach_play_api("test_play", WorlditorPlayAPI(engine, "test_play"))
-        used = []
-        engine.register_world_event(
-            "on_item_used",
-            lambda api, e, iid, args, result: used.append((e.id, iid)),
-        )
         engine.register_interaction(
             "eat", _eat_handler, label="吃", play_id="test_play"
         )
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         await engine.kv_set("test_play", "bag", {"apple": 2})
-        result = await engine.interact(player.id, player.id, "eat", item_id="apple")
+        # 物品标识经 args 传入（原 item_id 槽位已随 D37 删除）
+        result = await engine.interact(
+            player.id, player.id, "eat", args={"item": "apple"}
+        )
         assert "好吃" in result.text
         assert engine.kv_get("test_play", "bag") == {"apple": 1}
-        # on_item_used 事件（D8：无 count，持有数由玩法包自管）
-        assert used[-1] == (player.id, "apple")
+        # 内核事件 on_item_used 已删除（D37）→ 事件表里没有它
+        from worlditor_mcp.world.model import WORLD_EVENTS
+
+        assert "on_item_used" not in WORLD_EVENTS
+        # 没带物品标识时走 handler 自己的兜底（内核不补默认值）
+        result2 = await engine.interact(player.id, player.id, "eat")
+        assert "没有可吃的" in result2.text
 
     _run(_scenario(tmp_path, fn))
 
 
 async def _eat_handler(api, req: InteractionRequest) -> InteractionResult:
+    item_id = str((req.args or {}).get("item") or "")
     bag = api.kv_get("bag", {})
-    if not isinstance(bag, dict) or bag.get(req.item_id, 0) < 1:
+    if not item_id or not isinstance(bag, dict) or bag.get(item_id, 0) < 1:
         return InteractionResult(text="没有可吃的。")
-    bag[req.item_id] -= 1
+    bag[item_id] -= 1
     await api.kv_set("bag", bag)
     return InteractionResult(text="咔嚓，好吃！")
 
@@ -544,17 +556,26 @@ def test_delete_location_cascade(tmp_path):
     _run(_scenario(tmp_path, fn))
 
 
-def test_register_item_def_and_flush(tmp_path):
-    """register_item_def（同步）→ flush_item_defs 落库；重启后仍在。"""
+def test_item_type_declaration_replaces_item_def(tmp_path):
+    """D37：物品**类型**改由组件声明表达——声明即出现在类型清单里，带字段 schema 与归属。"""
 
     async def fn(engine: WorldEngine, clock=None):
-        engine.register_item_def(
-            ItemDef(id="sword_01", name="木剑", desc="练习用木剑。", stackable=False)
+        from worlditor_mcp.world.play.api import WorlditorPlayAPI
+
+        api = WorlditorPlayAPI(engine, "worlditor_play_items")
+        # 原 register_item_def(ItemDef(id="sword_01", …, fields=[…])) 的等价写法
+        api.register_entity_tag(
+            "sword_01",
+            label="木剑",
+            fields=[{"name": "atk", "label": "攻击", "type": "int", "default": 1}],
         )
-        await engine.flush_item_defs()
-        assert "sword_01" in engine.store.items
-        with pytest.raises(WorldError, match="物品 id 不能为空"):
-            engine.register_item_def(ItemDef(id="", name="x"))
+        row = next(k for k in api.list_kinds() if k["tag"] == "sword_01")
+        assert row["label"] == "木剑"
+        assert [f["name"] for f in row["fields"]] == ["atk"]
+        assert row["play_id"] == "worlditor_play_items"  # 归属仍在（卸载可清）
+        # 名字为空要报错（原物品定义的同一条校验，这里由标签名校验承担）
+        with pytest.raises(WorldError):
+            api.register_entity_tag("")
 
     _run(_scenario(tmp_path, fn))
 
@@ -654,3 +675,58 @@ def _hook_provider(blocks: list | None, *, boom: bool = False):
         return blocks or []
 
     return provider
+
+
+# ---------- 内核协议组件的受控入口（v2 / D33） ----------
+
+
+def test_set_perception_is_the_only_play_door(tmp_path):
+    """玩法包写不了 ``core:``，但"让实体隐身"经 ``set_perception`` 这个窄口仍可用。
+
+    这是 D33 与"能力不丢失"的平衡点：规则不放宽（``core:`` 仍只有内核能直写），
+    正当能力走内核拥有的受控入口（与 D20"NPC 升格必须经身份服务"同一做法）。
+    """
+
+    async def fn(engine, _clock):
+        await seed_test_world(engine)
+        api = WorlditorPlayAPI(engine, "worlditor_play_probe")
+        viewer = await engine.place_entity("player", "default", 0, 0, name="看客")
+        ghost = await engine.place_entity("npc", "default", 0, 0, name="幽灵")
+
+        # 直写 core: 被玩法包 API 拒绝
+        with pytest.raises(WorldError, match="内核保留"):
+            await api.set_data(ghost.id, "invisible", True, component="core:perception")
+
+        # 受控入口：隐身 → 普通 viewer 看不到
+        await api.set_perception(ghost.id, {"invisible": True})
+        seen = [
+            e.id for e in engine.list_entities("default", 0, 0, viewer_id=viewer.id)
+        ]
+        assert ghost.id not in seen
+        assert viewer.id in seen  # 自己永远看得到自己
+
+        # 真视 → 看得到
+        await api.set_perception(viewer.id, {"see_invisible": True})
+        seen = [
+            e.id for e in engine.list_entities("default", 0, 0, viewer_id=viewer.id)
+        ]
+        assert ghost.id in seen
+
+        # 复原：invisible 置 False 后普通观察者也看得到
+        await api.set_perception(ghost.id, {"invisible": False})
+        seen = [e.id for e in engine.list_entities("default", 0, 0)]
+        assert ghost.id in seen
+
+        # 白名单：只收 invisible / see_invisible，且必须是布尔
+        with pytest.raises(WorldError, match="感知只支持"):
+            await api.set_perception(ghost.id, {"hp": 1})
+        with pytest.raises(WorldError, match="必须是布尔值"):
+            await api.set_perception(ghost.id, {"invisible": "yes"})
+        with pytest.raises(WorldError, match="patch 必须是对象"):
+            await api.set_perception(ghost.id, ["invisible"])
+        # 空 patch = 什么都不做（幂等，不落盘）——不报错
+        before = engine.revision
+        await api.set_perception(ghost.id, {})
+        assert engine.revision == before
+
+    _run(_scenario(tmp_path, fn))

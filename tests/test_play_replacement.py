@@ -229,9 +229,9 @@ def test_empty_state_world_usable(tmp_path):
         # 移动 = 内核默认（无过滤器无 override）
         scene = await engine.move(player.id, "up")
         assert (scene.row, scene.col) == (-1, 0)
-        # 字段原语可用
-        await engine.set_data(player.id, "hp", 100)
-        assert await engine.get_data(player.id, "hp") == 100
+        # 字段原语可用（v2：字段归属组件，component 必填）
+        await engine.set_data(player.id, "hp", 100, component="local:stat")
+        assert await engine.get_data(player.id, "hp", component="local:stat") == 100
         # 只读浏览：地图数据是之前由世界包导入的，停用包不删数据
         assert len(engine.list_locations()) == 41
         assert len(engine.list_entities()) >= 1

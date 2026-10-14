@@ -281,7 +281,12 @@ def test_entity_panel_renders_schema_and_tags():
         encoding="utf-8"
     )
     assert "未声明字段" in fields  # 未声明字段走原始 JSON 兜底（A2/D23）
-    assert "attrs" in fields and "state" in fields  # 两个数据袋分开标注
+    # v2（D32）：数据按**组件**分组——面板必须按组件分块、标明来源、给信封兜底。
+    # 原断言是"attrs / state 两个数据袋分开标注"，两个容器已随 v2 取消（第 1 期）。
+    assert "未声明组件" in fields  # 无任何声明的组件要标出来（沿用"未注册标签"范式）
+    assert "内核保留" in fields  # core: 是内核保留命名空间（D33）
+    assert "local:" in fields  # 手输裸名自动补 local: 前缀（信封无例外）
+    assert "askConfirm" in fields  # 删整个组件走站内确认层（管理端禁原生 confirm）
 
 
 def test_map_grid_supports_multi_select_and_arrows():

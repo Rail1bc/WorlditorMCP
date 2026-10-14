@@ -4187,8 +4187,7 @@
    "col": 0,
    "name": "商贩·阿福",
    "desc": "广场上的老商贩，货担里装着苹果和喇叭，笑眯眯地看着来往的行人。",
-   "attrs": {},
-   "state": {}
+   "components": {}
   },
   {
    "kind": "sign",
@@ -4196,8 +4195,7 @@
    "col": 0,
    "name": "告示牌",
    "desc": "步行街边的木质告示牌，上面贴着几张纸。",
-   "attrs": {},
-   "state": {}
+   "components": {}
   },
   {
    "kind": "door",
@@ -4205,9 +4203,10 @@
    "col": 0,
    "name": "木门",
    "desc": "迷雾森林入口处一扇紧闭的木门，门缝里渗出丝丝凉意。",
-   "attrs": {},
-   "state": {
-    "open": false
+   "components": {
+    "local:door": {
+     "open": false
+    }
    }
   }
  ]

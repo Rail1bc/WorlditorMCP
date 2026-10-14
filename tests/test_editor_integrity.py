@@ -96,3 +96,96 @@ def test_editor_keeps_a_concrete_coordinate():
     assert "请先在地图上选择一个坐标" in text
     # 删除地块后保留坐标（而不是置 null 让面板回落到 (0,0)）
     assert "primary.value = { row: tile.row, col: tile.col };" in text
+
+
+# --------------------------------------------------------------------------
+# 实体模型 v2（DESIGN §12）：实体的位置是组件 `core:position`，不是顶层字段。
+#
+# 坑：顶层 `e.row` 读到的是 `undefined`——不报错、不抛异常，`undefined !== 0`
+# 让所有"按格过滤"静默返回空列表，`undefined - undefined` 让排序静默退化成
+# NaN 比较（顺序随机）。地图网格则会把这些实体画到 (0,0)。全是静默失效。
+# --------------------------------------------------------------------------
+
+_ENTITY_POSITION_CONSUMERS = {
+    # 文件 → 必须 import 的位置助手
+    _EDITOR / "MapGrid.vue": "entityPosition",
+    _EDITOR / "EntityManager.vue": "entityPosition",
+    _ADMIN / "MapEditorPage.vue": "entityPosition",
+    _ADMIN / "AccountsPage.vue": "positionLabel",
+}
+
+
+def test_entity_js_is_the_only_place_that_knows_component_keys():
+    """名字 / 位置 / 账户的读法只允许 `entity.js` 知道（与 textSchedule 同规矩）。"""
+    helper = _read(_WEBUI / "entity.js")
+    for fn in (
+        "entityName",
+        "entityDesc",
+        "entityUserId",
+        "hasComponent",
+        # v2 位置（D36）：缺失不是错误，而是"不在世界上"
+        "entityPosition",
+        "hasPosition",
+        "positionLabel",
+        "positionSortKey",
+    ):
+        assert f"export function {fn}" in helper, f"entity.js 应导出 {fn}"
+    assert 'CORE_POSITION = "core:position"' in helper
+
+
+def test_entity_position_reads_go_through_the_helper():
+    """位置一律走 `entityPosition()`；顶层 `e.row` / `e.col` / `e.map_id` 已不存在。"""
+    for path, helper_name in _ENTITY_POSITION_CONSUMERS.items():
+        name = path.stem
+        text = _read(path)
+        assert helper_name in text, f"{name} 必须经 entity.js 的 {helper_name}() 读位置"
+
+    # 这些是迁移前的老写法，出现在这里说明有地方还在读实体顶层位置
+    forbidden = {
+        _EDITOR / "MapGrid.vue": ["`${e.row}:${e.col}`"],
+        _EDITOR / "EntityManager.vue": ["({{ e.row }}, {{ e.col }})", "a.row - b.row"],
+        _ADMIN / "AccountsPage.vue": [
+            "a.entity.row",
+            "a.entity.map_id",
+            "a.entity.col",
+        ],
+        _ADMIN / "MapEditorPage.vue": [
+            "e.row === primary.value.row",
+            "primary.value = { row: entity.row",
+        ],
+    }
+    for path, snippets in forbidden.items():
+        text = _read(path)
+        for snippet in snippets:
+            assert snippet not in text, f"{path.stem} 还在直接读实体顶层位置：{snippet}"
+
+
+def test_entity_create_payload_obeys_all_or_nothing_position():
+    """新建实体**要么发全坐标、要么一个都不发**（D36 的"全有或全无"）。
+
+    半截坐标会被后端兜底成 `""` / `0`——"忘给一个"就变成实体静默出现在 (0,0)
+    且看起来完全正常。前端这边要守三件事：
+
+    1. 坐标只在「放进世界」勾上时才发（不勾 = 造一个不在世界上的实体）；
+    2. **不许发 `map_id`**——实体不带图，图由 `core:position` 决定；
+    3. "不放进世界"分支要**剔掉组件里的位置键**，否则从带位置的组件/模板抄来时
+       勾选形同虚设（实体照样被放进去）。
+    """
+    text = _read(_EDITOR / "EntityManager.vue")
+    assert "row: Number(draft.row)" in text
+    assert "col: Number(draft.col)" in text
+    assert "draft.place ? { row:" in text, "坐标必须由「放进世界」开关把关"
+    assert "withoutPosition(draft.components)" in text, "不放进世界时要剔掉位置组件"
+    assert "map_id:" not in text, "实体不带 map_id——图由 core:position 决定"
+
+    # 地图编辑器里的创建：带坐标才发 map_id（不带坐标时发 map_id 会被判成"半截位置"）
+    page = _read(_ADMIN / "MapEditorPage.vue")
+    assert (
+        "const pos = payload.row === undefined ? {} : { map_id: mapId.value };" in page
+    )
+
+    # 模板不带位置：模板是"这东西是什么"，不是"它在哪"
+    for path in (_ADMIN / "MapEditorPage.vue", _ADMIN / "AllEntitiesPage.vue"):
+        assert "components: withoutPosition(entity.components)" in _read(path), (
+            path.stem
+        )

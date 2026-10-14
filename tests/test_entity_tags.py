@@ -6,7 +6,8 @@
 
 1. `register_entity_kind` = 语法糖，注册一条**隐式同名标签**（旧包/旧测试零改动）
 2. 实例 `tags[]` 与类型预设标签一起参与能力**并集**（"玩家 + 刷怪笼"成立）
-3. `block_move` 任一为真即阻挡；`interactions` 并集；字段顺序 = 标签序 → 分类最后
+3. `interactions` 多标签取**并集**；字段顺序 = 标签序 → 分类最后
+   （v2 第 1 期移除了 `block_move` 阻挡机制，D34：这里改观测 `interactions`）
 4. 身份判定**只看基底 kind**（标签里写 player 不算数）
 5. 能力面**逐标签**按世界激活过滤；未注册标签无能力贡献但实体照常存在
 6. 规格级缓存随注册表变动失效
@@ -47,22 +48,23 @@ def test_kind_registration_is_implicit_tag(tmp_path):
     async def fn():
         engine = await _engine(tmp_path)
         try:
-            engine.register_entity_kind(
-                "door", block_move=True, interactions=("open",), label="木门"
-            )
+            engine.register_entity_kind("door", interactions=("open",), label="木门")
             spec = engine._tag_specs["door"]
             assert isinstance(spec, TagSpec) and spec.implicit is True
             listing = engine.list_kinds()
             door = next(k for k in listing if k["tag"] == "door")
             assert door["implicit"] is True
-            assert door["block_move"] is True
             assert door["interactions"] == ["open"]
             assert door["label"] == "木门"
+            # D34：阻挡机制整体移除，能力面不再有 block_move
+            assert "block_move" not in door
 
             # 老写法：只给 kind，能力与 v0.4 完全一致
             door_entity = await engine.place_entity("door", "default", 0, 0)
             assert door_entity.name == "木门"  # 默认名仍取 label
-            assert engine.capabilities(door_entity)["block_move"] is True
+            caps = engine.capabilities(door_entity)
+            assert caps["interactions"] == ["open"]
+            assert "block_move" not in caps
         finally:
             await engine.terminate()
 
@@ -75,10 +77,13 @@ def test_explicit_tag_registration_marks_non_implicit(tmp_path):
     async def fn():
         engine = await _engine(tmp_path)
         try:
-            engine.register_entity_tag("spawner", label="刷怪笼", block_move=True)
+            engine.register_entity_tag(
+                "spawner", label="刷怪笼", interactions=("tune",)
+            )
             listing = {k["tag"]: k for k in engine.list_kinds()}
             assert listing["spawner"]["implicit"] is False
             assert listing["spawner"]["label"] == "刷怪笼"
+            assert listing["spawner"]["interactions"] == ["tune"]
         finally:
             await engine.terminate()
 
@@ -151,23 +156,35 @@ def test_type_preset_tags(tmp_path):
 # ---------- D19：并集与冲突规则 ----------
 
 
-def test_block_move_any_true_wins_and_state_overrides(tmp_path):
-    """block_move：任一标签为真即阻挡；state["block_move"] 仍是最高的动态覆盖。"""
+def test_interactions_union_across_tags(tmp_path):
+    """多标签的 interactions 取**并集**（原 block_move"任一为真即生效"的同类语义）。
+
+    v2 第 1 期（D34）移除了 ``block_move`` 阻挡机制与其 ``state`` 动态覆盖：
+    ``capabilities()`` 只剩静态声明（标签 → interactions/fields），玩法包想实现
+    "门开才挡路"应 ``override_primitive("move")``（D11），内核不再提供这道口子。
+    """
 
     async def fn():
         engine = await _engine(tmp_path)
         try:
-            engine.register_entity_tag("soft", block_move=False, label="软")
-            engine.register_entity_tag("hard", block_move=True, label="硬")
+            engine.register_entity_tag("soft", interactions=("lean",), label="软")
+            engine.register_entity_tag("hard", interactions=("smash",), label="硬")
+            engine.register_interaction("lean", _noop_handler, label="倚靠")
+            engine.register_interaction("smash", _noop_handler, label="砸")
             both = await engine.place_entity(
                 "rock", "default", 0, 0, tags=["soft", "hard"]
             )
-            assert engine.capabilities(both)["block_move"] is True
-            assert engine._is_blocking(both) is True
+            # 并集：两个标签各贡献一个动作，互不覆盖
+            assert engine.capabilities(both)["interactions"] == ["lean", "smash"]
+            assert "lean" in engine.available_actions(both.id)
+            assert "smash" in engine.available_actions(both.id)
 
-            # 玩法包动态改 state 可以推翻静态声明（门开/关的老语义）
-            await engine.set_state(both.id, {"block_move": False})
-            assert engine._is_blocking(both) is False
+            # 单个标签同样生效（"任一为真"的旧直觉在新观测面下的对应物）
+            engine.register_entity_tag(
+                "only_soft", interactions=("lean",), label="只软"
+            )
+            one = await engine.place_entity("rock", "default", 0, 1, tags=["only_soft"])
+            assert engine.capabilities(one)["interactions"] == ["lean"]
         finally:
             await engine.terminate()
 
@@ -259,9 +276,9 @@ def test_unregistered_tag_is_harmless(tmp_path):
             caps = engine.capabilities(e)
             assert caps["tags"] == ["rock", "nobody_knows"]
             assert caps["active_tags"] == []  # rock 未注册、nobody_knows 未注册
-            assert caps["block_move"] is False
             assert caps["fields"] == []
-            assert engine.capabilities(e)["interactions"] == []
+            assert caps["interactions"] == []
+            assert "block_move" not in caps  # D34：阻挡机制已移除
         finally:
             await engine.terminate()
 
@@ -304,7 +321,9 @@ def test_tag_capability_filtered_by_world_activation(tmp_path):
     async def fn():
         engine = await _engine(tmp_path)
         try:
-            engine.register_entity_tag("spawner", block_move=True, play_id="pkg_b")
+            engine.register_entity_tag(
+                "spawner", interactions=("tune",), play_id="pkg_b"
+            )
             await engine.create_world("w_a", "只有A", play_ids=["pkg_a"])
             await engine.create_world("w_b", "有B", play_ids=["pkg_b"])
             await engine.create_map("m_a", "甲图")
@@ -315,12 +334,13 @@ def test_tag_capability_filtered_by_world_activation(tmp_path):
             caps = engine.capabilities(e)
             assert caps["tags"] == ["slime", "spawner"]
             assert caps["active_tags"] == []  # pkg_b 不在 w_a
-            assert caps["block_move"] is False
+            assert caps["interactions"] == []
+            assert caps["inactive_tags"] == ["spawner"]
 
             await engine.assign_map("m_a", "w_b")
             caps = engine.capabilities(e)
             assert caps["active_tags"] == ["spawner"]
-            assert caps["block_move"] is True
+            assert caps["interactions"] == ["tune"]
         finally:
             await engine.terminate()
 
@@ -334,15 +354,15 @@ def test_spec_cache_invalidated_when_tag_registered_later(tmp_path):
         engine = await _engine(tmp_path)
         try:
             e = await engine.place_entity("slime", "default", 0, 0, tags=["late"])
-            assert engine.capabilities(e)["block_move"] is False  # late 还没注册
-            engine.register_entity_tag("late", block_move=True)
-            assert engine.capabilities(e)["block_move"] is True  # 缓存已失效
+            assert engine.capabilities(e)["interactions"] == []  # late 还没注册
+            engine.register_entity_tag("late", interactions=("poke",))
+            assert engine.capabilities(e)["interactions"] == ["poke"]  # 缓存已失效
             # 卸载包后回到未注册状态，能力随之消失
-            engine.register_entity_tag("late2", block_move=True, play_id="pkg_x")
+            engine.register_entity_tag("late2", interactions=("poke",), play_id="pkg_x")
             e2 = await engine.place_entity("slime", "default", 0, 1, tags=["late2"])
-            assert engine.capabilities(e2)["block_move"] is True
+            assert engine.capabilities(e2)["interactions"] == ["poke"]
             engine.clear_play_registrations("pkg_x")
-            assert engine.capabilities(e2)["block_move"] is False
+            assert engine.capabilities(e2)["interactions"] == []
         finally:
             await engine.terminate()
 
@@ -384,7 +404,7 @@ def test_parse_tags_helper():
 
 
 def test_update_entity_replaces_tags(tmp_path):
-    """PATCH 语义：tags 整体替换（同 attrs/state）。"""
+    """PATCH 语义：tags 整体替换（与 name/desc/components 同一套整体替换语义）。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -531,7 +551,11 @@ def test_entity_template_play_and_local_sources(tmp_path):
             engine.register_entity_template(
                 "spawner_tmpl",
                 "刷怪笼",
-                {"kind": "spawner", "tags": ["strong"], "attrs": {"mob": "slime"}},
+                {
+                    "kind": "spawner",
+                    "tags": ["strong"],
+                    "components": {"local:spawn": {"mob": "slime"}},
+                },
                 play_id="pkg_spawn",
             )
             await engine.save_template(
@@ -547,7 +571,7 @@ def test_entity_template_play_and_local_sources(tmp_path):
             assert sources == {"spawner_tmpl": "play", "local_tmpl": "local"}
             play_tmpl = next(t for t in listing if t["id"] == "spawner_tmpl")
             assert play_tmpl["data"]["tags"] == ["strong"]
-            assert play_tmpl["data"]["attrs"] == {"mob": "slime"}
+            assert play_tmpl["data"]["components"] == {"local:spawn": {"mob": "slime"}}
             # 地块模板不会被 scope 过滤漏出来
             assert engine.list_templates("location") == []
 
@@ -575,16 +599,16 @@ def test_entity_template_play_and_local_sources(tmp_path):
 
 
 def test_entity_template_payload_validated(tmp_path):
-    """实体模板必须给 kind；attrs/state 必须是对象；scope 必须合法。"""
+    """实体模板必须给 kind；components 必须是对象；scope 必须合法。"""
 
     async def fn():
         engine = await _engine(tmp_path)
         try:
             with pytest.raises(WorldError, match="kind"):
                 engine.register_entity_template("bad", "无类型", {"tags": ["x"]})
-            with pytest.raises(WorldError, match="attrs"):
+            with pytest.raises(WorldError, match="components"):
                 engine.register_entity_template(
-                    "bad", "坏数据", {"kind": "x", "attrs": []}
+                    "bad", "坏数据", {"kind": "x", "components": []}
                 )
             with pytest.raises(WorldError, match="scope"):
                 await engine.save_template(
@@ -632,7 +656,7 @@ def test_admin_kinds_lists_types_and_tags(tmp_path):
 
     async def fn(client, h, engine):
         engine.register_entity_kind(
-            "door", block_move=True, label="木门", play_id="pkg_a"
+            "door", interactions=("open",), label="木门", play_id="pkg_a"
         )
         engine.register_entity_tag(
             "spawner", label="刷怪笼", interactions=("tune",), play_id="pkg_b"
@@ -650,6 +674,10 @@ def test_admin_kinds_lists_types_and_tags(tmp_path):
         assert spawner["label"] == "刷怪笼"
         a_type = next(k for k in data["types"] if k["tag"] == "A")
         assert a_type["preset_tags"] == ["spawner"]
+        door = next(k for k in data["types"] if k["tag"] == "door")
+        assert door["interactions"] == ["open"]
+        # D34：能力面不再透出 block_move（阻挡机制整体移除）
+        assert all("block_move" not in k for k in data["kinds"])
         # 分类过滤（D10）
         engine.register_entity_kind("slime", label="史莱姆", categories=("生物",))
         filtered = (await client.get("/admin/kinds?category=生物", headers=h)).json()

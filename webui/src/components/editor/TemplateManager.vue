@@ -112,8 +112,11 @@ function summary(t) {
     );
     return `${data.name || "（无名称）"} · 出口 ${paths}`;
   }
+  // 实体模板负载 = {kind, tags[], name, desc, components}（v2：原 attrs/state）
+  const names = Object.keys(data.components || {});
   const tags = data.tags?.length ? ` · 标签 ${data.tags.join("/")}` : "";
-  return `${data.kind || "?"}${tags}`;
+  const comps = names.length ? ` · 组件 ${names.length}（${names.join("、")}）` : "";
+  return `${data.kind || "?"}${tags}${comps}`;
 }
 
 function apply(t) {

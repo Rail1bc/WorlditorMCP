@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -29,13 +30,80 @@ DIRECTIONS = ("up", "right", "down", "left")
 # 权威定义，engine 与 identity 共用）
 IDENTITY_KINDS = ("player",)
 
-# ---------- 内置协议字段（引擎读取的约定键；玩法包按这些名字读写 attrs/state） ----------
-STATE_BLOCK_MOVE = "block_move"
-"""state：动态移动阻挡（门/机关），优先于 kind spec 的 block_move。"""
+# ---------- 组件信封（D32 / D33；DESIGN §12.2） ----------
+#
+# 组件是实体**唯一的数据单位**：实体 = id + components（D32，取代 D9 的"字段化"）。
+# 组件 key = ``source:name``——key 即身份，组件内部**不重复存** source/name。
+COMPONENT_CORE = "core"
+"""内核保留命名空间：**玩法包写入报错**（§12.2）；``core:`` 组件的写入不经分派表。"""
+COMPONENT_LOCAL = "local"
+"""编辑器 / 人手写的本地命名空间——虚构组件的落点（保证"信封必填"无例外）。"""
+
+CORE_POSITION = "core:position"
+"""内核协议组件：``{map_id, row, col}``——实体**在世界的哪里**（原三列表）。
+
+**可选组件**（D36）：缺失 = 实体**不在世界上**（合法状态：玩家下线、收进容器、传送中）。
+缺失语义：``Entity.map_id`` / ``row`` / ``col`` / ``pos_key()`` 一律返回 ``None``
+（**不兜底成 ``""`` / ``0``**）；"必须在场"的路径用 ``require_position()``。
+"""
+CORE_PERCEPTION = "core:perception"
+"""内核协议组件：感知（``invisible`` / ``see_invisible``，G1 / G12）。"""
+CORE_INFO = "core:info"
+"""内核协议组件：``name`` / ``desc``（原 ``entities.name`` / ``desc`` 列）。
+
+缺失语义（§12.4）：``name`` 兜底为 ``id`` 前 8 位、``desc`` 为空。它主要供**内核自己的
+文案**（lint / 删除保护 / 世界日志）使用；客户端要不要用它显示归玩法（D40）。
+"""
+CORE_ACCOUNT = "core:account"
+"""内核协议组件：``{user_id}``——身份化实体与账户的绑定（原 ``entities.user_id`` 列）。"""
+
 ATTR_INVISIBLE = "invisible"
-"""attrs：实体对普通 viewer 隐藏（G1 可见性通道）。"""
+"""``core:perception`` 内的字段：实体对普通 viewer 隐藏（G1 可见性通道）。"""
 ATTR_SEE_INVISIBLE = "see_invisible"
-"""attrs：真视——viewer 带此字段为真时可看见 invisible 实体。"""
+"""``core:perception`` 内的字段：真视——viewer 带此字段为真时可看见 invisible 实体。"""
+
+_COMPONENT_PART_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def split_component_key(key: object) -> tuple[str, str]:
+    """组件 key → ``(source, name)``；非法信封抛 ``WorldError``。
+
+    source 可以是 ``core`` / ``local`` / 玩法包 id（``^[A-Za-z0-9_-]+$``，不含冒号）；
+    name 允许字母数字与 ``_ . -``。分隔符用 ``:`` 是安全的（play_id 不含冒号）。
+    """
+    if not isinstance(key, str) or not key:
+        raise WorldError("组件名必须是非空字符串")
+    source, sep, name = key.partition(":")
+    if not sep or not source or not name:
+        raise WorldError(f"组件名必须是『来源:名字』形式（收到 {key!r}）")
+    if not _COMPONENT_PART_RE.match(source) or not _COMPONENT_PART_RE.match(name):
+        raise WorldError(f"组件名只允许字母/数字/下划线/点/连字符（收到 {key!r}）")
+    return source, name
+
+
+def is_core_component(key: object) -> bool:
+    """是否内核保留组件（写入**不经分派表**，且玩法包不得写，§12.2 / D33）。"""
+    return isinstance(key, str) and key.startswith(COMPONENT_CORE + ":")
+
+
+def parse_components(value: Any) -> dict[str, dict]:
+    """容错解析组件字典：key 必须是合法信封、值必须是对象，否则丢弃该条。
+
+    用于 ``from_dict``（API 输入）与列解析；**落库路径**的坏值由 store 的
+    ``IncompatibleDataError`` 单独处理（拒绝启动，不静默丢弃，D13）。
+    """
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for key, data in value.items():
+        try:
+            split_component_key(key)
+        except WorldError:
+            continue
+        if isinstance(data, dict):
+            out[str(key)] = dict(data)
+    return out
+
 
 # 方向 ↔ 坐标偏移（行, 列）：up=行-1 / down=行+1 / left=列-1 / right=列+1。
 # 权威定义；前端视图组件按此约定渲染网格（参考实现：
@@ -502,9 +570,10 @@ class WorldTemplate:
     - ``scope="location"``：地块预设（复制预设，非继承）。目标存储策略：
       **同图目标存方向相对偏移**（{dr, dc}，放置时按地块位置平移）；
       **跨图目标存绝对 map_id+坐标**（{map_id, row, col}）原样复制。
-    - ``scope="entity"``：实体预设。data = ``{kind, tags[], name, desc, attrs, state}``
-      （套用后仍可改）；玩法包注册的实体模板在内存注册表（随包卸载消失），
-      管理端本地模板落这张表。
+    - ``scope="entity"``：实体预设。data = ``{kind, tags[], name, desc, components}``
+      （v2/D32：原 attrs/state 两容器已取消；套用后仍可改）；玩法包注册的实体模板
+      在内存注册表（随包卸载消失），管理端本地模板落这张表——这条"包声明 vs 本地数据"
+      的区分正好顶替了 D37 之前"管理员手工物品定义"的位置。
     """
 
     id: str
@@ -584,32 +653,120 @@ class WorldFolder:
 class Entity:
     """世界中的实体：玩家 / agent / 布景实体统一模型。
 
-    attrs 为玩法数据（hp/exp/gold/equipped...），state 为实体状态
-    （门开/关、库存、血量...），内核都不解释，由玩法包自管。
+    **组件（D32）**：``components`` 是实体**唯一的数据单位**——``{组件名: 数据}``，
+    组件名 = ``source:name`` 信封（D33）。``attrs`` / ``state`` 两个扁平容器已取消，
+    内核自己的协议数据放 ``core:`` 命名空间（``core:position`` / ``core:info`` /
+    ``core:perception`` / ``core:account``）。
+
+    **位置**（``core:position``，D36）：**可选**组件——缺失 = 实体**不在世界上**
+    （合法状态，如玩家下线）。``map_id`` / ``row`` / ``col`` / ``pos_key()`` 是**只读
+    派生视图**，缺失时返回 ``None``（**不返回 ``""`` / ``0`` 兜底**——那会把"缺失"变成
+    静默错误）。"必须在场"的路径请用 ``require_position()``。
+
+    **名字与描述**（``core:info``）：同样是组件；``name`` / ``desc`` 以只读 property
+    暴露，缺失时 ``name`` 兜底为 ``id`` 前 8 位（§12.4）。
 
     **标签（D18）**：``kind`` 是基底类型（预设/标志位），``tags`` 为实例级标签，
     两者一起决定实体的能力（有效标签 = 基底 kind + 类型预设标签 + 实例 tags，
-    能力 = 各标签并集，见 engine 的能力解析）。
+    能力 = 各标签并集，见 engine 的能力解析）。**v2 第 2 期**将把两者折叠为组件。
     """
 
     id: str  # uuid4 hex（B5）
-    map_id: str
-    row: int
-    col: int
     kind: str  # 基底类型；player 为内置身份类型（IDENTITY_KINDS），或玩法包注册的名字
-    name: str
-    desc: str = ""
-    attrs: dict = field(default_factory=dict)
-    state: dict = field(default_factory=dict)
-    user_id: str | None = None  # 身份化实体：账户/实例标识（联邦预留）
+    components: dict[str, dict] = field(default_factory=dict)
     last_active_ts: float = 0.0  # 在线状态（动作/SSE 活动维护）
     tags: list[str] = field(default_factory=list)  # 实例级标签（D18，有序、去重）
     # 变更检测（D28）：内核在**落库那一刻**盖章，玩法包/客户端据此刻画增量
     revision: int = 0  # 全局单调变更号（每次写 +1；重启后从库里最大值续号）
     changed_tick: int = 0  # 最近一次变更所在的 tick 窗口（query(changed_since_tick=)）
 
-    def pos_key(self) -> tuple[str, int, int]:
-        return (self.map_id, self.row, self.col)
+    # ---------- 位置：``core:position`` 的只读派生视图（D36） ----------
+
+    @property
+    def map_id(self) -> str | None:
+        """所在地图；**实体不在世界上时返回 ``None``**（不是空串）。"""
+        value = self.component(CORE_POSITION).get("map_id")
+        return value if isinstance(value, str) and value else None
+
+    @property
+    def row(self) -> int | None:
+        """所在行；不在世界上时返回 ``None``（不是 0）。"""
+        value = self.component(CORE_POSITION).get("row")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    @property
+    def col(self) -> int | None:
+        """所在列；不在世界上时返回 ``None``（不是 0）。"""
+        value = self.component(CORE_POSITION).get("col")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    def has_position(self) -> bool:
+        """实体是否**在世界上**（三个字段齐全）。"""
+        return self.map_id is not None and self.row is not None and self.col is not None
+
+    def pos_key(self) -> tuple[str, int, int] | None:
+        """``(map_id, row, col)``；**不在世界上时返回 ``None``**。
+
+        调用方必须显式处理 ``None``——这是 D36 的核心语义，别用 ``or (0, 0)`` 之类兜底。
+        """
+        if not self.has_position():
+            return None
+        return (self.map_id, self.row, self.col)  # type: ignore[return-value]
+
+    def require_position(self) -> tuple[str, int, int]:
+        """取位置，**缺失即报错**——给"必须在场"的路径用（`move` / 场景构建 / lint 定位）。
+
+        用显式的 ``require_`` 而不是让属性抛错：这样"哪些路径要求在场"在代码里一眼可辨，
+        而不是靠读每个 ``map_id`` 的用法去猜。
+        """
+        key = self.pos_key()
+        if key is None:
+            raise WorldError(f"实体不在任何地块：{self.id}")
+        return key
+
+    def set_position(self, map_id: str, row: int, col: int) -> None:
+        """写 ``core:position``（原地改组件；落库由调用方的 ``save_entity`` 负责）。"""
+        self.components = {
+            **self.components,
+            CORE_POSITION: {"map_id": map_id, "row": row, "col": col},
+        }
+
+    def clear_position(self) -> None:
+        """清掉位置 = 让实体**离开世界**（下线/收进容器/hold；D36）。"""
+        self.components = {
+            k: v for k, v in self.components.items() if k != CORE_POSITION
+        }
+
+    def component(self, key: str) -> dict:
+        """读一个组件的数据（**返回内部引用**，缺失返回空 dict——调用方勿改）。"""
+        data = self.components.get(key)
+        return data if isinstance(data, dict) else {}
+
+    @property
+    def name(self) -> str:
+        """显示名 = ``core:info.name``；缺失 → **``id`` 前 8 位**（§12.4 的兜底语义）。
+
+        这是**只读派生视图**：写入请用 ``set_data(..., "name", component=CORE_INFO)``
+        或 ``update_entity(name=…)``。之所以留这个 property：内核自己的文案
+        （lint / 删除保护 / 世界日志）必须有名字可用，兜底逻辑只该有一份。
+        """
+        value = self.component(CORE_INFO).get("name")
+        return value if isinstance(value, str) and value else self.id[:8]
+
+    @property
+    def desc(self) -> str:
+        """描述 = ``core:info.desc``；缺失 → 空串。只读派生视图（同 ``name``）。"""
+        value = self.component(CORE_INFO).get("desc")
+        return value if isinstance(value, str) else ""
+
+    @property
+    def user_id(self) -> str | None:
+        """账户绑定 = ``core:account.user_id``；缺失 → ``None``（非身份化）。
+
+        只读派生视图：写入请用 ``place_entity(user_id=…)`` 或身份服务的受控通道。
+        """
+        value = self.component(CORE_ACCOUNT).get("user_id")
+        return value if isinstance(value, str) and value else None
 
     def is_identity(self) -> bool:
         """身份化实体（可认证绑定、不可被玩法包移除、位置持久化）。
@@ -620,17 +777,17 @@ class Entity:
         return self.kind in IDENTITY_KINDS
 
     def to_dict(self) -> dict[str, Any]:
+        """线上投影＝**模型实况**：名字/描述/账户绑定都在 ``components`` 里，不在顶层。
+
+        v2 起不再提供顶层 ``name`` / ``desc`` / ``user_id`` / ``map_id`` / ``row`` / ``col``
+        ——它们是 ``core:info`` / ``core:account`` / ``core:position`` 组件（§12.4）。
+        消费者读 ``components["core:info"]["name"]`` 等；内核自己的文案与"在不在场"
+        走 ``Entity.name`` / ``Entity.map_id`` 这些带缺失语义的只读 property。
+        """
         return {
             "id": self.id,
-            "map_id": self.map_id,
-            "row": self.row,
-            "col": self.col,
             "kind": self.kind,
-            "name": self.name,
-            "desc": self.desc,
-            "attrs": self.attrs,
-            "state": self.state,
-            "user_id": self.user_id,
+            "components": self.components,
             "last_active_ts": self.last_active_ts,
             "tags": list(self.tags),
             "revision": self.revision,
@@ -639,33 +796,59 @@ class Entity:
 
     @staticmethod
     def from_dict(value: Any) -> Entity | None:
-        """从存储/API dict 容错解析实体；非法返回 None。"""
+        """从存储/API dict 容错解析实体；非法返回 None。
+
+        **输入便利**：顶层 ``name`` / ``desc`` / ``user_id`` 折进 ``core:info`` /
+        ``core:account``；顶层 ``map_id`` + ``row`` + ``col`` 折进 ``core:position``
+        （三者**要么都给、要么都不给**——只给一半说明数据坏了 → None）。
+        内部与落库只有一种形态——组件；不会出现"两处存同一事实"。
+
+        **位置是可选的**（D36）：三个键都不给 = 实体不在世界上，这是合法输入。
+        """
         if not isinstance(value, dict):
             return None
-        for key in ("id", "map_id", "kind", "name"):
+        for key in ("id", "kind"):
             if not isinstance(value.get(key), str) or not value[key]:
                 return None
+        components = parse_components(value.get("components"))
+        map_id = value.get("map_id")
         row, col = value.get("row"), value.get("col")
-        if (
-            not isinstance(row, int)
-            or isinstance(row, bool)
-            or not isinstance(col, int)
-            or isinstance(col, bool)
-        ):
-            return None
+        given = [map_id is not None, row is not None, col is not None]
+        if any(given):
+            if not all(given):
+                return None  # 位置只给了一半 → 坏数据
+            if not isinstance(map_id, str) or not map_id:
+                return None
+            if (
+                not isinstance(row, int)
+                or isinstance(row, bool)
+                or not isinstance(col, int)
+                or isinstance(col, bool)
+            ):
+                return None
+            components = {
+                **components,
+                CORE_POSITION: {"map_id": map_id, "row": row, "col": col},
+            }
+        info: dict[str, Any] = {}
+        if isinstance(value.get("name"), str) and value["name"]:
+            info["name"] = value["name"]
+        if isinstance(value.get("desc"), str) and value["desc"]:
+            info["desc"] = value["desc"]
+        if info:
+            components = {
+                **components,
+                CORE_INFO: {**components.get(CORE_INFO, {}), **info},
+            }
+        if isinstance(value.get("user_id"), str) and value["user_id"]:
+            components = {
+                **components,
+                CORE_ACCOUNT: {"user_id": value["user_id"]},
+            }
         return Entity(
             id=value["id"],
-            map_id=value["map_id"],
-            row=row,
-            col=col,
             kind=value["kind"],
-            name=value["name"],
-            desc=value.get("desc") if isinstance(value.get("desc"), str) else "",
-            attrs=value.get("attrs") if isinstance(value.get("attrs"), dict) else {},
-            state=value.get("state") if isinstance(value.get("state"), dict) else {},
-            user_id=value.get("user_id")
-            if isinstance(value.get("user_id"), str)
-            else None,
+            components=components,
             last_active_ts=value.get("last_active_ts", 0.0)
             if isinstance(value.get("last_active_ts"), (int, float))
             else 0.0,
@@ -701,56 +884,20 @@ def parse_tags(value: Any) -> list[str]:
     return out
 
 
-# ---------- 物品（定义与持有分离） ----------
-
-
-@dataclass
-class ItemDef:
-    """物品定义：由玩法包注册（register_item_def），持久化到 items 表。"""
-
-    id: str  # uuid4 hex（B5）
-    name: str
-    desc: str = ""
-    icon: str = ""  # 可选，后议（B1：UI 以名称 + kind 标签展示）
-    stackable: bool = True
-    use_action: str | None = (
-        None  # 玩法包注册的 use 交互动作（如 "eat"/"craft"/"equip"）
-    )
-    attrs: dict = field(default_factory=dict)  # 玩法数据（价格/属性/配方钩子）
-    fields: list[dict] = field(default_factory=list)  # D9 字段 schema
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "desc": self.desc,
-            "icon": self.icon,
-            "stackable": self.stackable,
-            "use_action": self.use_action,
-            "attrs": self.attrs,
-            "fields": self.fields,
-        }
-
-    @staticmethod
-    def from_dict(value: Any) -> ItemDef | None:
-        if not isinstance(value, dict):
-            return None
-        for key in ("id", "name"):
-            if not isinstance(value.get(key), str) or not value[key]:
-                return None
-        return ItemDef(
-            id=value["id"],
-            name=value["name"],
-            desc=value.get("desc") if isinstance(value.get("desc"), str) else "",
-            icon=value.get("icon") if isinstance(value.get("icon"), str) else "",
-            stackable=value.get("stackable", True)
-            if isinstance(value.get("stackable"), bool)
-            else True,
-            use_action=value.get("use_action")
-            if isinstance(value.get("use_action"), str) and value["use_action"]
-            else None,
-            attrs=value.get("attrs") if isinstance(value.get("attrs"), dict) else {},
-        )
+# ---------- 物品：**已不在内核**（v2 / D37 取代 D8） ----------
+#
+# 这里原来有 `ItemDef`（物品类型定义），内核另有一张 `items` 表。v2 起**物品定义与持有
+# 都下沉玩法包**——内核只有实体：
+#   - 物品**类型** → 用**组件声明**表达（`register_entity_tag`：名字 + 字段 schema + 归属；
+#     归属与卸载清理沿用注册表既有机制）
+#   - 物品**实例** → **实体 + 组件**（"一个苹果在地上" = 一个实体带苹果组件）
+#   - `use_action` → **interaction 名**（`TagSpec.interactions` 完全覆盖）
+#   - `stackable` / `icon` → 组件声明的属性与字段
+#   - 管理员手工维护的物品 → **实体模板**（`templates` 表 `scope="entity"`，已持久化、可编辑）
+#   - `InteractionRequest.item_id` 槽位 → **`args`**（自由 dict）
+#   - `on_item_used` 内核事件 → 玩法包**自定义事件**（事件总线本就支持任意事件名）
+# 理由与逐项对照见 DESIGN §12.8 / D37；**落点是"组件声明"，不是包私有 KV**
+# （否则跨包共享能力会真的丢失，回到 G6/G39 那个"包间契约没有系统表示"的坑）。
 
 
 # ---------- 实体 kind 注册（玩法包扩展点） ----------
@@ -768,9 +915,6 @@ class TagSpec:
     实体有效标签 = 基底 kind + 类型预设标签 + 实例 tags，能力 = 各标签并集（D19）。
 
     字段语义：
-    - ``block_move``：内核级物理规则（移动阻挡）。**任一标签为真即阻挡**——
-      标签写 False 想表达的是"对某些实体开放"，那该用过滤器/state，而不是抵消
-      别人的 True；
     - ``interactions``：该标签默认可用的动作名（C3：可用动作 = 标签声明 ∪ 全局注册表）；
     - ``label``：文案（B1）；
     - ``play_id``：声明者——能力面按**世界激活**逐个标签过滤（D21）；
@@ -780,7 +924,6 @@ class TagSpec:
     """
 
     tag: str
-    block_move: bool = False
     interactions: tuple[str, ...] = ()
     label: str = ""
     play_id: str = ""
@@ -804,7 +947,8 @@ class InteractionRequest:
     target: Entity | None  # 目标实体（含玩家/agent 实体，如查看角色卡）
     action: str
     args: dict = field(default_factory=dict)
-    item_id: str | None = None  # 物品交互（use）
+    # v2 / D37：原 `item_id` 槽位已删除——物品不在内核，玩法包把它的标识放进 `args`
+    # （如 `args={"item": "apple"}`）。内核不解释 args 的内容。
 
 
 @dataclass
@@ -899,16 +1043,15 @@ class ShortCircuit:
 #   on_entity_move:    (api, entity, from_pos, to_pos)
 #   on_entity_enter:   (api, entity, map_id, row, col)
 #   on_interact:       (api, request, result)
-#   on_item_used:      (api, entity, item_id, args, result)   # D8：无 count
 #   on_entity_removed: (api, entity)
 #   on_entity_changed: (api, entity, changed)
 #   on_world_edited:   (api, what)
+# （原 `on_item_used` 已随 D37 移除——物品不在内核，"用了一个东西"由玩法包发自定义事件）
 WORLD_EVENTS: tuple[str, ...] = (
     "on_tick",
     "on_entity_move",
     "on_entity_enter",
     "on_interact",
-    "on_item_used",
     "on_entity_removed",
     "on_entity_changed",
     "on_world_edited",
@@ -919,7 +1062,7 @@ WORLD_EVENTS: tuple[str, ...] = (
 EVENT_PHASES: tuple[str, ...] = ("input", "simulate", "present")
 DEFAULT_EVENT_PHASE = "simulate"
 
-# 实体 id 序列化辅助（attrs/state JSON）
+# 实体 / 组件序列化辅助（组件字典、tags JSON）
 
 
 def _dump_json(value: Any) -> str:
@@ -936,18 +1079,15 @@ def _load_json(raw: str | None, default: Any) -> Any:
 
 
 def entity_db_row(entity: Entity) -> tuple:
-    """entities 表写入行（与 store SQL 列序一致；D28 两列在末尾）。"""
+    """entities 表写入行（与 store SQL 列序一致；D28 两列在末尾）。
+
+    v2：名字/描述/账户绑定/位置都已进 ``components``（``core:info`` / ``core:account``
+    / ``core:position``），不再是独立的列——所以这张表**没有**它们。
+    """
     return (
         entity.id,
-        entity.map_id,
-        entity.row,
-        entity.col,
         entity.kind,
-        entity.name,
-        entity.desc,
-        entity.user_id,
-        _dump_json(entity.attrs),
-        _dump_json(entity.state),
+        _dump_json(entity.components),
         entity.last_active_ts,
         _dump_json(entity.tags),
         entity.revision,
@@ -960,15 +1100,8 @@ def entity_from_row(row: Any) -> Entity | None:
     return Entity.from_dict(
         {
             "id": row["id"],
-            "map_id": row["map_id"],
-            "row": row["row"],
-            "col": row["col"],
             "kind": row["kind"],
-            "name": row["name"],
-            "desc": row["desc"],
-            "user_id": row["user_id"],
-            "attrs": _load_json(row["attrs_json"], {}),
-            "state": _load_json(row["state_json"], {}),
+            "components": _load_json(row["components_json"], {}),
             "last_active_ts": row["last_active_ts"],
             "tags": _load_json(row["tags_json"], []),
             # D28 后加列：老库 / 测试假行可能没有这两列
@@ -984,30 +1117,3 @@ def _row_get(row: Any, key: str, default: Any) -> Any:
         return row[key]
     except (KeyError, IndexError, TypeError):
         return default
-
-
-def item_db_row(item: ItemDef) -> tuple:
-    """items 表写入行。"""
-    return (
-        item.id,
-        item.name,
-        item.desc,
-        item.icon,
-        1 if item.stackable else 0,
-        item.use_action,
-        _dump_json(item.attrs),
-    )
-
-
-def item_from_row(row: Any) -> ItemDef | None:
-    return ItemDef.from_dict(
-        {
-            "id": row["id"],
-            "name": row["name"],
-            "desc": row["desc"],
-            "icon": row["icon"],
-            "stackable": bool(row["stackable"]),
-            "use_action": row["use_action"],
-            "attrs": _load_json(row["attrs_json"], {}),
-        }
-    )

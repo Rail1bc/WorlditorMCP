@@ -28,8 +28,8 @@
 | 方法 | 路径 | 档位 | 说明 |
 |---|---|---|---|
 | POST/GET/DELETE | `/world/mcp` | play / admin | MCP streamable HTTP（工具调用入口；`read` 档在工具入口被拒） |
-| GET | `/state` | read / play / admin | 全量快照：`{revision, tick, maps, locations, entities}`，按 G1 可见性过滤 private 地图；`revision`/`tick` = 变更游标（D28，实体各自也带） |
-| GET | `/scene?entity_id=` | read / play / admin | 单实体场景 `{entity, scene, peers}`（含动作菜单；`entity_id` 缺省 = 调用者自己） |
+| GET | `/state` | read / play / admin | 全量快照：`{revision, tick, maps, locations, entities}`，按 G1 可见性过滤 private 地图；`revision`/`tick` = 变更游标（D28，实体各自也带）。**`entities[]` = 组件形态**（表结构 v9）：`{id, map_id, row, col, kind, components, tags, revision, changed_tick, last_active_ts}`，**没有顶层 `name` / `desc` / `user_id`**——名字/描述在 `components["core:info"]`、账户绑定在 `components["core:account"]`；读名字用 `components["core:info"]["name"]`，**缺失兜底 `id` 前 8 位**（DESIGN §12.4） |
+| GET | `/scene?entity_id=` | read / play / admin | 单实体场景 `{entity, scene, peers}`（含动作菜单；`entity_id` 缺省 = 调用者自己）。`entity` / `peers` 的实体形态同 `/state`（组件里放名字，无顶层 `name` / `desc` / `user_id`） |
 | GET | `/events` | play / admin | SSE 事件流（`?token=` 支持） |
 | GET | `/views` | 免认证 | 视图清单 `{views: [{key,title,icon,play_id}]}`；**带凭据时按调用者所在世界过滤**（D15） |
 | GET | `/meta` | 免认证 | `{"mode":"play","authenticated":bool}`（前端模式识别 + **连接身份状态**）。带有效凭据时补 `tier` / `entity_id` / `username`；无凭据或凭据解析不出 → `authenticated:false`（仍 200，登录页要用它判断端口模式）。前端启动时若本地存有 token 而这里是 `false`，就清掉凭据回登录页——否则删库/吊销后界面停在打不开任何东西的空壳上 |
@@ -84,7 +84,7 @@
 |---|---|---|
 | GET | `/admin/maps` | 全部地图（含 world_id / folder_id / sort / 地块数 / 实体数 / visible） |
 | POST | `/admin/maps` | 新建（`{id, name, description?, timezone?, spawn_row?, spawn_col?, visible?}`） |
-| GET | `/admin/maps/{map_id}` | 详情：`{map, locations, entities}`；`entities[].capabilities` = 合并能力（D19，按世界过滤后的真相） |
+| GET | `/admin/maps/{map_id}` | 详情：`{map, locations, entities}`；`entities[].capabilities` = 合并能力（D19，按世界过滤后的真相）。**实体形态同 `/state`**（名字在 `components["core:info"]`，无顶层 `name` / `desc` / `user_id`）。⚠ 这是**地图视角**：按 `core:position` 裁，**不在世界上的实体不在结果里**（要它们用 `GET /admin/entities`） |
 | PATCH | `/admin/maps/{map_id}` | 元数据局部更新；⚠ `spawn_row` / `spawn_col` **需成对提供**（只给其一，另一个按 0 落库） |
 | DELETE | `/admin/maps/{map_id}` | 删除（图上有身份化实体 → 拒绝，G2） |
 | POST | `/admin/maps/{map_id}/copy` | 复制另存（`{new_id, name?, world_id?, folder_id?, with_entities}`；身份化实体永不复制） |
@@ -99,8 +99,9 @@
 | POST | `/admin/templates/apply` | 套用地块模板（`{template_id, map_id, row, col}`：同图目标按偏移平移、跨图原样） |
 | DELETE | `/admin/templates/{template_id}` | 删模板 |
 | GET | `/admin/kinds[?category=]` | 类型 + 标签名词表（`kinds` / `types`(隐式) / `tags`(显式)，含字段 schema、来源包） |
-| POST | `/admin/entities` | 放置实体（`{kind, map_id, row, col, name?, desc?, attrs?, state?, tags?}`） |
-| PATCH / DELETE | `/admin/entities/{entity_id}` | 改实体（含 tags / kind；身份化实体的 kind 锁定，D20）/ 删除（身份化实体拒绝） |
+| GET | `/admin/entities[?absent=0\|1][&world_id=]` | **全部实体**（跨地图）——`entities[].capabilities` 同地图详情。**这是唯一能看见"不在世界上的实体"的入口**（D36：位置是可选的 `core:position`，玩家下线 / 物品在容器里 / 尚未投放的 NPC 都属此类；地图详情按坐标裁，一个都看不见）。`absent=1` 只列不在世界上的、`absent=0` 只列在世界的；响应另带 `total` / `absent` 计数 |
+| POST | `/admin/entities` | 新建实体（`{kind, name?, desc?, components?, tags?, map_id?, row?, col?}`）。**位置三参数要么全给、要么全不给**：给了 = 放进世界（写 `core:position`）；**一个都不给 = 造一个不在世界上的实体**；只给一部分 → 400（"半截位置"会被兜底成 `""` / `0`，把"忘了给"变成静默出现在 (0,0) 的实体）。`name` / `desc` 是**输入便利**：折进 `core:info` 组件，实体上没有这两列（v9）。`components` = 组件名 → 数据，组件名须为 `source:name` 信封 |
+| PATCH / DELETE | `/admin/entities/{entity_id}` | 改实体（`name` / `desc` / `components`（整体替换）/ `tags` / `kind`；身份化实体的 kind 锁定，D20）/ 删除（身份化实体拒绝）。`name` / `desc` 折进 `core:info` 组件——**只动这两个键**，不碰同组件其它数据（传空 `desc` = 删该键，`name` 随即回落到 `id` 前 8 位兜底）；`components` 是**整体替换**，**建议不要在同一次 PATCH 里混用**两者（整体替换会盖掉显式键以外的组件数据） |
 
 ### 2.5 账户 / 凭据 / 邀请码
 

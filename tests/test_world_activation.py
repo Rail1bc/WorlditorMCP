@@ -7,7 +7,8 @@
 1. MCP 工具：调用者所在世界未启用该包 → 明确拒绝（端到端走真实 HTTP + MCP 会话）
 2. 玩家视图：`GET /views` 按调用者世界过滤（tab 不出现）
 3. 原语：覆盖/过滤器所属包在该世界未启用 → 视为不存在（回落内核默认实现）
-4. kind：`block_move` 与可用动作列表按世界过滤
+4. kind/标签：声明的可用动作列表按世界过滤（`block_move` 已随 D34 整体移除，
+   未激活包里声明的东西不生效改用 `interactions` 观测）
 """
 
 from __future__ import annotations
@@ -258,8 +259,13 @@ def test_primitive_filter_follows_world(tmp_path):
     asyncio.run(run())
 
 
-def test_kind_block_and_actions_follow_world(tmp_path):
-    """kind 声明的阻挡/动作按世界过滤：未激活该包的世界里，墙不挡、动作不出现。"""
+def test_kind_actions_follow_world(tmp_path):
+    """kind（标签）声明的动作按世界过滤：未激活该包的世界里，动作不出现也不能用。
+
+    v2 第 1 期（D34）：阻挡机制**整体移除**，本用例的观测面从"墙挡路"换成
+    ``available_actions`` / ``capabilities()["interactions"]``——它们与
+    ``interact`` 的拒绝判定同源（D21 的同一条过滤路径）。
+    """
 
     async def run():
         engine = WorldEngine(WorldStore(tmp_path / "world.db"))
@@ -282,28 +288,29 @@ def test_kind_block_and_actions_follow_world(tmp_path):
                 "knock", _knock, label="敲门", play_id="pkg_wall"
             )
             engine.register_entity_kind(
-                "wall",
-                block_move=True,
-                interactions=("knock",),
-                play_id="pkg_wall",
+                "wall", interactions=("knock",), play_id="pkg_wall"
             )
             wall = await engine.place_entity("wall", "default", -1, 0, name="北墙")
             player = await engine.place_entity("player", "default", 0, 0, name="小明")
 
-            # 默认世界全部激活：墙挡路 + 动作可见
-            assert "knock" in engine.available_actions(wall.id)
-            with pytest.raises(WorldError, match="挡住"):
-                await engine.move(player.id, "up")
+            # 默认世界全部激活：动作可见且可用
+            assert engine.available_actions(wall.id) == ["knock"]
+            assert engine.capabilities(wall)["interactions"] == ["knock"]
             result = await engine.interact(player.id, wall.id, "knock")
             assert result.text == "咚"
+            # D34：墙不再阻挡——移动在任何世界都照常（本用例不再拿阻挡当观测面）
+            await engine.move(player.id, "up")
+            assert player.pos_key() == ("default", -1, 0)
 
-            # 世界 B 不激活 pkg_wall：不挡路、动作不可见、交互被拒
+            # 世界 B 不激活 pkg_wall：动作不再出现、能力面为空、交互被拒
             await engine.create_world("w_b", "B", play_ids=["other_pkg"])
             await engine.assign_map("default", "w_b")
             assert engine.available_actions(wall.id) == []
-            scene = await engine.move(player.id, "up")
-            assert (scene.row, scene.col) == (-1, 0), "未激活世界里墙不挡路"
-            with pytest.raises(Exception, match="没有"):
+            caps = engine.capabilities(wall)
+            assert caps["interactions"] == []
+            assert caps["active_tags"] == []
+            assert caps["inactive_tags"] == ["wall"]
+            with pytest.raises(WorldError, match="没有"):
                 await engine.interact(player.id, wall.id, "knock")
         finally:
             await engine.terminate()

@@ -150,7 +150,7 @@ def test_map_crud(tmp_path):
 
 
 def test_update_entity_fields(tmp_path):
-    """实体字段更新（admin 编辑：name/desc/attrs/state 整体替换）。"""
+    """实体字段更新（admin 编辑：name/desc/components 整体替换）。"""
 
     async def fn(engine: WorldEngine):
         # 告示牌实体由演示世界包提供
@@ -164,13 +164,26 @@ def test_update_entity_fields(tmp_path):
             sign.id,
             name="新告示牌",
             desc="崭新的牌子。",
-            attrs={"price": 5},
-            state={"clean": True},
+            components={"local:stat": {"price": 5}, "local:clean": {"clean": True}},
         )
         assert sign.name == "新告示牌"
-        assert sign.attrs == {"price": 5}
-        assert sign.state == {"clean": True}
+        # v2 / D32（§12.4）：name/desc 折进 core:info（与 components 整体替换并存——
+        # 显式参数更具体，覆盖 core:info 里的同名键，但不碰该组件下的其它字段）
+        assert sign.components == {
+            "local:stat": {"price": 5},
+            "local:clean": {"clean": True},
+            "core:info": {"name": "新告示牌", "desc": "崭新的牌子。"},
+        }
         assert sign.id in changed
+        # components 是**整体替换**：第二次更新只留新写的那块
+        await engine.update_entity(sign.id, components={"local:stat": {"price": 6}})
+        assert sign.components == {"local:stat": {"price": 6}}
+        # 反过来：只改 name 时不动同一实体上的其它组件
+        await engine.update_entity(sign.id, name="再改一次")
+        assert sign.components == {
+            "local:stat": {"price": 6},
+            "core:info": {"name": "再改一次"},
+        }
         with pytest.raises(WorldError, match="实体不存在"):
             await engine.update_entity("missing", name="x")
 

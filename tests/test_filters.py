@@ -13,6 +13,9 @@ from worlditor_mcp.world.model import ShortCircuit
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
 from worlditor_mcp.world.store import WorldStore
 
+# v2（D32）：字段归属组件（空信封不行），测试统一用 local:stat。
+_STAT = "local:stat"
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -27,8 +30,9 @@ async def _engine(tmp_path: Path) -> WorldEngine:
 
 
 async def _player(engine: WorldEngine):
+    # v2（D32）：没有扁平 attrs 了，玩法数据归 local: 组件。
     return await engine.place_entity(
-        "player", "default", 0, 0, name="小明", attrs={"gold": 5}
+        "player", "default", 0, 0, name="小明", components={_STAT: {"gold": 5}}
     )
 
 
@@ -225,9 +229,97 @@ def test_filter_on_get_data_masking(tmp_path):
             api.register_primitive_filter("get_data", mask, label="遮蔽")
             api2.register_primitive_filter("get_data", lower, label="记录")
             player = await _player(engine)
-            await engine.set_data(player.id, "hp", 100)
-            assert await engine.get_data(player.id, "hp") == "??"
-            assert await engine.get_data(player.id, "gold") == 5
+            await engine.set_data(player.id, "hp", 100, component=_STAT)
+            assert await engine.get_data(player.id, "hp", component=_STAT) == "??"
+            assert await engine.get_data(player.id, "gold", component=_STAT) == 5
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
+def test_filter_on_component_primitives_and_core_bypass(tmp_path):
+    """组件原语同样进分派表（可过滤/否决/短路）；``core:`` 组件的写入绕过分派表（D33）。"""
+
+    async def fn():
+        engine = await _engine(tmp_path)
+        try:
+            api = _api(engine, "pkg_a")
+            seen: list[tuple[str, str]] = []
+
+            def recorder(primitive: str):
+                async def record(api, **params):
+                    seen.append((primitive, params["component"]))
+                    if params["component"] == "local:banned":
+                        raise WorldError("这个组件不许写")
+                    return params
+
+                return record
+
+            api.register_primitive_filter(
+                "set_component", recorder("set_component"), label="组件白名单"
+            )
+            api.register_primitive_filter(
+                "set_data", recorder("set_data"), label="字段白名单"
+            )
+            player = await _player(engine)
+
+            await engine.set_component(player.id, "local:free", {"a": 1})
+            assert engine.get_component(player.id, "local:free") == {"a": 1}
+            await engine.set_data(player.id, "hp", 7, component="local:vitals")
+            assert await engine.get_data(player.id, "hp", component="local:vitals") == 7
+            assert seen == [
+                ("set_component", "local:free"),
+                ("set_data", "local:vitals"),
+            ]
+
+            # 过滤器否决：整块新建被拦下（默认实现没跑）
+            with pytest.raises(WorldError, match="不许写"):
+                await engine.set_component(player.id, "local:banned", {"a": 1})
+            assert engine.get_component(player.id, "local:banned") is None
+            assert seen[-1] == ("set_component", "local:banned")
+
+            # core: 组件的写入**跳过**分派表：过滤器既看不到、也拦不住（D33）
+            await engine.set_component(player.id, "core:perception", {"sight": 3})
+            await engine.set_data(player.id, "sight", 9, component="core:perception")
+            assert engine.get_component(player.id, "core:perception") == {"sight": 9}
+            assert len(seen) == 3  # core: 的两次写入都没进过滤器链
+
+            # add_component 同样是分派原语：短路 → 默认实现不跑（返回值即 ShortCircuit 的值）
+            async def shadow_add(api, **params):
+                if params["component"] == "local:ghost":
+                    return ShortCircuit({"fake": "短路"})
+                return params
+
+            api.register_primitive_filter("add_component", shadow_add, label="影子")
+            assert await engine.add_component(player.id, "local:ghost", {"x": 1}) == {
+                "fake": "短路"
+            }
+            assert engine.get_component(player.id, "local:ghost") is None
+
+            # remove_component 也在分派表里：可被否决；清注册后恢复默认
+            async def veto_remove(api, **params):
+                if params["component"] == "local:free":
+                    raise WorldError("这个组件删不得")
+                return params
+
+            api.register_primitive_filter(
+                "remove_component", veto_remove, label="删除白名单"
+            )
+            with pytest.raises(WorldError, match="删不得"):
+                await engine.remove_component(player.id, "local:free")
+            assert engine.get_component(player.id, "local:free") == {"a": 1}
+            engine.clear_play_registrations("pkg_a")
+            assert await engine.remove_component(player.id, "local:free") is True
+            assert engine.get_component(player.id, "local:free") is None
+
+            # remove_component 对 core: 同样绕过（D33）——连"删不得"这条否决也够不着它
+            api.register_primitive_filter(
+                "remove_component", veto_remove, label="删除白名单"
+            )
+            await engine.add_component(player.id, "core:sight", {"n": 1})
+            assert await engine.remove_component(player.id, "core:sight") is True
+            assert engine.get_component(player.id, "core:sight") is None
         finally:
             await engine.terminate()
 

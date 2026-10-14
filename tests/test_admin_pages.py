@@ -18,7 +18,6 @@ from play_fixtures import PLAY_ID, install_demo_play
 from world_fixtures import seed_test_world
 
 from worlditor_mcp.admin import build_admin_app
-from worlditor_mcp.world import ItemDef
 from worlditor_mcp.world.engine import WorldEngine
 from worlditor_mcp.world.identity import IdentityService
 from worlditor_mcp.world.mcp import build_mcp_server
@@ -253,44 +252,53 @@ async def _scenario_with_play(tmp_path, fn):
         await engine.terminate()
 
 
-def test_disable_keeps_admin_item_defs(tmp_path):
-    """G31（v0.5.2）：停用玩法包只清代码声明，管理页建的物品定义必须留下。
+def test_disable_keeps_admin_entity_templates(tmp_path):
+    """G31（v0.5.2）那条不变量：停用玩法包只清**代码声明**，管理员建的东西必须留下。
 
-    原先 disable/uninstall 不区分来源全删：管理员手工维护的物品定义会在
-    "停一下包"之后永久消失（与 DESIGN §4.3"disable 保留数据"直接矛盾）。
-
-    v0.7.0：内置 items 包已废弃，本测试改用夹具玩法包（它代码声明
-    apple/megaphone，并且 ``api.save_item_def`` = 管理页动作写用户数据的同一入口）。
+    原用例守的是"物品定义分两种生命周期"（`save_item_def(user_data=True)` 落库、
+    停用不删）。v2 / D37 物品不在内核后，同一条不变量由**实体模板**承担，
+    而且现在由**存储位置**天然区分：包注册的模板在引擎内存表（随停用消失），
+    管理员本地模板落 `templates` 表（不受影响）。
     """
 
     async def fn(admin_client, play_client, identity, engine, loader):
         import aiosqlite
 
+        from worlditor_mcp.world.model import WorldTemplate
+
         h = {"Authorization": f"Bearer {await _admin_token(identity)}"}
-        # 代码声明（夹具包 setup 里注册）
-        assert engine.store.items.get("apple") is not None
-        # 管理员建一条自定义物品：与 items 管理页 create 动作同一条入口
-        pkg = loader.plays[PLAY_ID]  # noqa: SLF001
-        pkg.api.save_item_def(ItemDef(id="gold_ore", name="金矿石", stackable=True))
-        await pkg.api.flush_item_defs()
-        assert engine.store.items.get("gold_ore") is not None
+        # 代码声明：夹具包在 **setup 里**注册的实体模板（所以重启用会自己回来）。
+        # 注意别改成命令式注册——那样 enable 时包的 setup 重跑也不会恢复它。
+        ids = {t["id"] for t in engine.list_templates("entity")}
+        assert "pkg_npc" in ids, f"夹具包应在 setup 里声明实体模板：{ids}"
+        # 管理员本地模板：落 templates 表（与"管理页保存"同一条入口）
+        await engine.save_template(
+            WorldTemplate(
+                id="admin_ore",
+                name="管理员矿石",
+                scope="entity",
+                data={"kind": "ore", "name": "金矿石"},
+            )
+        )
+        ids = {t["id"] for t in engine.list_templates("entity")}
+        assert {"pkg_npc", "admin_ore"} <= ids
 
         resp = await admin_client.post(f"/admin/plays/{PLAY_ID}/disable", headers=h)
         assert resp.status_code == 200, resp.text
 
-        # 代码声明（apple）随包停用消失；用户数据（gold_ore）内存与库都要在
-        assert engine.store.items.get("apple") is None
-        assert engine.store.items.get("gold_ore") is not None
+        ids = {t["id"] for t in engine.list_templates("entity")}
+        assert "pkg_npc" not in ids, "包声明的模板应随停用消失"
+        assert "admin_ore" in ids, "管理员本地模板必须留下"
         async with aiosqlite.connect(tmp_path / "world.db") as conn:
-            cur = await conn.execute("SELECT id FROM items")
-            ids = {row[0] for row in await cur.fetchall()}
-        assert "gold_ore" in ids, f"停用后用户物品定义不应从库里消失：{ids}"
+            cur = await conn.execute("SELECT id FROM templates WHERE scope='entity'")
+            persisted = {row[0] for row in await cur.fetchall()}
+        assert "admin_ore" in persisted, f"停用后本地模板不应从库里消失：{persisted}"
 
-        # 重新启用 → 代码声明回来，用户数据不受影响
+        # 重新启用 → 代码声明回来，本地模板不受影响
         resp = await admin_client.post(f"/admin/plays/{PLAY_ID}/enable", headers=h)
         assert resp.status_code == 200, resp.text
-        assert engine.store.items.get("apple") is not None
-        assert engine.store.items.get("gold_ore") is not None
+        ids = {t["id"] for t in engine.list_templates("entity")}
+        assert {"pkg_npc", "admin_ore"} <= ids
 
     _run(_scenario_with_play(tmp_path, fn))
 
@@ -339,6 +347,74 @@ def test_map_read_endpoints(tmp_path):
 
     # 断言演示世界内容（41 地块/小镇广场）→ 用内置包场景（世界包导入该世界）
     _run(_scenario_with_play(tmp_path, fn))
+
+
+def test_entity_endpoints_cover_absent_entities(tmp_path):
+    """`/admin/entities` 覆盖**不在世界上**的实体（D36 / v2 1d）。
+
+    地图详情（`/admin/maps/{id}`）是**地图视角**：它按 `map_id` 裁，不在世界上的实体
+    一个都看不见。若没有这条全局视角，"内核造得出、编辑器管不着"——而"仅靠内核就能
+    完全地编辑治理实体"正是 v2 的目标，所以这条读端点不是锦上添花。
+    """
+
+    async def fn(admin_client, play_client, identity, engine, loader):
+        h = {"Authorization": f"Bearer {await _admin_token(identity)}"}
+
+        # ① 不给坐标 = 造一个不在世界上的实体（**不是**默认放到 (0,0)）
+        resp = await admin_client.post(
+            "/admin/entities", json={"kind": "thing", "name": "箱子"}, headers=h
+        )
+        assert resp.status_code == 200, resp.text
+        box_id = resp.json()["data"]["id"]
+        box = engine.get_entity(box_id)
+        assert not box.has_position() and box.pos_key() is None
+
+        # ② 半截坐标：报错，且错误说的是"半截位置"，不是某个 500
+        resp = await admin_client.post(
+            "/admin/entities",
+            json={"kind": "thing", "map_id": "default", "row": 1},
+            headers=h,
+        )
+        assert resp.status_code == 400
+        assert "半截" in resp.json()["error"]
+
+        # ③ 地图视角（含/不含）与全局视角的差别
+        resp = await admin_client.get("/admin/maps/default", headers=h)
+        assert resp.status_code == 200
+        assert box_id not in {e["id"] for e in resp.json()["entities"]}
+
+        resp = await admin_client.get("/admin/entities", headers=h)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        got = {e["id"]: e for e in data["entities"]}
+        assert box_id in got, "全局实体视角必须看得到不在世界上的实体"
+        assert data["absent"] >= 1 and data["total"] == len(data["entities"])
+        # 不在世界的实体没有位置键，但要有名字与能力诊断
+        assert "map_id" not in got[box_id] and "row" not in got[box_id]
+        assert got[box_id]["components"]["core:info"]["name"] == "箱子"
+        assert "capabilities" in got[box_id]
+
+        # ④ ?absent= 过滤（1 只列不在世界的、0 只列在世界的，两者不相交）
+        out = (await admin_client.get("/admin/entities?absent=1", headers=h)).json()
+        inn = (await admin_client.get("/admin/entities?absent=0", headers=h)).json()
+        assert box_id in {e["id"] for e in out["entities"]}
+        assert box_id not in {e["id"] for e in inn["entities"]}
+        assert all("core:position" not in e["components"] for e in out["entities"])
+        assert not (
+            {e["id"] for e in out["entities"]} & {e["id"] for e in inn["entities"]}
+        )
+
+        # ⑤ 给了坐标 = 照旧放进世界
+        resp = await admin_client.post(
+            "/admin/entities",
+            json={"kind": "thing", "map_id": "default", "row": 1, "col": 0},
+            headers=h,
+        )
+        assert resp.status_code == 200, resp.text
+        placed = engine.get_entity(resp.json()["data"]["id"])
+        assert placed.pos_key() == ("default", 1, 0)
+
+    _run(_scenario(tmp_path, fn))
 
 
 # ---------- 账户检索 ----------

@@ -1,5 +1,129 @@
 # Changelog
 
+## 未发布
+
+**实体模型 v2（第 1 / 1b / 1c / 1d / 3 期）：实体数据按组件分组，阻挡机制整体移除，名字/描述/账户绑定/位置进组件，内核移除物品**（BREAKING，DESIGN §12 / D32–D34 / D36 / D37）
+
+### 破坏性变更
+
+- **`Entity.attrs` / `Entity.state` 两个容器删除** → 统一为 `Entity.components`（组件字典）。
+  组件名 = **`source:name` 信封**：`core`（内核保留）／`local`（编辑器手写）／`<play_id>`（包自己）；
+  必须含一个冒号，字符集 = 字母/数字/`_`/`.`/`-`。
+- **玩法包 API**：`set_attrs` / `get_attrs` / `set_state` / `get_state` / `remove_state` **已删除**；
+  新增组件原语 `add_component` / `set_component` / `remove_component` / `get_component` / `list_components`；
+  字段原语 `set_data` / `get_data` / `remove_data` 现在 **`component` 必填**。
+- **`core:` 是内核保留命名空间**：玩法包写入直接报错（D33）；`core:` 组件的写入**绕过分派表**
+  （玩法包既写不进、也拦不住）。
+  **但正当能力不丢**：新增 **`api.set_perception(entity_id, {"invisible"| "see_invisible": bool})`**
+  ——玩法包写 `core:perception` 的唯一窄口受控入口（与 D20"身份只能经身份服务改"同一范式：
+  规则不放宽，能力不丢失）。管理端经 `update_entity` 可直接写 `components`（含 `core:`）。
+- **阻挡机制整体移除**（D34）：`register_entity_kind(block_move=…)` 参数、`TagSpec.block_move`、
+  `_is_blocking` / `_blocker_at`、`move()` 的阻挡检查、`STATE_BLOCK_MOVE` / `core:state` 全部删除
+  —— **所有实体都不阻挡**。门的开关 / 机关 / 墙 / NPC 挡路归玩法包
+  （`override_primitive("move")` 或过滤器链，D11 早已支持）。
+- **`place_entity` / `update_entity` 的 `attrs=` / `state=` → `components=`**；
+  实体模板负载 = `{kind, tags[], name, desc, components}`。
+- **落库（第 1 期）**：`entities` 表 **13 列**（第 1c 期起 **10 列**、第 1d 期起 **7 列**——见表结构
+  v9 / v10 条目），组件落
+  `components_json`（原 `attrs_json` + `state_json` 合一）；
+  删掉 `idx_entities_pos`——实测**没有任何 SQL 使用它**（实体相关 SQL 只有 `SELECT *` 与
+  `DELETE WHERE id`），是 v4 遗留死重。
+- **表结构版本 v8（第 1 期；1c 期起为 v9、1d 期起为 v10——闸再加一道「不该存在的列」，
+  见下）+ 新增版本闸（两道检查）**：`_check_schema` 读
+  `world_meta.schema_version` **和**一张「后加列清单」（`world_maps.sort` /
+  `entities.tags_json` · `revision` · `changed_tick` · `components_json` /
+  `templates.scope`），任一不符即**拒绝启动**，错误消息列出缺的列并指名
+  `world.db` 与处理方式（不迁移，D13）。
+  **原 `ALTER TABLE` 补列逻辑（`_ensure_columns`）整个删除**——补出来的
+  `components_json` 是空默认值，会把旧实体的数据**静默清空**，比拒绝启动危险得多。
+  两道缺一不可：只查版本记录的话，**没有版本记录的极老库 / 手造库**会在载入期撞出裸
+  `IndexError`（一屏栈、没有"删哪个文件"的指引）。
+  → **升级方式：删除数据目录下的 `world.db` 后重新启动**（会一并清空地图 / 地块 / 实体 / 账户，
+  重建后需重新注册管理员）。
+- **实体名字 / 描述 / 账户绑定进组件（v2 第 1c 期，DESIGN §12.4）**：`Entity.name` / `desc` /
+  `user_id` 变成**只读 property**（派生视图）——分别读 `components["core:info"]` 的
+  `name` / `desc` 与 `components["core:account"]` 的 `user_id`；缺失语义：`name` 兜底
+  **`id` 前 8 位**、`desc` = `""`、`user_id` = `None`。写入走 `core:` 组件
+  （**内核保留命名空间，玩法包不能直写**，D33）；管理端 `update_entity(name=…)` / `desc=`
+  **只动 `core:info` 里的那一个键**，不碰同组件其它数据（传空 `desc` = 删该键，
+  `name` 随即回落到 `id` 兜底）。
+- **`to_dict()` 线上投影不再有顶层 `name` / `desc` / `user_id`**：消费者读
+  `components["core:info"]["name"]`（**兜底到 `id` 前 8 位是既定语义**，DESIGN §12.4）。
+  `Entity.from_dict` / `place_entity(name=, desc=, user_id=)` / 实体模板负载保留顶层三键作
+  **输入便利**，会被折进对应组件——所以管理端 `POST` / `PATCH /admin/entities` 的
+  `name` / `desc` 参数**照旧可用**（内部只有组件一种形态，不会两处存同一事实）。
+  注意 `components=` 仍是**整体替换**，与 `name` / `desc` **不要在同一次 PATCH 里混用**。
+- **落库（第 1c 期）**：`entities` 表 **13 列 → 10 列**——`name` / `desc` / `user_id` 三列删除
+  （数据搬进 `components_json` 里的 `core:info` / `core:account`）；**表结构版本 v8 → v9**。
+- **版本闸新增「不该存在的列」检查（v9）**：库里若还带着 `entities.name` / `desc` / `user_id`
+  → **拒绝启动**，错误消息逐个列出这些列。理由：只查"需要的列在不在"查不出多出来的旧列，
+  而那种库会**载入成功但名字 / 描述 / 账户绑定被静默丢掉**。
+  → **升级方式同上：删除数据目录下的 `world.db` 后重新启动**（会一并清空地图 / 地块 / 实体 /
+  账户，重建后需重新注册管理员）。
+- **实体位置进组件（v2 第 1d 期，DESIGN §12.4 / D36）**：`Entity.map_id` / `row` / `col` 变成
+  **只读 property**（派生视图）——读 `components["core:position"]`。**缺失是合法状态**：
+  "**实体不在世界上**"（玩家下线 / 物品在容器里 / 传送中），三个 property 都返回 **`None`**
+  （**不是** `""` / `0`——空值兜底会把"缺失"变成静默错误：实体静默出现在 (0,0)、静默参与
+  按位置筛选）。新增 `has_position()` / `pos_key()`（无位置 → `None`）/ `require_position()`
+  （"必须在场"的路径显式调用，如 `move()` / `_build_scene()`）/ `set_position()` /
+  `clear_position()`。
+  - **读点行为变化**：`list_entities` / `query_entities` 新增 `include_absent=False` 关键字参数
+    ——**默认跳过不在世界上的实体**（`True` 时才带上）；按位置筛选时它们天然不匹配；
+    `query_entities` 的排序键改用**哨兵值**（否则 `None` 会与 `str` 比大小而报错）；
+    `lint_map` 的悬挂实体检查先跳过无位置实体（无位置 ≠ 地图有问题）。
+  - **`move()` 对不在世界上的实体报错**「实体不在任何地块」——移动的前提是有位置。
+  - **事件负载**：`on_entity_move` 的 `from` / `to` 可以是 `null`（实体从世界外移回来 /
+    移出世界）。
+  - **落库（第 1d 期）**：`entities` 表 **10 列 → 7 列**——`map_id` / `row` / `col` 三列删除
+    （数据搬进 `components_json` 里的 `core:position`）；**表结构版本 v9 → v10**。
+  - **版本闸扩到六列（v10）**：库里若还带着 `entities.map_id` / `row` / `col` → **拒绝启动**。
+    理由比 v9 更硬：放行一个位置在表列里的旧库会得到"**每个实体都不在世界**"——
+    那是"无必填"合法状态的**最坏误用**（迁移事故被合法语义掩盖，地图看着是空的但库是"好"的）。
+    → **升级方式同上：删除数据目录下的 `world.db` 后重新启动**。
+  - **`clear_position`**（内核 + 玩法包 API）：让实体**离开世界**（下线 / 收进容器 /
+    传送中间态）——`core:` 直写对玩法包关闭（D33），若没有这条窄口受控入口，位置可选
+    就成了一道**单向门**（造得出不在世界上的实体、却永远送不回去）。与 `set_perception`
+    同一性质（§12.2：规则不放宽，能力不丢失）；`move_entity` 侧则早已放开"从不在场到在场"
+    （它接受不在场的实体）。
+  - **前端**：位置/名字的读法收进 `webui/src/entity.js`
+    （`entityPosition()` / `hasPosition()` / `positionLabel()` / `positionSortKey()` /
+    `withoutPosition()`），编辑器组件不再直接读 `e.row` / `e.col` / `e.map_id`——那些键
+    **已经不存在**，读到的是 `undefined` 且**不报错**（按格过滤静默返回空、排序静默退化、
+    地图网格静默画到 (0,0)）。实体列表的「位置」列对不在世界上的实体显示「不在世界」，
+    「定位」按钮置灰。守卫在 `tests/test_editor_integrity.py`。
+  - **新建实体可以"不进世界"**（不加坐标即可）：`place_entity` 的位置三参数变成可选，
+    **要么全给、要么全不给**——半截坐标直接报错（`""` / `0` 兜底会把"忘了给"变成静默
+    出现在 (0,0) 的实体）。管理端 `POST /admin/entities` 同一规则；玩法包 `api.place_entity`
+    同步放开（物品放进容器、待投放的 NPC 由此可表示）。
+  - **新增 `GET /admin/entities`**（跨地图的全部实体，含不在世界上的）+ 管理台**「全部实体」页**
+    （G46）：支持 `?absent=0|1` 过滤、"放进世界"开关（不勾 = 造一个不在世界上的实体）、
+    「定位」跳到地图编辑器并选中该格。地图详情是**地图视角**，按 `core:position` 裁，
+    不在世界上的实体一个都看不见——没有这条全局入口就等于"内核造得出、编辑器管不着"。
+  - **实体模板不再带位置**：模板是"这东西是什么"，不是"它在哪"——带上位置会让套用
+    静默把实体搬回老地方（`withoutPosition()`）。
+
+- **内核移除物品（D37，取代 D8）**：物品**定义与持有都下沉玩法包**——内核只有实体。
+  删除面：`ItemDef` / `items` 表 / `store.items` / `save_item` · `delete_item`、
+  `register_item_def` · `save_item_def` · `add_item_fields` · `get_item_def` ·
+  `list_item_defs` · `delete_item_def` · `flush_item_defs`、
+  `InteractionRequest.item_id` 与 `interact(..., item_id=…)` 参数、
+  内核事件 `on_item_used`（**内核事件现为 7 个**）、
+  `clear_play_registrations(keep_user_items=…)` 参数、`world.__init__` 的 `ItemDef` 导出。
+  **替换关系**：物品**类型** → 组件声明（`register_entity_tag`：名字 + 字段 schema + 归属）；
+  物品**实例** → 实体 + 组件；`use_action` → interaction 名；`stackable` / `icon` → 组件声明属性与字段；
+  管理员手工维护的定义 → **实体模板**（`register_entity_template` 随卸载消失 /
+  `save_template` 落 `templates` 表不受影响）；`item_id` 槽位 → `args`（自由 dict）；
+  `on_item_used` → 玩法包**自定义事件**（事件总线本就支持任意事件名）。
+
+### 未做（见 `GAPS.md` G40 / G47）
+
+- **第 2 期**：`kind` / `tags` 折叠为组件 + `core:player`（身份进组件）。
+  `core:info` / `core:account` **已随第 1c 期落地**、`core:position` **已随第 1d 期落地**
+  （见上）——**至此"取消字段、全部用组件"在数据面上已经完整**，表上只剩
+  `id` / `kind` / `tags` / 存储元数据。
+  ⚠️ **开工前要先定能力组件的命名**（能力名也要满足 `source:name` 信封，见 **G47**）：
+  这是设计分叉，不是实现细节。
+
 ## v0.7.0（2026-09-25）
 
 **废弃全部内置行为玩法包（BREAKING，D31 / GAPS G39）**——内置目录里不再有"官方玩法"。

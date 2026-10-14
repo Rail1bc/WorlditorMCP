@@ -131,6 +131,7 @@ import InvitesPage from "../pages/admin/InvitesPage.vue";
 import WorldPlaysPage from "../pages/admin/WorldPlaysPage.vue";
 import WorldMapsPage from "../pages/admin/WorldMapsPage.vue";
 import AllMapsPage from "../pages/admin/AllMapsPage.vue";
+import AllEntitiesPage from "../pages/admin/AllEntitiesPage.vue";
 import MapEditorPage from "../pages/admin/MapEditorPage.vue";
 import PlayPageHost from "../pages/admin/PlayPageHost.vue";
 import WorldEditModal from "./WorldEditModal.vue";
@@ -139,6 +140,7 @@ const GLOBAL_NAV = [
   { key: "accounts", title: "账户管理", icon: "👤" },
   { key: "invites", title: "邀请码", icon: "🎫" },
   { key: "allmaps", title: "全部地图", icon: "🗺" },
+  { key: "entities", title: "全部实体", icon: "◇" },
 ];
 
 const PAGES = {
@@ -147,6 +149,7 @@ const PAGES = {
   plays: WorldPlaysPage, // 世界上下文：该世界的玩法包
   maps: WorldMapsPage, // 世界上下文：该世界的地图与组织树
   allmaps: AllMapsPage, // 跨世界：地图治理总览
+  entities: AllEntitiesPage, // 跨地图：实体治理总览（含不在世界上的，D36）
   map: MapEditorPage, // 地图编辑器（从地图页进入）
   pages: PlayPageHost, // 玩法包管理页（#/admin/pages/{play_id}/{key}）
 };
@@ -232,6 +235,8 @@ function pageOn(pg) {
 function parseRoute(hash) {
   // "#/admin/accounts" | "#/admin/world/{id}/plays" | "#/admin/world/{id}/maps"
   // | "#/admin/maps"（全部地图总览） | "#/admin/maps/{map_id}"（编辑器）
+  // | "#/admin/maps/{map_id}/{tab}/{row}/{col}"（编辑器 + 选中某格，全局实体页"定位"用）
+  // | "#/admin/entities"（全部实体总览）
   // | "#/admin/pages/{play_id}/{key}"
   const parts = hash.replace(/^#/, "").split("/").filter(Boolean);
   const key = parts[1] || "";

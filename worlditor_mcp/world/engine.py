@@ -3,7 +3,8 @@
 设计要点：
 - **实体统一模型**：玩家/agent/布景实体都是 ``Entity``（entities 表）；
   玩家/agent 为身份化实体（可认证绑定、位置持久化）。
-- **物品**：定义（ItemDef）为内核注册表；持有下沉玩法包（D8，无 inventories）。
+- **物品**：**不在内核**（v2 / D37 取代 D8）——定义与持有都下沉玩法包；
+  物品类型用组件声明表达，实例用"实体 + 组件"。见 model.py 顶部说明。
 - **交互**：handler 命令式调用内核原语（D12，无 effects 清单）。
 - **事件总线**：单一事件源（8 事件），玩法包订阅 + world_log 历史；
   SSE 是事件总线的序列化出口。
@@ -17,17 +18,17 @@
 多段「读-判-写」原子（DESIGN §2.4 并发模型）。
 时钟与 PRNG 注入（``clock`` / ``rand``），保证时间感知描述与加权抽取可测。
 
-分区地图（按节定位的辅助锚点；行号随演化漂移属正常）：
-- 注册表区：~395–1030（物品/kind/字段/工具/视图/服务/原语分派/交互/事件/UI/清理）
-- 事件总线区：~1031–1227（emit / SSE 推送 / tick 循环）
-- 只读查询：~1229–1326（实体/地图/世界/组织）
-- 世界组织 CRUD：~1330–1432（worlds / folders / 归属）
-- 实体原语：~1441–1532（place / remove / 身份化受控删除）
-- 移动区：~1534–1616（move / move_entity / 默认实现）
-- 数据字段区：~1648–1673（attrs / state / set/get_data）
-- 场景构建：~1675–1756（路径解析 / 阻挡 / SceneView）
-- 交互区：~1758–1845（interact / 可用动作）
-- 地图编辑区：~1849–2207（地块 / 连接 / 地图 / 模板 / 删除级联）
+分区地图（**按名字定位，不记行号**——行号随演化漂移，交给 grep/编辑器跳转）：
+- 注册表区（kind / 字段 / 工具 / 视图 / 服务 / 原语分派 / 交互 / 事件 / UI / 清理）
+- 事件总线区（emit / SSE 推送 / tick 循环）
+- 只读查询（实体 / 地图 / 世界 / 组织）
+- 世界组织 CRUD（worlds / folders / 归属）
+- 实体原语（place / remove / 身份化受控删除）
+- 移动区（move / move_entity / 默认实现）——**无阻挡检查**（v2/D34 已整体移除）
+- 组件与字段区（components / 组件原语 / set·get·remove_data / 内核协议受控入口）
+- 场景构建（路径解析 / SceneView）
+- 交互区（interact / 可用动作）
+- 地图编辑区（地块 / 连接 / 地图 / 模板 / 删除级联）
 """
 
 from __future__ import annotations
@@ -48,17 +49,19 @@ from .errors import WorldError
 from .model import (
     ATTR_INVISIBLE,
     ATTR_SEE_INVISIBLE,
+    CORE_ACCOUNT,
+    CORE_INFO,
+    CORE_PERCEPTION,
+    CORE_POSITION,
     DEFAULT_EVENT_PHASE,
     DIRECTIONS,
     EVENT_PHASES,
     IDENTITY_KINDS,
-    STATE_BLOCK_MOVE,
     WORLD_EVENTS,
     ConnectionPath,
     Entity,
     InteractionRequest,
     InteractionResult,
-    ItemDef,
     MenuButton,
     ScenePath,
     SceneView,
@@ -69,12 +72,14 @@ from .model import (
     WorldFolder,
     WorldMap,
     WorldTemplate,
+    is_core_component,
     location_to_dict,
     parse_location,
     parse_map,
     parse_path,
     parse_tags,
     parse_text_schedule,
+    split_component_key,
 )
 from .store import DEFAULT_WORLD_ID, WorldStore
 
@@ -236,8 +241,23 @@ class _AdminPageBinding:
 
 
 # 可被玩法包覆盖/禁用的行为原语（D11；place/remove 不可覆盖，D14）
+#
+# v2（D32）：组件原语并行加入。**只读**的 ``get_component`` / ``list_components``
+# **不进分派表**（与 query_entities 同口径，D26——查询是数据面，不是行为面）；
+# 写入类（add/set/remove_component）与字段类（set/get/remove_data）一样可被
+# 覆盖 / 禁用，但 **``core:`` 组件的写入绕过分派表**（D33，见 `_dispatch_component`）。
 OVERRIDABLE_PRIMITIVES = frozenset(
-    {"move", "move_entity", "set_data", "get_data", "remove_data", "interact"}
+    {
+        "move",
+        "move_entity",
+        "set_data",
+        "get_data",
+        "remove_data",
+        "add_component",
+        "set_component",
+        "remove_component",
+        "interact",
+    }
 )
 
 # 原语名 → 默认实现方法名（分派表兜底）
@@ -247,6 +267,9 @@ _PRIMITIVE_DEFAULT_NAMES = {
     "set_data": "_set_data_default",
     "get_data": "_get_data_default",
     "remove_data": "_remove_data_default",
+    "add_component": "_add_component_default",
+    "set_component": "_set_component_default",
+    "remove_component": "_remove_component_default",
     "interact": "_interact_default",
 }
 
@@ -254,10 +277,13 @@ _PRIMITIVE_DEFAULT_NAMES = {
 _PRIMITIVE_PARAM_NAMES = {
     "move": ["entity_id", "direction", "path"],
     "move_entity": ["entity_id", "map_id", "row", "col"],
-    "set_data": ["entity_id", "name", "value"],
-    "get_data": ["entity_id", "name"],
-    "remove_data": ["entity_id", "name"],
-    "interact": ["entity_id", "target_id", "action", "args", "item_id"],
+    "set_data": ["entity_id", "name", "value", "component"],
+    "get_data": ["entity_id", "name", "component"],
+    "remove_data": ["entity_id", "name", "component"],
+    "add_component": ["entity_id", "component", "data"],
+    "set_component": ["entity_id", "component", "data"],
+    "remove_component": ["entity_id", "component"],
+    "interact": ["entity_id", "target_id", "action", "args"],
 }
 
 
@@ -286,11 +312,48 @@ def _binding_sort_key(binding: _EventBinding) -> tuple[int, int, int]:
 
 _FIELD_TYPES = ("str", "int", "float", "bool", "json")
 
+# 感知字段白名单（``set_perception`` 的受控入口；见该方法的说明）
+_PERCEPTION_KEYS = (ATTR_INVISIBLE, ATTR_SEE_INVISIBLE)
+
 
 def _check_primitive_name(name: object) -> str:
     if not isinstance(name, str) or name not in OVERRIDABLE_PRIMITIVES:
         raise WorldError(f"原语必须是 {'/'.join(sorted(OVERRIDABLE_PRIMITIVES))} 之一")
     return name
+
+
+def _clean_component(value: object) -> str:
+    """组件名校验（``source:name`` 信封）——非法直接报错，不静默兜底。"""
+    split_component_key(value)
+    return str(value)
+
+
+def _clean_component_data(component: str, data: object) -> dict:
+    """单个组件的整块数据校验（``None`` = 空组件；非对象 → 报错，不静默容忍）。"""
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise WorldError(f"组件 {component} 的数据必须是对象")
+    return dict(data)
+
+
+def _clean_components(value: object) -> dict[str, dict]:
+    """整块校验组件字典（非法键 / 非对象值 → 报错，**不静默丢弃**，D23 口径）。
+
+    与模型层 ``parse_components`` 的分工：那个用于**容错解析**（存储 / 传输），
+    这个用于**API 边界校验**（管理端与玩法包传进来的东西不合法就该报错）。
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise WorldError("components 必须是对象（组件名 → 数据）")
+    out: dict[str, dict] = {}
+    for key, data in value.items():
+        component = _clean_component(key)
+        if not isinstance(data, dict):
+            raise WorldError(f"组件 {component} 的数据必须是对象")
+        out[component] = dict(data)
+    return out
 
 
 def _validate_fields(fields: list) -> list[dict]:
@@ -499,25 +562,18 @@ def _location_from_template(data: dict, map_id: str, row: int, col: int) -> Any:
 
 
 def _entity_template_payload(data: Any) -> dict[str, Any]:
-    """实体模板负载校验 + 规范化（D22：{kind, tags[], name, desc, attrs, state}）。"""
+    """实体模板负载校验 + 规范化（D22 / v2：``{kind, tags[], name, desc, components}``）。"""
     if not isinstance(data, dict):
         raise WorldError("实体模板 data 必须是对象")
     kind = data.get("kind")
     if not isinstance(kind, str) or not kind.strip():
         raise WorldError("实体模板需要 kind（基底类型）")
-    attrs = data.get("attrs")
-    state = data.get("state")
-    if attrs is not None and not isinstance(attrs, dict):
-        raise WorldError("实体模板 attrs 必须是对象")
-    if state is not None and not isinstance(state, dict):
-        raise WorldError("实体模板 state 必须是对象")
     return {
         "kind": kind.strip(),
         "tags": parse_tags(data.get("tags")),
         "name": str(data.get("name") or "").strip(),
         "desc": str(data.get("desc") or ""),
-        "attrs": dict(attrs or {}),
-        "state": dict(state or {}),
+        "components": _clean_components(data.get("components")),
     }
 
 
@@ -554,14 +610,10 @@ class WorldEngine:
         }
         self._ui_components: dict[str, str] = {}
         self._ui_hooks: dict[tuple[str, str], list[_UiHookBinding]] = {}
-        # D9/D10 字段设施：标签/分类/物品的追加字段声明（标签自身字段在 spec.fields）
+        # D9/D10 字段设施：标签/分类的追加字段声明（标签自身字段在 spec.fields）
+        # （v2 / D37：原 `_item_fields` 已随物品移除）
         self._tag_fields: dict[str, list[_FieldAppend]] = {}
         self._category_fields: dict[str, list[_FieldAppend]] = {}
-        self._item_fields: dict[str, list[_FieldAppend]] = {}
-        # 物品定义归属（play_id）：玩法包卸载时清理其注册的物品定义（v0.2.0）
-        self._item_def_play: dict[str, str] = {}
-        # 其中由**用户**（管理页）维护的定义：停用/整体卸载时保留（v0.5.2）
-        self._item_def_user: set[str] = set()
         # D11/A3 原语分派表：name -> 覆盖登记（无登记 = 内核默认实现）
         self._primitive_overrides: dict[str, _PrimitiveOverride] = {}
         # G14 原语过滤器链：name -> 按注册序的过滤器列表（链尾 = 默认实现）
@@ -637,74 +689,21 @@ class WorldEngine:
 
     # ---------- 玩法包注册（WorlditorPlayAPI 转发至此） ----------
 
-    def register_item_def(
-        self, item: Any, *, play_id: str = "", user_data: bool = False
-    ) -> None:
-        """注册/更新物品定义（同步更新内存；``flush_item_defs`` 批量落库）。
-
-        物品 id 是类型键（玩法包引用），注册冲突即覆盖更新（同 id 视为同一物品）；
-        ``play_id`` 记录归属，玩法包卸载时据此清理（见 item_defs_of_play）。
-
-        ``user_data=True`` 表示这条定义是**用户数据**（管理页建的/改的，不是包代码
-        里的声明）：包停用/整体卸载时**不清理**——只有真正卸载（删包目录）才一起删。
-        v0.5.2 之前两者混在一起，停用 items 包会把管理员建的物品定义永久删掉。
-        """
-        if not isinstance(item, ItemDef) and not (
-            hasattr(item, "id") and hasattr(item, "name") and hasattr(item, "to_dict")
-        ):
-            raise WorldError("物品定义格式错误")
-        if not isinstance(item.id, str) or not item.id:
-            raise WorldError("物品 id 不能为空")
-        if not isinstance(item.name, str) or not item.name.strip():
-            raise WorldError("物品名称不能为空")
-        self.store.items[item.id] = item
-        if play_id:
-            self._item_def_play[item.id] = play_id
-        # 代码声明会覆盖同名用户数据（包重新启用时以代码为准）
-        if user_data:
-            self._item_def_user.add(item.id)
-        else:
-            self._item_def_user.discard(item.id)
-
-    def item_defs_of_play(
-        self, play_id: str, *, include_user: bool = True
-    ) -> list[str]:
-        """该玩法包注册的物品定义 id（卸载清理用）。
-
-        ``include_user=False`` 只返回**代码声明**的定义（停用路径用：保留用户
-        在管理页维护的定义）；``True`` 连用户数据一起（真卸载用）。
-        """
-        return [
-            i
-            for i, p in self._item_def_play.items()
-            if p == play_id and (include_user or i not in self._item_def_user)
-        ]
-
-    async def flush_item_defs(self) -> None:
-        """把内存中的物品定义全量写回 items 表（PlayLoader 加载结束后调用）。"""
-        async with self._lock:
-            for item in list(self.store.items.values()):
-                await self.store.save_item(item)
-
-    async def delete_item_def(self, item_id: str) -> None:
-        """删除物品定义（管理页；背包数据语义归持有方，此处不校验背包引用）。"""
-        async with self._lock:
-            item_id = _clean_required(item_id, "物品 id")
-            if item_id not in self.store.items:
-                raise WorldError(f"物品定义不存在：{item_id}")
-            await self.store.delete_item(item_id)
-            # 删除后清归属记账，免得 item_defs_of_play 继续报一个已不存在的 id
-            self._item_def_play.pop(item_id, None)
-            self._item_def_user.discard(item_id)
-            await self._emit(
-                "on_world_edited", {"op": "delete_item_def", "item_id": item_id}
-            )
+    # ---------- 物品定义：已移除（v2 / D37） ----------
+    #
+    # 原 `register_item_def` / `item_defs_of_play` / `flush_item_defs` / `delete_item_def`
+    # 与 `add_item_fields` 全部删除。**物品不在内核**：
+    #   - 物品**类型** → 组件声明（`register_entity_tag`；归属与卸载清理沿用注册表既有机制）
+    #   - 物品**实例** → 实体 + 组件（"一个苹果在地上" = 一个实体带苹果组件）
+    #   - 管理员手工维护的定义 → **实体模板**（`templates` 表 `scope="entity"`，本来就有
+    #     "用户数据（本地模板落库）vs 包声明（随卸载消失）"的区分）
+    #   - `use_action` → interaction 名；`on_item_used` → 玩法包自定义事件
+    # 见 DESIGN §12.8 / D37。
 
     def register_entity_kind(
         self,
         kind: str,
         *,
-        block_move: bool = False,
         interactions: tuple[str, ...] = (),
         label: str = "",
         play_id: str = "",
@@ -720,7 +719,6 @@ class WorldEngine:
         基底 kind 本来就会作为标签参与并集。
 
         Args:
-            block_move: 任一标签为真即阻挡（D19）。
             interactions: 默认可用的动作名（与全局注册表取并集）。
             label: 文案（B1）；也是放置实体时未给名字的默认名。
             play_id: 声明者（能力面按世界激活过滤，D21）。
@@ -731,7 +729,6 @@ class WorldEngine:
         kind = _clean_required(kind, "kind")
         self._register_tag(
             kind,
-            block_move=block_move,
             interactions=interactions,
             label=label,
             play_id=play_id,
@@ -749,7 +746,6 @@ class WorldEngine:
         *,
         tags: tuple[str, ...] | list[str] = (),
         label: str = "",
-        block_move: bool = False,
         interactions: tuple[str, ...] = (),
         play_id: str = "",
         fields: list[dict] | None = None,
@@ -761,7 +757,6 @@ class WorldEngine:
         """
         self.register_entity_kind(
             kind,
-            block_move=block_move,
             interactions=interactions,
             label=label,
             play_id=play_id,
@@ -775,7 +770,6 @@ class WorldEngine:
         tag: str,
         *,
         label: str = "",
-        block_move: bool = False,
         interactions: tuple[str, ...] = (),
         play_id: str = "",
         fields: list[dict] | None = None,
@@ -785,7 +779,6 @@ class WorldEngine:
         tag = _clean_required(tag, "标签名")
         self._register_tag(
             tag,
-            block_move=block_move,
             interactions=interactions,
             label=label,
             play_id=play_id,
@@ -798,7 +791,6 @@ class WorldEngine:
         self,
         tag: str,
         *,
-        block_move: bool,
         interactions: tuple[str, ...] | list[str],
         label: str,
         play_id: str,
@@ -806,15 +798,12 @@ class WorldEngine:
         categories: tuple[str, ...] | list[str],
         implicit: bool,
     ) -> None:
-        if not isinstance(block_move, bool):
-            raise WorldError("block_move 必须是布尔值")
         if not isinstance(interactions, (tuple, list)) or not all(
             isinstance(a, str) and a for a in interactions
         ):
             raise WorldError("interactions 必须是动作名列表")
         self._tag_specs[tag] = TagSpec(
             tag=tag,
-            block_move=block_move,
             interactions=tuple(interactions),
             label=str(label or ""),
             play_id=play_id,
@@ -861,17 +850,6 @@ class WorldEngine:
             _FieldAppend(play_id=play_id, field=f) for f in _validate_fields(fields)
         )
 
-    def add_item_fields(
-        self, item_id: str, fields: list[dict], *, play_id: str = ""
-    ) -> None:
-        """向已有物品类型追加字段。"""
-        item_id = _clean_required(item_id, "物品 id")
-        if item_id not in self.store.items:
-            raise WorldError(f"物品未注册：{item_id}")
-        self._item_fields.setdefault(item_id, []).extend(
-            _FieldAppend(play_id=play_id, field=f) for f in _validate_fields(fields)
-        )
-
     def effective_fields(self, tag: str) -> list[dict]:
         """单个标签的有效字段 = 声明 ∪ 追加声明 ∪ 所属分类声明（D10 运行时合并）。"""
         return self._merge_fields([tag])
@@ -915,7 +893,6 @@ class WorldEngine:
                     "kind": tag,  # 兼容旧字段名（= 标签名）
                     "tag": tag,
                     "label": spec.label or tag,
-                    "block_move": spec.block_move,
                     "interactions": list(spec.interactions),
                     "fields": self.effective_fields(tag),
                     "categories": list(spec.categories),
@@ -967,7 +944,7 @@ class WorldEngine:
     def capabilities(self, entity: Entity) -> dict:
         """实体合并后的能力（D19；管理端/编辑器诊断 + 玩法包自查用）。
 
-        block_move = 任一标签为真；interactions = 并集；fields = 按
+        interactions = 并集；fields = 按
         隐式 kind 标签 → 实例 tags（数组序）→ 分类字段 的顺序合并。
 
         同时把标签**分三类**报出来，便于编辑器解释"为什么没效果"：
@@ -992,7 +969,6 @@ class WorldEngine:
             "active_tags": active,
             "inactive_tags": inactive,
             "unknown_tags": unknown,
-            "block_move": any(s.block_move for s in specs),
             "interactions": sorted({a for s in specs for a in s.interactions}),
             "fields": self.effective_fields_for(active),
         }
@@ -1165,7 +1141,7 @@ class WorldEngine:
           管理端加载组件时附带 Bearer，跨站 URL 会外泄凭据；
         - actions 为玩法包定义的管理动作，handler 签名 ``async (api, **params)``
           （api 为提供者自己的 API 实例），由管理端点锁内代理调用——数据
-          语义（背包 slots、物品定义字段等）只有玩法包自己懂，内核不裸露
+          语义（背包 slots 等）只有玩法包自己懂，内核不裸露
           play_data 编辑。
         - 同包 key 冲突报错（同 D2 风格）；生命周期随玩法包卸载清理。
 
@@ -1583,21 +1559,20 @@ class WorldEngine:
     def detach_play_api(self, play_id: str) -> None:
         self._play_apis.pop(play_id, None)
 
-    def clear_play_registrations(
-        self, play_id: str, *, keep_user_items: bool = True, purge: bool = False
-    ) -> None:
+    def clear_play_registrations(self, play_id: str, *, purge: bool = False) -> None:
         """清理某玩法包的全部注册（kind / interaction / event / ui / 字段 /
         原语分派），供加载失败回滚与卸载使用（C2：重载 = 引擎重建，此为兜底清理）。
 
         原语分派登记随生命周期清除 → 自动恢复内核默认实现（§2.4 恢复语义）。
 
-        ``keep_user_items=True``（默认）：管理页维护的物品定义是**用户数据**，
-        不随包停用消失（v0.5.2）；只有真卸载（删包目录）才传 False 一并清。
-
         ``purge=True``（真卸载）：连**标签归属记忆**（D26）一起清——包目录都没了，
         "这个标签曾由它声明"就不该继续让 query 认为该标签"在本世界不存在"。
         停用（purge=False）**保留**归属：停用的包声明过的标签仍然算"有主且不活跃"，
         否则 query 会把它当纯数据标签匹配到（能力已经没了，数据还在）。
+
+        v2 / D37：原 ``keep_user_items`` 参数已随物品移除——"用户数据 vs 包声明"
+        的区分现在由**存储位置**天然承担（本地实体模板落 `templates` 表、
+        包注册的模板在 `_play_templates` 内存表，前者本就不受影响）。
         """
         self._tag_specs = {
             k: v for k, v in self._tag_specs.items() if v.play_id != play_id
@@ -1634,19 +1609,6 @@ class WorldEngine:
             for k, v in self._category_fields.items()
             if any(a.play_id != play_id for a in v)
         }
-        self._item_fields = {
-            k: [a for a in v if a.play_id != play_id]
-            for k, v in self._item_fields.items()
-            if any(a.play_id != play_id for a in v)
-        }
-        # 本包注册的物品定义：内存清理（落库删除由 PlayLoader._teardown_one 负责）。
-        # 用户数据（管理页维护）默认保留——它属于用户，不属于包的代码注册。
-        for item_id in self.item_defs_of_play(
-            play_id, include_user=not keep_user_items
-        ):
-            self.store.items.pop(item_id, None)
-            self._item_def_play.pop(item_id, None)
-            self._item_def_user.discard(item_id)
         self._primitive_overrides = {
             k: v for k, v in self._primitive_overrides.items() if v.play_id != play_id
         }
@@ -1866,7 +1828,6 @@ class WorldEngine:
                     "target_id": arg.target.id if arg.target else None,
                     "action": arg.action,
                     "args": arg.args,
-                    "item_id": arg.item_id,
                 }
             elif isinstance(arg, InteractionResult):
                 data["result"] = arg.to_dict()
@@ -1914,8 +1875,10 @@ class WorldEngine:
             "tick": self.store.tick,
         }
         if event == "on_entity_move":
-            payload["from"] = list(args[1])
-            payload["to"] = list(args[2])
+            # D36：位置是可选组件 —— `from` / `to` **可能为 None**（"从不在场回到场上"
+            # 或"离开世界"）。别用 `list(...)` 硬转，那会在 None 上抛 TypeError。
+            payload["from"] = list(args[1]) if args[1] is not None else None
+            payload["to"] = list(args[2]) if args[2] is not None else None
         elif event == "on_entity_enter":
             payload["map_id"] = args[1]
             payload["row"] = args[2]
@@ -1925,15 +1888,9 @@ class WorldEngine:
             payload["request"] = {
                 "action": req.action,
                 "target_id": req.target.id if req.target else None,
-                "item_id": req.item_id,
+                "args": req.args,  # v2/D37：原 item_id 槽位已删；玩法包的标识放这里
             }
             payload["result"] = result.to_dict()
-        elif event == "on_item_used":
-            # D8：内核无背包——count 由玩法包自管，事件不带持有数
-            payload["item_id"] = args[1]
-            payload["result"] = (
-                args[3].to_dict() if isinstance(args[3], InteractionResult) else None
-            )
         elif event == "on_entity_changed":
             payload["changed"] = args[1]
         elif event == "on_entity_removed":
@@ -1997,16 +1954,24 @@ class WorldEngine:
         row: int | None = None,
         col: int | None = None,
         viewer_id: str | None = None,
+        *,
+        include_absent: bool = False,
     ) -> list[Entity]:
         """实体列表（位置筛选，宽松：地图不存在 = 空列表）；viewer_id 按隐身过滤（G12）。
 
         实体字段 ``invisible`` 为真时对普通 viewer 隐藏；viewer 自身字段
         ``see_invisible`` 为真（真视）或查看自己时可见。
 
+        **默认只返回"在世界上"的实体**（D36）：位置是可选组件，缺失 = 不在场
+        （玩家下线等）。要连它们一起拿，传 ``include_absent=True``。
+        按位置筛选时，不在场的实体天然不匹配（``None != map_id``）。
+
         这是**老接口**：只按位置筛、不校验地图存在、保持存储顺序。要按标签/世界/
         变更窗口查一批实体，用 ``query_entities``（D26，严格校验 + 稳定排序）。
         """
         entities = list(self.store.entities.values())
+        if not include_absent:
+            entities = [e for e in entities if e.has_position()]
         if map_id is not None:
             entities = [e for e in entities if e.map_id == map_id]
         if row is not None:
@@ -2030,6 +1995,7 @@ class WorldEngine:
         changed_since_revision: int | None = None,
         where: Callable[[Entity], bool] | None = None,
         limit: int | None = None,
+        include_absent: bool = False,
     ) -> list[Entity]:
         """实体查询原语（D26）：**按标签/世界/坐标/变更窗口筛一批实体**。
 
@@ -2057,9 +2023,13 @@ class WorldEngine:
                 ``engine.revision`` 当游标即可。
             where: 额外谓词（进程内用法，不参与 MCP 工具/序列化）。
             limit: 结果条数上限（正整数）。
+            include_absent: 是否连**不在世界上**的实体一起查（D36：位置是可选组件，
+                缺失 = 不在场）。默认 ``False``——玩法包按标签查一批实体时，
+                离线玩家之类的"幽灵"不该被当成处理对象；按位置筛选时它们天然不匹配。
 
         Returns:
             实体列表，按 ``(map_id, row, col, id)`` 稳定排序（便于 diff/limit）。
+            **不在场的实体排在最后**（它们没有位置可排）。
 
         Raises:
             WorldError: 标签/坐标/上限/变更游标类型非法，或地图/世界不存在
@@ -2097,6 +2067,9 @@ class WorldEngine:
 
         matched: list[Entity] = []
         for entity in self.store.entities.values():
+            # D36：位置是可选组件——默认只查"在世界上"的实体（见 include_absent）
+            if not include_absent and not entity.has_position():
+                continue
             if map_id is not None and entity.map_id != map_id:
                 continue
             if world_id is not None and self._world_of_map(entity.map_id) != world_id:
@@ -2125,7 +2098,16 @@ class WorldEngine:
                 continue
             matched.append(entity)
         self._filter_perception(matched, viewer_id)
-        matched.sort(key=lambda e: (e.map_id, e.row, e.col, e.id))
+        # D36：排序键里 map_id/row/col 可能为 None（不在场的实体）——**不能直接进元组**，
+        # 否则 None 与 str 比较会抛 TypeError。用哨兵把它们稳定地排到最后。
+        matched.sort(
+            key=lambda e: (
+                e.map_id if e.map_id is not None else "\uffff",
+                e.row if e.row is not None else 1 << 30,
+                e.col if e.col is not None else 1 << 30,
+                e.id,
+            )
+        )
         return matched[:limit] if limit is not None else matched
 
     def _filter_perception(self, entities: list[Entity], viewer_id: str | None) -> None:
@@ -2133,11 +2115,15 @@ class WorldEngine:
         if viewer_id is None:
             return
         viewer = self.store.entities.get(viewer_id)
-        see_all = bool(viewer and viewer.attrs.get(ATTR_SEE_INVISIBLE))
+        see_all = bool(
+            viewer and viewer.component(CORE_PERCEPTION).get(ATTR_SEE_INVISIBLE)
+        )
         if see_all:
             return
         entities[:] = [
-            e for e in entities if e.id == viewer_id or not e.attrs.get(ATTR_INVISIBLE)
+            e
+            for e in entities
+            if e.id == viewer_id or not e.component(CORE_PERCEPTION).get(ATTR_INVISIBLE)
         ]
 
     def _live_tags(self, entity: Entity) -> set[str]:
@@ -2504,57 +2490,67 @@ class WorldEngine:
                 raise WorldError("文件夹仍有地图，请先移走")
             await self.store.delete_folder(folder_id)
 
-    # ---------- 物品原语 ----------
-
-    # D8：持有（背包）全下沉玩法包——内核无 give/take/count/inventories。
-    # 物品定义注册见 register_item_def（定义 = 内核注册表，玩法包可追加）。
+    # ---------- 物品：已移除（v2 / D37） ----------
+    #
+    # 原来这里写着"持有全下沉玩法包、定义留内核注册表"（D8）。v2 起**定义也下沉**：
+    # 内核无物品、无 give/take/count/inventories。物品类型用组件声明表达，
+    # 实例用"实体 + 组件"。见 DESIGN §12.8 / D37。
 
     # ---------- 实体原语 ----------
 
     async def place_entity(
         self,
         kind: str,
-        map_id: str,
-        row: int,
-        col: int,
+        map_id: str | None = None,
+        row: int | None = None,
+        col: int | None = None,
         *,
         name: str | None = None,
         desc: str = "",
-        attrs: dict | None = None,
-        state: dict | None = None,
+        components: dict | None = None,
         user_id: str | None = None,
         tags: list[str] | tuple[str, ...] | None = None,
     ) -> Entity:
         """放置实体（地图编辑内容，admin；B8）。
 
         kind 未注册也可放置（宽松：行为缺失而已）；name 缺省取 kind label。
-        实体 id 自动生成 uuid4 hex（B5）；``user_id`` 供身份注册绑定账户
-        （B13，仅身份化实体使用）；``tags`` 为实例级标签（D18，可组合出
+        实体 id 自动生成 uuid4 hex（B5）；``tags`` 为实例级标签（D18，可组合出
         "玩家 + 刷怪笼"这类实体，能力见 D19）。
 
+        v2 / D32（§12.4）：``name`` / ``desc`` / ``user_id`` 是**输入便利**——它们会被
+        折进 ``core:info`` / ``core:account`` 组件，实体本身没有这三样特权字段。
+
+        **位置三参数可选（D36）**：全给 = 放进世界（写 ``core:position``）；
+        **全不给 = 造一个不在世界上的实体**（合法状态：物品在容器里、尚未投放的 NPC）。
+        **只给一部分 = 报错**——半截位置会被兜底成 `""` / `0`，把"忘了给"变成
+        静默出现在 (0,0) 的实体；"全有或全无"这条规则与 ``Entity.from_dict`` 一致。
+
         Raises:
-            WorldError: 目标地块不存在 / 参数非法。
+            WorldError: 位置参数只给了一部分 / 目标地块不存在 / 参数非法。
         """
         async with self._lock:
-            map_id = self._map_arg(map_id)
-            _check_pos(row, col)
-            if (map_id, row, col) not in self.store.loc_by_pos:
-                raise WorldError(f"地块不存在：({row}, {col})")
+            has_pos = self._resolve_new_position(map_id, row, col)
             kind = _clean_required(kind, "kind")
             spec = self._tag_specs.get(kind)
             if name is None or not str(name).strip():
                 name = (spec.label if spec and spec.label else kind) if spec else kind
+            payload = _clean_components(components)
+            # D36：位置进 core:position（不再是列）——给了坐标才叫"放进世界"
+            if has_pos is not None:
+                payload = {**payload, CORE_POSITION: has_pos}
+            if str(name).strip() or str(desc or ""):
+                info = dict(payload.get(CORE_INFO) or {})
+                if str(name).strip():
+                    info["name"] = str(name).strip()
+                if str(desc or ""):
+                    info["desc"] = str(desc or "")
+                payload = {**payload, CORE_INFO: info}
+            if user_id is not None:
+                payload = {**payload, CORE_ACCOUNT: {"user_id": str(user_id)}}
             entity = Entity(
                 id=uuid.uuid4().hex,
-                map_id=map_id,
-                row=row,
-                col=col,
                 kind=kind,
-                name=str(name).strip(),
-                desc=str(desc or ""),
-                attrs=dict(attrs or {}),
-                state=dict(state or {}),
-                user_id=user_id,
+                components=payload,
                 last_active_ts=self._now_ts(),
                 tags=parse_tags(tags),
             )
@@ -2564,6 +2560,28 @@ class WorldEngine:
                 {"op": "place_entity", "entity_id": entity.id, "kind": kind},
             )
             return entity
+
+    def _resolve_new_position(
+        self, map_id: object, row: object, col: object
+    ) -> dict[str, Any] | None:
+        """新实体的位置（``core:position`` 的值）；**全不给 = 不进世界 → None**。
+
+        拆出来是因为"全有或全无"这条规则必须只有一处实现——分开写早晚会漏一个分支，
+        而漏掉的那支的后果是实体静默出现在 (0,0)（§12.4 的读点策略专门要避免的事）。
+        """
+        given = [map_id is not None, row is not None, col is not None]
+        if not any(given):
+            return None
+        if not all(given):
+            raise WorldError(
+                "位置参数要么全给、要么全不给（map_id / row / col 收到了半截）"
+                "——不给位置 = 造一个不在世界上的实体"
+            )
+        map_id = self._map_arg(map_id)
+        _check_pos(row, col)
+        if (map_id, row, col) not in self.store.loc_by_pos:
+            raise WorldError(f"地块不存在：({row}, {col})")
+        return {"map_id": map_id, "row": row, "col": col}
 
     async def remove_entity(self, entity_id: str) -> None:
         """移除实体（地图编辑，admin；B8）。
@@ -2613,7 +2631,8 @@ class WorldEngine:
         """路径移动（分派入口，D11；默认实现见 _move_default）。
 
         Raises:
-            WorldError: 实体不存在/非身份化、方向非法、无路径、被阻挡、能力被禁用。
+            WorldError: 实体不存在/非身份化、方向非法、无路径、能力被禁用。
+            （**不再有"被阻挡"**——v2/D34 已整体移除阻挡机制。）
         """
         return await self._dispatch_primitive("move", entity_id, direction, path=path)
 
@@ -2626,7 +2645,9 @@ class WorldEngine:
             if entity.kind not in IDENTITY_KINDS:
                 raise WorldError("只有玩家/agent 实体可以按路径移动")
             direction = _check_direction(direction)
-            loc = self.store.loc_by_pos.get(entity.pos_key())
+            # D36：路径移动要求"必须在场"——不在世界上的实体没有地块可读
+            key = entity.require_position()
+            loc = self.store.loc_by_pos.get(key)
             if loc is None:
                 raise WorldError(f"实体不在任何地块：{entity_id}")
             slot = loc.connections.get(direction)
@@ -2651,11 +2672,8 @@ class WorldEngine:
                     raise WorldError(f"该方向的路径索引 {path} 不存在")
                 path_obj = match[0]
             tgt = self._draw_target(path_obj, loc.map_id)
-            blocker = self._blocker_at(tgt.map_id, tgt.row, tgt.col)
-            if blocker is not None:
-                raise WorldError(f"被「{blocker.name}」挡住了，无法通行")
             from_pos = entity.pos_key()
-            entity.map_id, entity.row, entity.col = tgt.map_id, tgt.row, tgt.col
+            entity.set_position(tgt.map_id, tgt.row, tgt.col)
             entity.last_active_ts = self._now_ts()
             await self.store.save_entity(entity)
             await self._emit("on_entity_move", entity, from_pos, entity.pos_key())
@@ -2685,111 +2703,273 @@ class WorldEngine:
             if entity.pos_key() == (map_id, row, col):
                 return
             from_pos = entity.pos_key()
-            entity.map_id, entity.row, entity.col = map_id, row, col
+            # D36：直接位移同样写 core:position——**也让"从不在场到在场"成为一条合法路径**
+            # （把离线实体放回世界：pos_key() 是 None，这里写入即回到场上）
+            entity.set_position(map_id, row, col)
             entity.last_active_ts = self._now_ts()
             await self.store.save_entity(entity)
             await self._emit("on_entity_move", entity, from_pos, entity.pos_key())
             await self._emit("on_entity_enter", entity, map_id, row, col)
 
-    async def set_attrs(self, entity_id: str, patch: dict) -> None:
-        """合并写实体 attrs（玩法数据；C1 装备/格子自管）。"""
+    async def clear_position(self, entity_id: str) -> None:
+        """让实体**离开世界**（整体移除 `core:position`）——D36 的"下线"通道。
+
+        与 ``remove_entity`` 的区别：**实体还在**——组件、标签、账户绑定、`revision`
+        全部保留，只是不在任何地块上（找不到它的是"按位置/按场景"的视角，不是内核）。
+
+        **为什么必须有这条入口**：`core:` 是内核保留命名空间（D33），玩法包写不进
+        `core:position`。既然 D36 让"不在世界上"成了合法状态（玩家下线、物品收进容器、
+        传送中间态，正是**玩法包**最需要的那几种），就必须给玩法包一条走得通的路——
+        否则"能造出不在世界上的实体、却永远送不回去"，那是个单向门。
+        这与 ``set_perception`` 是同一种做法（§12.2：规则不放宽，能力不丢失）。
+
+        **再放回来**用 ``move_entity``（它接受不在场的实体，D36 已放开这条路径）。
+        幂等：本来就不在世界上 = 无操作。
+        """
         async with self._lock:
             entity = self._require_entity(entity_id)
-            if not isinstance(patch, dict):
-                raise WorldError("patch 必须是对象")
-            if not patch:
+            from_pos = entity.pos_key()
+            if from_pos is None:
                 return
-            entity.attrs = {**entity.attrs, **patch}
+            entity.clear_position()
             await self.store.save_entity(entity)
-            await self._emit("on_entity_changed", entity, {"attrs": patch})
+            # `to` 为 None（离开世界）——事件负载两侧都做了空值守卫（§12.0 补记）
+            await self._emit("on_entity_move", entity, from_pos, None)
 
-    def get_attrs(self, entity_id: str) -> dict:
-        return dict(self._require_entity(entity_id).attrs)
+    # ---------- 组件原语（D32 / D33：实体唯一的数据单位） ----------
+    #
+    # 信封：组件名 = ``source:name``（``split_component_key`` 校验）。**``core:`` 是内核
+    # 保留命名空间**——它的**写入不经分派表**（玩法包既写不进、也拦不住，D33），其余
+    # 组件的写入走分派表（可被覆盖/禁用，D11）。**只读**的 ``get_component`` /
+    # ``list_components`` 不进分派表（同 ``query_entities``，D26 口径）。
 
-    async def set_state(self, entity_id: str, patch: dict) -> None:
-        """合并写实体 state（门开/关、库存、血量等玩法包自管状态）。"""
+    def list_components(self, entity_id: str) -> list[str]:
+        """该实体的组件名列表（只读；稳定排序，便于 diff）。"""
+        return sorted(self._require_entity(entity_id).components)
+
+    def get_component(self, entity_id: str, component: str) -> dict | None:
+        """整块读组件数据（不存在返回 ``None``；只读，不进分派表）。"""
+        component = _clean_component(component)
+        data = self._require_entity(entity_id).components.get(component)
+        return dict(data) if isinstance(data, dict) else None
+
+    async def add_component(
+        self, entity_id: str, component: str, data: dict | None = None
+    ) -> None:
+        """整块新建组件（分派入口；**已存在 → 报错**——要整体替换用 ``set_component``）。"""
+        component = _clean_component(component)
+        return await self._dispatch_component_write(
+            "add_component", component, (entity_id, component, data)
+        )
+
+    async def _add_component_default(
+        self, entity_id: str, component: str, data: dict | None = None
+    ) -> None:
+        component = _clean_component(component)
+        payload = _clean_component_data(component, data)
         async with self._lock:
             entity = self._require_entity(entity_id)
-            if not isinstance(patch, dict):
-                raise WorldError("patch 必须是对象")
-            if not patch:
-                return
-            entity.state = {**entity.state, **patch}
+            if component in entity.components:
+                raise WorldError(
+                    f"组件已存在：{component}（要整体替换请用 set_component）"
+                )
+            entity.components = {**entity.components, component: payload}
             await self.store.save_entity(entity)
-            await self._emit("on_entity_changed", entity, {"state": patch})
+            await self._emit(
+                "on_entity_changed", entity, {"components_added": [component]}
+            )
 
-    def get_state(self, entity_id: str) -> dict:
-        return dict(self._require_entity(entity_id).state)
+    async def set_component(
+        self, entity_id: str, component: str, data: dict | None = None
+    ) -> None:
+        """整块写组件（分派入口；建或**整体替换**）。"""
+        component = _clean_component(component)
+        return await self._dispatch_component_write(
+            "set_component", component, (entity_id, component, data)
+        )
 
-    # ---------- 字段原语（D9：set_data/get_data，可被覆盖/禁用） ----------
+    async def _set_component_default(
+        self, entity_id: str, component: str, data: dict | None = None
+    ) -> None:
+        component = _clean_component(component)
+        payload = _clean_component_data(component, data)
+        async with self._lock:
+            entity = self._require_entity(entity_id)
+            existed = component in entity.components
+            entity.components = {**entity.components, component: payload}
+            await self.store.save_entity(entity)
+            await self._emit(
+                "on_entity_changed",
+                entity,
+                {"components_set" if existed else "components_added": [component]},
+            )
 
-    async def set_data(self, entity_id: str, name: str, value: Any) -> None:
-        """字段写（分派入口；默认实现见 _set_data_default）。"""
-        return await self._dispatch_primitive("set_data", entity_id, name, value)
+    async def remove_component(self, entity_id: str, component: str) -> bool:
+        """整块删组件（分派入口；幂等）。"""
+        component = _clean_component(component)
+        return await self._dispatch_component_write(
+            "remove_component", component, (entity_id, component)
+        )
 
-    async def _set_data_default(self, entity_id: str, name: str, value: Any) -> None:
-        """默认字段写：合并写实体玩法字段（容器 = attrs；state 走 set_state，不经分派）。"""
+    async def _remove_component_default(self, entity_id: str, component: str) -> bool:
+        """整块删组件；不存在 → False（幂等，不报错、不发事件、不落盘）。
+
+        Returns:
+            是否真的删掉了。
+        """
+        component = _clean_component(component)
+        async with self._lock:
+            entity = self._require_entity(entity_id)
+            if component not in entity.components:
+                return False
+            components = dict(entity.components)
+            del components[component]
+            entity.components = components
+            await self.store.save_entity(entity)
+            await self._emit(
+                "on_entity_changed", entity, {"components_removed": [component]}
+            )
+            return True
+
+    async def _dispatch_component_write(
+        self, primitive: str, component: str, args: tuple
+    ) -> Any:
+        """组件写入的统一入口：**``core:`` 跳过玩法包分派表**（D33）。
+
+        参数按 ``_PRIMITIVE_PARAM_NAMES`` 的规范顺序传（位置参数即命名参数）。
+        """
+        component = _clean_component(component)
+        if is_core_component(component):
+            return await getattr(self, _PRIMITIVE_DEFAULT_NAMES[primitive])(*args)
+        return await self._dispatch_primitive(primitive, *args)
+
+    # ---------- 字段原语（D9 的开放模型保留：字段 = **组件内**的一个键） ----------
+
+    async def set_data(
+        self, entity_id: str, name: str, value: Any, *, component: str
+    ) -> None:
+        """字段写（分派入口；默认实现见 ``_set_data_default``）。
+
+        ``component`` 必填：v2 起**没有**扁平命名空间，字段一律归属某个组件
+        （``core:`` 之外的组件名可以由玩法包自由虚构；写在未建组件上会隐式建出来）。
+        """
+        component = _clean_component(component)
+        return await self._dispatch_component_write(
+            "set_data", component, (entity_id, name, value, component)
+        )
+
+    async def _set_data_default(
+        self, entity_id: str, name: str, value: Any, component: str
+    ) -> None:
+        """默认字段写：合并写组件内的一个字段（组件不存在则隐式建出）。"""
         name = _clean_required(name, "字段名")
+        component = _clean_component(component)
         async with self._lock:
             entity = self._require_entity(entity_id)
-            entity.attrs = {**entity.attrs, name: value}
+            data = dict(entity.component(component))
+            data[name] = value
+            entity.components = {**entity.components, component: data}
             await self.store.save_entity(entity)
-            await self._emit("on_entity_changed", entity, {"attrs": {name: value}})
+            await self._emit(
+                "on_entity_changed", entity, {"fields": {component: {name: value}}}
+            )
 
-    async def remove_data(self, entity_id: str, name: str) -> bool:
+    async def remove_data(self, entity_id: str, name: str, *, component: str) -> bool:
         """字段删除（分派入口，D11；默认实现见 ``_remove_data_default``）。"""
-        return await self._dispatch_primitive("remove_data", entity_id, name)
+        component = _clean_component(component)
+        return await self._dispatch_component_write(
+            "remove_data", component, (entity_id, name, component)
+        )
 
-    async def _remove_data_default(self, entity_id: str, name: str) -> bool:
-        """默认字段删除：删掉 attrs 里的一个字段（容器 = attrs，与 set_data 对称）。
+    async def _remove_data_default(
+        self, entity_id: str, name: str, component: str
+    ) -> bool:
+        """默认字段删除：删掉某组件内的一个字段（D23 / D29 的另一半）。
 
-        D23 的另一半：字段**能被显式删掉**，而不是只能"整体覆盖 attrs"顺手丢
+        D23 的另一半：字段**能被显式删掉**，而不是只能"整体覆盖组件"顺手丢
         （整体覆盖会连别的包写的字段一起丢，那正是要根除的静默丢字段）。
 
-        Returns:
-            是否真的删掉了；字段本来不存在 → False（幂等，不报错、不发事件、不落盘）。
-        """
-        name = _clean_required(name, "字段名")
-        async with self._lock:
-            entity = self._require_entity(entity_id)
-            if name not in entity.attrs:
-                return False
-            attrs = dict(entity.attrs)
-            del attrs[name]
-            entity.attrs = attrs
-            await self.store.save_entity(entity)
-            await self._emit("on_entity_changed", entity, {"attrs_removed": [name]})
-            return True
-
-    async def remove_state(self, entity_id: str, name: str) -> bool:
-        """删除 state 字段（**不经分派**，与 set_state 对称：state = 动态状态容器）。
+        **删掉最后一个字段后组件仍然存在**（`{}`）——空组件是**纯能力标记**
+        （§12.6：带某组件 = 具备该能力），顺手删组件等于静默摘掉能力。
+        要删整个组件请显式调 ``remove_component``。
 
         Returns:
-            是否真的删掉了（不存在 → False，幂等）。
+            是否真的删掉了；字段/组件不存在 → False（幂等，不报错、不发事件、不落盘）。
         """
         name = _clean_required(name, "字段名")
+        component = _clean_component(component)
         async with self._lock:
             entity = self._require_entity(entity_id)
-            if name not in entity.state:
+            data = entity.components.get(component)
+            if not isinstance(data, dict) or name not in data:
                 return False
-            state = dict(entity.state)
-            del state[name]
-            entity.state = state
+            new_data = dict(data)
+            del new_data[name]
+            entity.components = {**entity.components, component: new_data}
             await self.store.save_entity(entity)
-            await self._emit("on_entity_changed", entity, {"state_removed": [name]})
+            await self._emit(
+                "on_entity_changed", entity, {"fields_removed": {component: [name]}}
+            )
             return True
 
-    async def get_data(self, entity_id: str, name: str | None = None) -> Any:
-        """字段读（分派入口；默认实现见 _get_data_default）。"""
-        return await self._dispatch_primitive("get_data", entity_id, name)
+    async def get_data(
+        self, entity_id: str, name: str | None = None, *, component: str
+    ) -> Any:
+        """字段读（分派入口；默认实现见 ``_get_data_default``）。
 
-    async def _get_data_default(self, entity_id: str, name: str | None = None) -> Any:
-        """默认字段读：单字段或全量（容器 = attrs）。"""
-        entity = self._require_entity(entity_id)
-        if name is not None:
-            name = _clean_required(name, "字段名")
-            return entity.attrs.get(name)
-        return dict(entity.attrs)
+        ``name=None`` 返回该组件的**整块数据**（``dict``）；组件不存在返回 ``{}``。
+        """
+        component = _clean_component(component)
+        return await self._dispatch_primitive("get_data", entity_id, name, component)
+
+    async def _get_data_default(
+        self, entity_id: str, name: str | None = None, component: str = ""
+    ) -> Any:
+        """默认字段读：组件内单字段，或``name=None`` 时整块（组件缺失 → ``{}``）。"""
+        component = _clean_component(component)
+        data = self._require_entity(entity_id).components.get(component)
+        data = data if isinstance(data, dict) else {}
+        if name is None:
+            return dict(data)
+        name = _clean_required(name, "字段名")
+        return data.get(name)
+
+    # ---------- 内核协议组件的受控入口 ----------
+    #
+    # ``core:`` 组件玩法包不能直写（D33），否则它既能拦下内核自己的写入，也能伪造
+    # 身份组件。但有些协议字段**本来就是玩法包的正当能力**（让实体隐身），所以给
+    # 一个**窄口、内核拥有**的入口——与 D20"NPC 升格必须经身份服务这个受控通道"
+    # 是同一种做法：规则不放宽（`core:` 仍然只有内核能直写），能力不丢失。
+
+    async def set_perception(self, entity_id: str, patch: dict) -> None:
+        """设置感知（``core:perception``）——**玩法包唯一的受控入口**。
+
+        ``patch`` 只接受 ``invisible`` / ``see_invisible``（布尔）：
+        普通 viewer 看不到 ``invisible`` 实体；``see_invisible`` 为真的 viewer 能看到
+        （G1 / G12，判定点单一：``list_entities`` / ``query_entities`` 同源）。
+        """
+        if not isinstance(patch, dict):
+            raise WorldError("patch 必须是对象")
+        clean: dict[str, bool] = {}
+        for key, value in patch.items():
+            if key not in _PERCEPTION_KEYS:
+                raise WorldError(
+                    f"感知只支持 {' / '.join(_PERCEPTION_KEYS)}（收到 {key!r}）"
+                )
+            if not isinstance(value, bool):
+                raise WorldError(f"感知字段 {key} 必须是布尔值")
+            clean[key] = value
+        if not clean:
+            return
+        async with self._lock:
+            entity = self._require_entity(entity_id)
+            data = dict(entity.component(CORE_PERCEPTION))
+            data.update(clean)
+            entity.components = {**entity.components, CORE_PERCEPTION: data}
+            await self.store.save_entity(entity)
+            await self._emit(
+                "on_entity_changed", entity, {"fields": {CORE_PERCEPTION: clean}}
+            )
 
     # ---------- 移动辅助 ----------
 
@@ -2818,25 +2998,16 @@ class WorldEngine:
                 break
         return chosen
 
-    def _blocker_at(self, map_id: str, row: int, col: int) -> Entity | None:
-        for e in self.store.entities.values():
-            if e.pos_key() == (map_id, row, col) and self._is_blocking(e):
-                return e
-        return None
-
-    def _is_blocking(self, e: Entity) -> bool:
-        """阻挡判定（D19）：``state["block_move"]`` 动态覆盖优先，其次看标签并集。
-
-        任一标签声明 block_move 即阻挡（标签写 False 想表达的是"对某些实体开放"，
-        该用过滤器/state，而不是抵消别人的 True）。
-        D21：声明该标签的玩法包在实体所在世界未激活 → 该标签不参与（不阻挡）。
-        """
-        if STATE_BLOCK_MOVE in e.state:
-            return bool(e.state[STATE_BLOCK_MOVE])
-        return any(spec.block_move for spec in self._active_specs(e))
+    # ---------- 阻挡：v2 已整体移除（D34） ----------
+    #
+    # 「所有实体都不阻挡」——原 ``_blocker_at`` / ``_is_blocking`` / ``TagSpec.block_move``
+    # / ``core:state`` 全部删除。门的开关、机关、墙、NPC 挡路归**玩法包**
+    # （``override_primitive("move")`` 或过滤器链，D11 早已支持）。
+    # 将来若需要，另立一个"描述阻挡能力"的内核组件（GAPS G44）。
 
     def _build_scene(self, entity: Entity) -> SceneView:
-        loc = self.store.loc_by_pos.get(entity.pos_key())
+        # D36：场景构建要求"必须在场"（不在世界上的实体没有"当前地块"可讲）
+        loc = self.store.loc_by_pos.get(entity.require_position())
         if loc is None:
             raise WorldError(f"实体不在任何地块：{entity.id}")
         m = self.store.maps.get(loc.map_id)
@@ -2886,11 +3057,14 @@ class WorldEngine:
         target_id: str,
         action: str,
         args: dict | None = None,
-        item_id: str | None = None,
     ) -> InteractionResult:
-        """交互通道（分派入口，D11/D12；默认实现见 _interact_default）。"""
+        """交互通道（分派入口，D11/D12；默认实现见 _interact_default）。
+
+        v2 / D37：原 ``item_id`` 参数已删除——物品不在内核，玩法包把它的标识放进
+        ``args``（如 ``args={"item": "apple"}``），内核不解释其内容。
+        """
         return await self._dispatch_primitive(
-            "interact", entity_id, target_id, action, args, item_id
+            "interact", entity_id, target_id, action, args
         )
 
     async def _interact_default(
@@ -2899,7 +3073,6 @@ class WorldEngine:
         target_id: str,
         action: str,
         args: dict | None = None,
-        item_id: str | None = None,
     ) -> InteractionResult:
         """默认交互：校验可用动作（C3）→ 玩法包 handler → 返回结果。
 
@@ -2909,7 +3082,7 @@ class WorldEngine:
             WorldError: 实体/目标不存在、动作不可用或未实现、handler 出错。
         """
         async with self._lock:
-            entity = self._require_entity(entity_id)
+            self._require_entity(entity_id)  # 发起者必须存在（校验，结果本身不用）
             target = self._require_entity(target_id)
             action = _clean_required(action, "动作")
             if action not in self._interactions:
@@ -2930,7 +3103,6 @@ class WorldEngine:
                 target=target,
                 action=action,
                 args=dict(args or {}),
-                item_id=item_id,
             )
             api = self._play_apis.get(binding.play_id)
             try:
@@ -2949,8 +3121,6 @@ class WorldEngine:
             if result.ui is not None:
                 result.ui = await self.apply_ui_hooks(result.ui, entity_id=entity_id)
             await self._emit("on_interact", req, result)
-            if item_id is not None:
-                await self._emit("on_item_used", entity, item_id, req.args, result)
             return result
 
     def available_actions(self, target_id: str) -> list[str]:
@@ -3089,7 +3259,7 @@ class WorldEngine:
             # 3. 地块上的实体位置
             for e in self.store.entities.values():
                 if e.pos_key() == src:
-                    e.map_id, e.row, e.col = map_id, to_row, to_col
+                    e.set_position(map_id, to_row, to_col)
                     await self.store.save_entity(e)
             await self._emit(
                 "on_world_edited",
@@ -3141,15 +3311,18 @@ class WorldEngine:
         *,
         name: object = _UNSET,
         desc: object = _UNSET,
-        attrs: object = _UNSET,
-        state: object = _UNSET,
+        components: object = _UNSET,
         tags: object = _UNSET,
         kind: object = _UNSET,
     ) -> Entity:
-        """更新实体字段（admin 编辑；attrs/state/tags 整体替换）。
+        """更新实体字段（admin 编辑；components/tags 整体替换）。
 
         类型（基底 kind）可改，但**身份化实体的类型由身份服务管理**（D20）——
         编辑器不能把玩家改成别的东西，也不能把别的东西改成玩家。
+
+        v2 / D32（§12.4）：``name`` / ``desc`` 写在 ``core:info`` 里（★只动这两个键，
+        不碰同一组件下的其它数据）；传空串等于把该键删掉（``name`` 随即回落到
+        ``id`` 前 8 位的兜底）——**不静默丢**同一组件的其它字段。
         """
         async with self._lock:
             entity = self._require_entity(entity_id)
@@ -3160,18 +3333,25 @@ class WorldEngine:
                         "身份化实体的类型由身份服务管理（D20），不能在编辑器里改"
                     )
                 entity.kind = new_kind
-            if name is not _UNSET:
-                entity.name = _clean_required(name, "名称")
-            if desc is not _UNSET:
-                entity.desc = str(desc or "")
-            if attrs is not _UNSET:
-                if not isinstance(attrs, dict):
-                    raise WorldError("attrs 必须是对象")
-                entity.attrs = dict(attrs)
-            if state is not _UNSET:
-                if not isinstance(state, dict):
-                    raise WorldError("state 必须是对象")
-                entity.state = dict(state)
+            if components is not _UNSET:
+                entity.components = _clean_components(components)
+            if name is not _UNSET or desc is not _UNSET:
+                info = dict(entity.component(CORE_INFO))
+                if name is not _UNSET:
+                    new_name = _clean_required(name, "名称")
+                    info["name"] = new_name
+                if desc is not _UNSET:
+                    new_desc = str(desc or "")
+                    if new_desc:
+                        info["desc"] = new_desc
+                    else:
+                        info.pop("desc", None)
+                if info:
+                    entity.components = {**entity.components, CORE_INFO: info}
+                else:
+                    entity.components = {
+                        k: v for k, v in entity.components.items() if k != CORE_INFO
+                    }
             if tags is not _UNSET:
                 if tags is not None and not isinstance(tags, (list, tuple)):
                     raise WorldError("tags 必须是标签数组")
@@ -3296,23 +3476,18 @@ class WorldEngine:
                 for e in list(self.store.entities.values()):
                     if e.map_id != map_id or e.kind in IDENTITY_KINDS:
                         continue
-                    cloned_entities.append(
-                        Entity(
-                            id=uuid.uuid4().hex,
-                            map_id=new_map_id,
-                            row=e.row,
-                            col=e.col,
-                            kind=e.kind,
-                            name=e.name,
-                            desc=e.desc,
-                            attrs=copy.deepcopy(e.attrs),
-                            state=copy.deepcopy(e.state),
-                            # D18：实例标签必须一起复制——否则副本悄悄变成"裸实体"
-                            # （原先漏了这行：带 spawner 标签的实体复制后标签全丢）
-                            tags=list(e.tags),
-                            last_active_ts=0.0,
-                        )
+                    # v2：位置也在 components 里（core:position）→ 深拷贝组件即复制位置；
+                    # 但目标地图是**副本**，所以只把 map_id 指过去（行列不变）
+                    cloned = copy.deepcopy(e)
+                    cloned.id = uuid.uuid4().hex
+                    cloned.set_position(
+                        new_map_id, e.require_position()[1], e.require_position()[2]
                     )
+                    cloned.last_active_ts = 0.0
+                    # D18：实例标签必须一起复制——否则副本悄悄变成"裸实体"
+                    # （原先漏了这行：带 spawner 标签的实体复制后标签全丢）
+                    cloned.tags = list(e.tags)
+                    cloned_entities.append(cloned)
                 await self.store.save_entities(cloned_entities)
             # 归属：默认与源地图同世界同节点
             target_world = (
@@ -3449,6 +3624,11 @@ class WorldEngine:
             )
 
         for e in entities:
+            # D36：位置是可选组件——**不在场不是"悬空"**。上面的 `e.map_id == map_id`
+            # 过滤其实已经排除了它们（None != map_id），这里再挡一道：这条检查是
+            # "数据坏了要报错"的断言，误报一个离线玩家会让人去查根本没坏的数据。
+            if not e.has_position():
+                continue
             if e.pos_key() not in self.store.loc_by_pos:
                 add(
                     "error",
@@ -3559,8 +3739,10 @@ class WorldEngine:
     ) -> None:
         """注册玩法包自带的**实体模板**（D22：内存注册表，随包卸载消失）。
 
-        data 形如 ``{kind, tags[], name, desc, attrs, state}``——套用即"照这个建一个
-        实体"，建完仍可改。管理端本地模板落库、与这里合并成一个选择列表。
+        data 形如 ``{kind, tags[], name, desc, components}``（v2/D32：原 attrs/state
+        两容器已取消）——套用即"照这个建一个实体"，建完仍可改。
+        管理端本地模板落库、与这里合并成一个选择列表（D37：这条"包声明 vs 本地数据"
+        的区分顶替了原"管理员手工物品定义"的位置）。
         """
         template_id = _clean_required(template_id, "模板 id")
         name = _clean_required(name, "模板名称")

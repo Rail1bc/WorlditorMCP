@@ -12,6 +12,9 @@ from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
 from worlditor_mcp.world.store import WorldStore
 
+# v2（D32）：字段归属组件（空信封不行），测试统一用 local:stat。
+_STAT = "local:stat"
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -26,8 +29,9 @@ async def _engine(tmp_path: Path) -> WorldEngine:
 
 
 async def _player(engine: WorldEngine):
+    # v2（D32）：没有扁平 attrs 了，玩法数据归 local: 组件。
     return await engine.place_entity(
-        "player", "default", 0, 0, name="小明", attrs={"gold": 5}
+        "player", "default", 0, 0, name="小明", components={"local:stat": {"gold": 5}}
     )
 
 
@@ -122,16 +126,16 @@ def test_override_handler_serialized_under_lock(tmp_path):
             player = await _player(engine)
 
             async def racing_move(api, entity_id, direction, *, path=None):
-                n = api.get_attrs(entity_id).get("n", 0)
+                n = await api.get_data(entity_id, "n", component="local:stat") or 0
                 await asyncio.sleep(0.01)  # 让出点：另一协程在此插入读-写
-                await api.set_attrs(entity_id, {"n": n + 1})
+                await api.set_data(entity_id, "n", n + 1, component="local:stat")
                 return {"ok": direction}
 
             api.override_primitive("move", racing_move)
             await asyncio.gather(
                 engine.move(player.id, "up"), engine.move(player.id, "up")
             )
-            assert engine.get_attrs(player.id)["n"] == 2
+            assert await engine.get_data(player.id, "n", component="local:stat") == 2
         finally:
             await engine.terminate()
 
@@ -145,20 +149,72 @@ def test_set_data_get_data_dispatch(tmp_path):
         engine = await _engine(tmp_path)
         try:
             player = await _player(engine)
-            await engine.set_data(player.id, "hp", 100)
-            await engine.set_data(player.id, "hp", 80)
-            assert await engine.get_data(player.id, "hp") == 80
-            assert (await engine.get_data(player.id))["gold"] == 5
+            await engine.set_data(player.id, "hp", 100, component=_STAT)
+            await engine.set_data(player.id, "hp", 80, component=_STAT)
+            assert await engine.get_data(player.id, "hp", component=_STAT) == 80
+            # name=None → 返回整块组件数据
+            assert (await engine.get_data(player.id, component=_STAT))["gold"] == 5
             api = WorlditorPlayAPI(engine, "pkg_a")
             engine.attach_play_api("pkg_a", api)
             api.disable_primitive("set_data")
             with pytest.raises(WorldError, match="已被禁用"):
-                await engine.set_data(player.id, "hp", 50)
+                await engine.set_data(player.id, "hp", 50, component=_STAT)
             # 覆盖 get_data
             api2 = WorlditorPlayAPI(engine, "pkg_b")
             engine.attach_play_api("pkg_b", api2)
-            api2.override_primitive("get_data", lambda api, eid, name=None: "masked")
-            assert await engine.get_data(player.id, "hp") == "masked"
+            api2.override_primitive(
+                "get_data", lambda api, eid, name=None, component=None: "masked"
+            )
+            assert await engine.get_data(player.id, "hp", component=_STAT) == "masked"
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
+def test_component_primitives_and_events(tmp_path):
+    """组件原语（D32）：add 已存在报错 / set 整体替换 / remove 幂等；事件键为 components_*。"""
+
+    async def fn():
+        engine = await _engine(tmp_path)
+        try:
+            player = await _player(engine)
+            seen: list[dict] = []
+
+            def observe(api, entity, changed):
+                seen.append(changed)
+
+            engine.register_world_event("on_entity_changed", observe, play_id="obs")
+            # 新建组件 → components_added
+            await engine.add_component(player.id, "local:bag", {"slots": 3})
+            assert engine.get_component(player.id, "local:bag") == {"slots": 3}
+            assert seen[-1] == {"components_added": ["local:bag"]}
+            # 已存在再 add → 报错（要整体替换用 set_component），且不改动、不发事件
+            with pytest.raises(WorldError, match="组件已存在"):
+                await engine.add_component(player.id, "local:bag", {})
+            assert engine.get_component(player.id, "local:bag") == {"slots": 3}
+            assert len(seen) == 1
+            # set 已存在组件 = 整体替换 → components_set（旧键一起丢，正是 set 的语义）
+            await engine.set_component(player.id, "local:bag", {"slots": 5})
+            assert engine.get_component(player.id, "local:bag") == {"slots": 5}
+            assert seen[-1] == {"components_set": ["local:bag"]}
+            # set 不存在的组件 = 建出来 → components_added
+            await engine.set_component(player.id, "local:quest", {"step": 1})
+            assert seen[-1] == {"components_added": ["local:quest"]}
+            # 删组件 → components_removed；再删 → False（幂等，不报错也不发事件）
+            assert await engine.remove_component(player.id, "local:bag") is True
+            assert engine.get_component(player.id, "local:bag") is None
+            assert seen[-1] == {"components_removed": ["local:bag"]}
+            assert await engine.remove_component(player.id, "local:bag") is False
+            assert seen[-1] == {"components_removed": ["local:bag"]}
+            # 只读接口（不进分派表）：稳定排序的组件名列表
+            # （v2：位置在 core:position、名字在 core:info，所以它们也在清单中）
+            assert engine.list_components(player.id) == [
+                "core:info",
+                "core:position",
+                "local:quest",
+                _STAT,
+            ]
         finally:
             await engine.terminate()
 
@@ -175,9 +231,7 @@ def test_override_interact(tmp_path):
             engine.attach_play_api("pkg_a", api)
             player = await _player(engine)
 
-            async def fake_interact(
-                api, eid, target_id, action, args=None, item_id=None
-            ):
+            async def fake_interact(api, eid, target_id, action, args=None):
                 return {"blocked": action}
 
             api.override_primitive("interact", fake_interact)
@@ -252,31 +306,31 @@ def test_kind_fields_and_merge(tmp_path):
     _run(fn())
 
 
-def test_item_fields(tmp_path):
-    """物品字段：注册时声明 + add_item_fields 追加。"""
+def test_component_declaration_fields_replaces_item_fields(tmp_path):
+    """D37：原「物品字段（注册声明 + 追加）」改由**组件/标签字段设施**承担。
+
+    物品类型现在就是一条组件声明，所以"给已有类型追加字段"= ``add_tag_fields``
+    （同一套设施、同一套归属记账），不再是 ``add_item_fields``。
+    """
 
     async def fn():
         engine = await _engine(tmp_path)
         try:
             api = WorlditorPlayAPI(engine, "pkg_a")
             engine.attach_play_api("pkg_a", api)
-            from worlditor_mcp.world import ItemDef
 
-            api.register_item_def(
-                ItemDef(id="sword", name="剑"),
+            api.register_entity_tag(
+                "sword",
+                label="剑",
                 fields=[{"name": "atk", "label": "攻击", "type": "int"}],
             )
-            # 喇叭不再由内核播种（v0.2.0：物品归 items 包注册）——这里显式注册后再追加字段
-            api.register_item_def(ItemDef(id="megaphone", name="喇叭"))
-            api.add_item_fields("megaphone", [{"name": "price", "type": "int"}])
-            assert engine.store.items["sword"].fields[0]["name"] == "atk"
-            # add_item_fields 落内存注册表（flush 后持久化）
-            await engine.flush_item_defs()
-            assert "price" in {
-                f.field["name"] for f in engine._item_fields["megaphone"]
-            }  # noqa: SLF001
-            with pytest.raises(WorldError, match="未注册"):
-                api.add_item_fields("nope", [{"name": "x", "type": "int"}])
+            api.register_entity_tag("megaphone", label="喇叭")
+            api.add_tag_fields("megaphone", [{"name": "price", "type": "int"}])
+            row = next(k for k in api.list_kinds() if k["tag"] == "sword")
+            assert row["fields"][0]["name"] == "atk"
+            # add_tag_fields 落内存注册表，且记了归属（卸载可清）
+            assert "price" in {f.field["name"] for f in engine._tag_fields["megaphone"]}  # noqa: SLF001
+            assert {f.play_id for f in engine._tag_fields["megaphone"]} == {"pkg_a"}
         finally:
             await engine.terminate()
 

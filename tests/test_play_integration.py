@@ -9,19 +9,16 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import pytest
 from play_fixtures import PLAY_ID, install_demo_play  # noqa: E402
 from world_fixtures import install_demo_world  # noqa: E402
 
-from worlditor_mcp.world import ItemDef  # noqa: E402
-from worlditor_mcp.world.engine import (  # noqa: E402
-    WorldEngine,
-    WorldError,
-)
+from worlditor_mcp.world.engine import WorldEngine  # noqa: E402
 from worlditor_mcp.world.play import PlayLoader  # noqa: E402
 from worlditor_mcp.world.store import WorldStore  # noqa: E402
 
 SEED_LOCATION_COUNT = 41
+# v2（D32）：玩法数据按组件分组；演示夹具包的玩家数据组件（见 play_fixtures.py）
+_STAT = "local:stat"
 
 
 def _run(coro):
@@ -66,7 +63,15 @@ def test_demo_play_loaded(tmp_path):
     async def fn(engine: WorldEngine, loader: PlayLoader):
         plays = await loader.load_all()
         assert [p.play_id for p in plays] == [PLAY_ID]
-        assert set(engine._tag_specs) == {"merchant", "sign", "door"}
+        # v2 / D37：苹果与喇叭不再是"内核物品定义"，而是夹具包的**组件声明**
+        # （标签即类型：名字 + 字段 schema + 归属），所以它们和 kind 同处一个注册表
+        assert set(engine._tag_specs) == {
+            "merchant",
+            "sign",
+            "door",
+            "apple",
+            "megaphone",
+        }
         assert set(engine._interactions) >= {
             "talk",
             "trade",
@@ -78,20 +83,11 @@ def test_demo_play_loaded(tmp_path):
         # on_tick 带间隔订阅
         tick_bindings = engine._event_bindings["on_tick"]
         assert len(tick_bindings) == 1 and tick_bindings[0].interval == 5
-        # 物品落库（flush 后持久化）：v0.2.0 内核对物品同样零内置（不再播种喇叭），
-        # 物品定义由玩法包注册——演示夹具包只注册 kind/交互，这里经其 API 补一个
-        # 喇叭定义，验证 flush 后重启仍在
-        loader.plays[PLAY_ID].api.register_item_def(
-            ItemDef(id="megaphone", name="喇叭")
-        )
-        await engine.flush_item_defs()
-        await engine.terminate()
-        engine2 = WorldEngine(WorldStore(db_path))
-        await engine2.initialize()
-        try:
-            assert "megaphone" in engine2.store.items
-        finally:
-            await engine2.terminate()
+        # v2 / D37：内核不再有物品定义与 items 表（那部分断言移入 test_v2_components）。
+        # 这里改验证"**组件声明**随包加载进入注册表、且带归属"——它就是物品类型的落点。
+        kinds = {k["tag"]: k for k in engine.list_kinds()}
+        assert kinds["apple"]["play_id"] == PLAY_ID  # 夹具包用标签声明了苹果
+        assert kinds["apple"]["label"] == "苹果"
 
     db_path = tmp_path / "world.db"
     loader = make_loader(db_path, tmp_path / "plays")
@@ -108,14 +104,19 @@ async def _async_main(engine, loader, fn):
 
 
 def test_demo_full_interaction_chain(tmp_path):
-    """演示玩法包全链路：talk → trade → buy（effects 结算）→ eat（事件回血）。"""
+    """演示玩法包全链路：talk → trade → buy（命令式结算）→ eat（事件回精力）。"""
     install_demo_play(tmp_path / "plays")
 
     async def fn(engine: WorldEngine, loader: PlayLoader):
         await loader.load_all()
         merchant = [e for e in engine.list_entities() if e.kind == "merchant"][0]
         player = await engine.place_entity(
-            "player", "default", 0, 0, name="小明", attrs={"gold": 20}
+            "player",
+            "default",
+            0,
+            0,
+            name="小明",
+            components={"local:stat": {"gold": 20}},
         )
         # talk
         result = await engine.interact(player.id, merchant.id, "talk")
@@ -124,43 +125,44 @@ def test_demo_full_interaction_chain(tmp_path):
         # trade → list
         result = await engine.interact(player.id, merchant.id, "trade")
         assert result.ui is not None and result.ui.kind == "list"
-        # buy_apple：命令式结算（set_attrs 扣金 + kv 背包给苹果，D8 持有下沉）
+        # buy_apple：命令式结算（set_data 扣金 + kv 背包给苹果，D8 持有下沉）
         result = await engine.interact(player.id, merchant.id, "buy_apple")
         assert engine.kv_get("worlditor_play_demo", "bag") == {"apple": 1}
-        assert engine.get_attrs(player.id)["gold"] == 15
+        assert await engine.get_data(player.id, "gold", component=_STAT) == 15
         # 钱不够
-        await engine.set_attrs(player.id, {"gold": 1})
+        await engine.set_data(player.id, "gold", 1, component=_STAT)
         result = await engine.interact(player.id, merchant.id, "buy_apple")
         assert "钱不够" in result.text
         assert engine.kv_get("worlditor_play_demo", "bag") == {"apple": 1}
         # buy_megaphone：命令式 API
-        await engine.set_attrs(player.id, {"gold": 20})
+        await engine.set_data(player.id, "gold", 20, component=_STAT)
         result = await engine.interact(player.id, merchant.id, "buy_megaphone")
         assert engine.kv_get("worlditor_play_demo", "bag") == {
             "apple": 1,
             "megaphone": 1,
         }
-        assert engine.get_attrs(player.id)["gold"] == 10
-        # eat：use 交互 + on_item_used 回血（energy +1）
+        assert await engine.get_data(player.id, "gold", component=_STAT) == 10
+        # eat：物品标识经 args 传入（D37：无 item_id 槽位）+ 包自己发 item_used 事件回精力
         await engine.kv_set("worlditor_play_demo", "bag", {"apple": 2, "megaphone": 1})
-        result = await engine.interact(player.id, player.id, "eat", item_id="apple")
+        result = await engine.interact(
+            player.id, player.id, "eat", args={"item": "apple"}
+        )
         assert "咔嚓" in result.text
         assert engine.kv_get("worlditor_play_demo", "bag") == {
             "apple": 1,
             "megaphone": 1,
         }
-        assert engine.get_attrs(player.id).get("energy") == 1
+        assert await engine.get_data(player.id, "energy", component=_STAT) == 1
         # read：kv 读写（namespace 隔离）
         sign = [e for e in engine.list_entities() if e.kind == "sign"][0]
         result = await engine.interact(player.id, sign.id, "read")
         assert "小镇公告" in result.text
         assert engine.kv_get("worlditor_play_demo", "bulletin_reads") == 1
-        # open：门状态变更
+        # open：门状态变更（v2：组件写；D34：开门不再解除阻挡——全都不阻挡了）
         door = [e for e in engine.list_entities() if e.kind == "door"][0]
         result = await engine.interact(player.id, door.id, "open")
         assert "吱呀" in result.text
-        assert door.state.get("open") is True
-        assert door.state.get("block_move") is False
+        assert door.component("local:door") == {"open": True}
         result = await engine.interact(player.id, door.id, "open")
         assert "已经开着" in result.text
 
@@ -182,20 +184,25 @@ async def _play_scenario(tmp_path, fn, *, demo_world=False):
         await engine.terminate()
 
 
-def test_demo_door_blocks_and_enter_forest(tmp_path):
-    """演示玩法包门阻挡 + 进入迷雾提示（on_entity_enter 事件 → fog_enter 自定义事件）。"""
+def test_demo_door_does_not_block_and_enter_forest(tmp_path):
+    """D34：木门**不再阻挡**（阻挡机制整体移除）；开门只是数据写；进迷雾发 fog_enter。"""
+
     install_demo_play(tmp_path / "plays")
 
     async def fn(engine: WorldEngine, loader: PlayLoader):
         await loader.load_all()
         player = await engine.place_entity("player", "default", 2, 0, name="小明")
-        # 木门挡路（demo 注册 kind=door block_move）
-        with pytest.raises(WorldError, match="挡住了"):
-            await engine.move(player.id, "down")
-        # 开门后可通行；进入 (4,0) 迷雾 → on_entity_enter 触发 fog_enter 事件
         door = [e for e in engine.list_entities() if e.kind == "door"][0]
-        await engine.interact(player.id, door.id, "open")
-        await engine.move(player.id, "down")  # (3,0)
+        assert door.pos_key() == ("default", 3, 0)
+        assert door.component("local:door") == {"open": False}
+        # v2（D34）：所有实体都不阻挡——**没开门也能**直接走到门所在的地块
+        await engine.move(player.id, "down")
+        assert player.pos_key() == ("default", 3, 0)
+        # 开门 = 一次普通的组件写（玩法数据自管），不再解除任何阻挡
+        result = await engine.interact(player.id, door.id, "open")
+        assert "吱呀" in result.text
+        assert door.component("local:door") == {"open": True}
+        # 继续南行 → 进入 (4,0) 迷雾森林 → on_entity_enter 触发 fog_enter 自定义事件
         await engine.move(player.id, "down")  # (4,0) 迷雾森林
         assert player.pos_key() == ("default", 4, 0)
         logs = await engine.store.list_world_log(limit=20)

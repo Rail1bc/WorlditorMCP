@@ -59,7 +59,7 @@
               <span
                 v-if="cellBox.entities.length"
                 class="cell-badge"
-                :title="cellBox.entities.map((e) => e.name).join('、')"
+                :title="cellBox.entities.map((e) => entityName(e)).join('、')"
               >
                 {{ cellBox.entities.length }}
               </span>
@@ -74,6 +74,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import { entityName, entityPosition } from "../../entity.js";
 
 const props = defineProps({
   locations: { type: Array, default: () => [] },
@@ -129,7 +130,9 @@ const cells = computed(() => {
   for (const loc of props.locations) byPos[`${loc.row}:${loc.col}`] = loc;
   const ents = {};
   for (const e of props.entities) {
-    const key = `${e.row}:${e.col}`;
+    const p = entityPosition(e);
+    if (!p) continue; // D36：不在世界上的实体不上网格（它们没有格子可画）
+    const key = `${p.row}:${p.col}`;
     (ents[key] = ents[key] || []).push(e);
   }
   const out = [];

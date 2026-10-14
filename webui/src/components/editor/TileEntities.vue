@@ -7,7 +7,7 @@
     </h4>
     <p v-if="!entities.length" class="dim">这一格上还没有实体（用右侧「实体」视图放置）。</p>
     <div v-for="e in entities" :key="e.id" class="row">
-      <span class="name">{{ e.name }}</span>
+      <span class="name">{{ entityName(e) }}</span>
       <code class="dim">{{ e.kind }}</code>
       <span v-for="t in e.tags" :key="t" class="chip">{{ t }}</span>
       <span class="grow" />
@@ -18,6 +18,8 @@
 </template>
 
 <script setup>
+import { entityName } from "../../entity.js";
+
 defineProps({
   entities: { type: Array, default: () => [] },
 });

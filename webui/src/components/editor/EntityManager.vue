@@ -3,7 +3,7 @@
   <div class="entity-manager">
     <!-- 工具条 -->
     <div class="toolbar">
-      <input v-model="q" class="mini search" placeholder="搜索名称 / 类型 / 标签 / id…" />
+      <input v-model="q" class="mini search" placeholder="搜索名称 / 类型 / 标签 / 组件 / id…" />
       <select v-model="kindFilter" class="mini">
         <option value="">全部类型</option>
         <option v-for="k in kindOptions" :key="k" :value="k">{{ k }}</option>
@@ -42,19 +42,35 @@
           <option v-for="k in kinds" :key="k.tag" :value="k.tag">{{ k.label }}</option>
         </datalist>
         <input v-model="draft.name" class="mini" placeholder="名称（默认取类型文案）" />
-        <span class="dim">@</span>
-        <input v-model.number="draft.row" type="number" class="num" placeholder="行" />
-        <input v-model.number="draft.col" type="number" class="num" placeholder="列" />
-        <button class="btn" @click="create">放置</button>
+        <!-- D36：位置可有可无。只有"实体治理"视角（全局页）才允许造一个不进世界的
+             实体——地图编辑器里造了它不会出现在本图（`_map_detail` 只看在场实体），
+             用户会以为"创建失败"。 -->
+        <template v-if="allowAbsent">
+          <label class="mini-label" title="不勾 = 造一个不在世界上的实体（先造出来，之后再放）">
+            <input v-model="draft.place" type="checkbox" />
+            放进世界
+          </label>
+          <template v-if="draft.place">
+            <span class="dim">@</span>
+            <input v-model.number="draft.row" type="number" class="num" placeholder="行" />
+            <input v-model.number="draft.col" type="number" class="num" placeholder="列" />
+          </template>
+          <span v-else class="dim">不在世界上</span>
+        </template>
+        <template v-else>
+          <span class="dim">@</span>
+          <input v-model.number="draft.row" type="number" class="num" placeholder="行" />
+          <input v-model.number="draft.col" type="number" class="num" placeholder="列" />
+        </template>
+        <button class="btn" @click="create">{{ draft.place ? "放置" : "创建" }}</button>
       </div>
       <TagPicker v-model="draft.tags" :kinds="kinds" :preset="presetOf(draft.kind)" :kind="draft.kind" />
       <FieldForm
         :kinds="kinds"
         :kind="draft.kind"
         :tags="draft.tags"
-        :attrs="draft.attrs"
-        :state="draft.state"
-        @update="(v) => { draft.attrs = v.attrs; draft.state = v.state; }"
+        :components="draft.components"
+        @update="(v) => (draft.components = v.components)"
       />
     </div>
 
@@ -70,7 +86,7 @@
               <th>类型</th>
               <th>标签</th>
               <th>位置</th>
-              <th>能力</th>
+              <th>能力 / 组件</th>
               <th class="ops-col">操作</th>
             </tr>
           </thead>
@@ -82,8 +98,9 @@
               @click="select(e)"
             >
               <td>
-                <span class="name">{{ e.name }}</span>
-                <div v-if="e.desc" class="dim ell">{{ e.desc }}</div>
+                <!-- v2：名字在 core:info 组件里；entityName() 负责兜底到 id 前 8 位 -->
+                <span class="name">{{ entityName(e) }}</span>
+                <div v-if="entityDesc(e)" class="dim ell">{{ entityDesc(e) }}</div>
               </td>
               <td><code>{{ e.kind }}</code></td>
               <td>
@@ -91,9 +108,22 @@
                   {{ t }}
                 </span>
               </td>
-              <td class="dim">({{ e.row }}, {{ e.col }})</td>
+              <td class="dim">{{ positionLabel(e) }}</td>
               <td class="caps-cell">
-                <span v-if="e.capabilities?.block_move" class="chip warn">挡路</span>
+                <span
+                  v-if="componentNames(e).length"
+                  class="chip"
+                  :title="`组件（实体数据的唯一单位）：${componentNames(e).join('、')}`"
+                >
+                  ◇{{ componentNames(e).length }}
+                </span>
+                <span
+                  v-if="undeclaredComponents(e).length"
+                  class="chip bad"
+                  :title="`未声明组件：${undeclaredComponents(e).join('、')}（没有对应声明，不贡献能力）`"
+                >
+                  未声明 {{ undeclaredComponents(e).length }}
+                </span>
                 <span v-for="a in (e.capabilities?.interactions || []).slice(0, 2)" :key="a" class="chip">
                   {{ a }}
                 </span>
@@ -108,7 +138,16 @@
                 </span>
               </td>
               <td class="ops-col">
-                <button class="mini-btn" title="在地图上选中它所在的地块" @click.stop="emit('locate', e)">
+                <button
+                  class="mini-btn"
+                  :disabled="!hasPosition(e)"
+                  :title="
+                    hasPosition(e)
+                      ? '在地图上选中它所在的地块'
+                      : '它不在世界上（没有 core:position），没有地块可定位'
+                  "
+                  @click.stop="emit('locate', e)"
+                >
                   定位
                 </button>
                 <button class="mini-btn danger" @click.stop="emit('remove', e)">删除</button>
@@ -142,11 +181,18 @@
           </div>
           <label class="field">
             名称
-            <input v-model="edit.name" />
+            <input
+              v-model="edit.name"
+              :placeholder="`未设名字 → 显示 ${current.id.slice(0, 8)}（core:info.name）`"
+            />
           </label>
           <label class="field">
             描述
-            <textarea v-model="edit.desc" rows="2"></textarea>
+            <textarea
+              v-model="edit.desc"
+              rows="2"
+              placeholder="core:info.desc（可留空）"
+            ></textarea>
           </label>
           <label class="field">
             类型（基底）
@@ -160,14 +206,20 @@
             :kinds="kinds"
             :kind="edit.kind"
             :tags="edit.tags"
-            :attrs="edit.attrs"
-            :state="edit.state"
-            @update="(v) => { edit.attrs = v.attrs; edit.state = v.state; }"
+            :components="edit.components"
+            @update="(v) => (edit.components = v.components)"
           />
           <div v-if="current.capabilities" class="caps">
             <b>合并后的能力</b>
             <div>有效标签：{{ current.capabilities.active_tags.join("、") || "（无）" }}</div>
-            <div>挡路：{{ current.capabilities.block_move ? "是" : "否" }}</div>
+            <div
+              title="有声明可循的组件：内核保留（core:）与已知玩法包来源"
+            >
+              生效组件：{{ effectiveComponents(current).join("、") || "（无）" }}
+            </div>
+            <div v-if="undeclaredComponents(current).length" class="bad">
+              未声明组件：{{ undeclaredComponents(current).join("、") }}（没有对应声明，不贡献能力）
+            </div>
             <div>动作：{{ current.capabilities.interactions.join("、") || "（无）" }}</div>
             <div>字段：{{ current.capabilities.fields.map((f) => f.name).join("、") || "（无）" }}</div>
             <div v-if="current.capabilities.unknown_tags.length" class="bad">
@@ -180,7 +232,9 @@
           <div class="detail-ops">
             <button class="btn" @click="save">保存</button>
             <button class="mini-btn" @click="emit('save-template', current)">存为模板</button>
-            <button class="mini-btn" @click="emit('locate', current)">定位</button>
+            <button class="mini-btn" :disabled="!hasPosition(current)" @click="emit('locate', current)">
+              定位
+            </button>
             <button class="mini-btn danger" @click="emit('remove', current)">删除</button>
           </div>
         </template>
@@ -192,6 +246,16 @@
 
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
+import {
+  entityName,
+  entityPosition,
+  hasPosition,
+  positionLabel,
+  positionSortKey,
+  rawEntityDesc,
+  rawEntityName,
+  withoutPosition,
+} from "../../entity.js";
 import FieldForm from "./FieldForm.vue";
 import TagPicker from "./TagPicker.vue";
 
@@ -200,6 +264,8 @@ const props = defineProps({
   kinds: { type: Array, default: () => [] },
   entityTemplates: { type: Array, default: () => [] },
   tileFilter: { type: Object, default: null }, // {row, col} | null（从地图跳进来时带的）
+  // 是否允许"造一个不在世界上的实体"（D36）——只有实体治理视角（全局实体页）为真
+  allowAbsent: { type: Boolean, default: false },
 });
 const emit = defineEmits(["create", "update", "remove", "save-template", "locate"]);
 
@@ -219,12 +285,12 @@ const draft = reactive({
   kind: "",
   name: "",
   tags: [],
-  attrs: {},
-  state: {},
+  components: {}, // 组件名 → 数据（实体模型 v2：实体数据的唯一单位）
   row: 0,
   col: 0,
+  place: true, // D36：勾选 = 放进世界（发坐标）；不勾 = 造一个不在世界上的实体
 });
-const edit = reactive({ kind: "", name: "", desc: "", tags: [], attrs: {}, state: {} });
+const edit = reactive({ kind: "", name: "", desc: "", tags: [], components: {} });
 
 const kindOptions = computed(() => [...new Set(props.entities.map((e) => e.kind))].sort());
 const tagOptions = computed(
@@ -235,20 +301,31 @@ const filtered = computed(() => {
   const needle = q.value.trim().toLowerCase();
   const list = props.entities.filter((e) => {
     if (tileOnly.value && props.tileFilter) {
-      if (e.row !== props.tileFilter.row || e.col !== props.tileFilter.col) return false;
+      // v2：位置在 core:position 组件里；不在世界上的实体没有格子，直接排除
+      const p = entityPosition(e);
+      if (!p || p.row !== props.tileFilter.row || p.col !== props.tileFilter.col) return false;
     }
     if (kindFilter.value && e.kind !== kindFilter.value) return false;
     if (tagFilter.value && !(e.tags || []).includes(tagFilter.value)) return false;
     if (!needle) return true;
     return (
-      e.name.toLowerCase().includes(needle) ||
+      entityName(e).toLowerCase().includes(needle) ||
       e.kind.toLowerCase().includes(needle) ||
       e.id.toLowerCase().includes(needle) ||
-      (e.tags || []).some((t) => t.toLowerCase().includes(needle))
+      (e.tags || []).some((t) => t.toLowerCase().includes(needle)) ||
+      // v2：组件名也是可搜的（"哪些实体带 core:perception" 这类排查）
+      componentNames(e).some((n) => n.toLowerCase().includes(needle))
     );
   });
-  const byPos = (a, b) => a.row - b.row || a.col - b.col || a.name.localeCompare(b.name);
-  if (sort.value === "name") list.sort((a, b) => a.name.localeCompare(b.name));
+  // v2：名字在 core:info 组件里 → 一律经 entityName（带 id 兜底），别直接读 e.name
+  // v2：位置在 core:position 组件里 → 经 positionSortKey（不在世界上的排最后）
+  const byPos = (a, b) => {
+    const [ka, ra, ca] = positionSortKey(a);
+    const [kb, rb, cb] = positionSortKey(b);
+    return ka.localeCompare(kb) || ra - rb || ca - cb || entityName(a).localeCompare(entityName(b));
+  };
+  if (sort.value === "name")
+    list.sort((a, b) => entityName(a).localeCompare(entityName(b)));
   else if (sort.value === "kind") list.sort((a, b) => a.kind.localeCompare(b.kind) || byPos(a, b));
   else list.sort(byPos);
   return list;
@@ -284,14 +361,43 @@ function isIdentity(e) {
   return e.kind === "player";
 }
 
+// ---------- 组件诊断（D32/D33：组件 = 数据的唯一单位） ----------
+
+function componentNames(e) {
+  return Object.keys(e.components || {}).sort();
+}
+
+/** 「有声明」= core: 内核保留 / 来源是已知玩法包 / 名字本身就是注册过的标签。 */
+function componentOrigin(name) {
+  const source = String(name).split(":")[0];
+  if (source === "core") return "core";
+  if (props.kinds.some((k) => k.play_id && k.play_id === source)) return "play";
+  if (specOf(name)) return "declared";
+  return "undeclared";
+}
+
+function effectiveComponents(e) {
+  return componentNames(e).filter((n) => componentOrigin(n) !== "undeclared");
+}
+
+function undeclaredComponents(e) {
+  return componentNames(e).filter((n) => componentOrigin(n) === "undeclared");
+}
+
+/** 深拷贝组件字典：编辑面板不能直接改 props.entities 里的对象。 */
+function cloneComponents(components) {
+  return JSON.parse(JSON.stringify(components || {}));
+}
+
 function select(e) {
   selectedId.value = e.id;
   edit.kind = e.kind;
-  edit.name = e.name;
-  edit.desc = e.desc || "";
+  // v2：回填 **原始** 名字/描述（不填 id 兜底）——否则"打开一个没名字的实体再保存"
+  // 会把兜底串当成真名写进去。展示侧的兜底在 entityName()。
+  edit.name = rawEntityName(e);
+  edit.desc = rawEntityDesc(e);
   edit.tags = [...(e.tags || [])];
-  edit.attrs = { ...(e.attrs || {}) };
-  edit.state = { ...(e.state || {}) };
+  edit.components = cloneComponents(e.components);
 }
 
 function applyTemplate() {
@@ -301,8 +407,7 @@ function applyTemplate() {
   draft.kind = d.kind || draft.kind;
   draft.tags = [...(d.tags || [])];
   draft.name = d.name || "";
-  draft.attrs = { ...(d.attrs || {}) };
-  draft.state = { ...(d.state || {}) };
+  draft.components = cloneComponents(d.components);
 }
 
 function create() {
@@ -311,14 +416,19 @@ function create() {
     error.value = "类型不能为空（可自由输入一个玩法包声明的类型名）";
     return;
   }
+  // D36：位置三参数要么全给、要么全不给——"放进世界"不勾就一个坐标都不发
+  // （后端据此造一个不在世界上的实体）。半截坐标会被后端拒绝。
+  const pos = draft.place ? { row: Number(draft.row), col: Number(draft.col) } : {};
+  // 组件里若漏进一个 core:position（如从带位置的组件/模板抄来的），"不放进世界"会失效
+  const components = draft.place
+    ? cloneComponents(draft.components)
+    : withoutPosition(draft.components);
   emit("create", {
     kind: draft.kind.trim(),
     name: draft.name.trim() || undefined,
     tags: [...draft.tags],
-    attrs: draft.attrs,
-    state: draft.state,
-    row: Number(draft.row),
-    col: Number(draft.col),
+    components,
+    ...pos,
   });
   draft.name = "";
 }
@@ -326,12 +436,13 @@ function create() {
 function save() {
   if (!current.value) return;
   const patch = {
-    name: edit.name,
+    // v2：name/desc 走顶层键（后端折进 core:info）。name 为空就**不发**——
+    // 空的 name 在语义上是"没设名字 → 展示回落 id 前 8 位"，而后端要求 name 非空。
     desc: edit.desc,
     tags: [...edit.tags],
-    attrs: edit.attrs,
-    state: edit.state,
+    components: cloneComponents(edit.components), // PATCH 里 components 是整体替换
   };
+  if (edit.name.trim()) patch.name = edit.name.trim();
   if (!isIdentity(current.value)) patch.kind = edit.kind;
   emit("update", current.value, patch);
 }
@@ -469,10 +580,6 @@ tr.on td {
   border-radius: 999px;
   padding: 0 6px;
   color: var(--text-dim);
-}
-.chip.warn {
-  color: var(--accent);
-  border-color: var(--accent);
 }
 .chip.bad {
   color: var(--danger);

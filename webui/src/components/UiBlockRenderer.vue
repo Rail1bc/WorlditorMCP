@@ -43,7 +43,10 @@
       </button>
     </form>
 
-    <!-- character：角色卡（B1） -->
+    <!-- character：角色卡（B1）
+         注意：这里的 data.attrs 是 **UiBlock 协议**里的展示项（[{"label","value"}]，
+         由玩法包的视图/交互层拼好），跟实体的组件字典 components 没有关系——
+         实体模型 v2 取消的是实体上的 attrs/state 两个容器，不是这个块字段。 -->
     <div v-if="block.kind === 'character'" class="ui-character">
       <div class="avatar">{{ avatarEmoji }}</div>
       <dl class="ui-attrs">

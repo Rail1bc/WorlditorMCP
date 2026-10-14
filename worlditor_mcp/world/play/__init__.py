@@ -147,7 +147,7 @@ class PlayLoader:
             info = await self.load_one(path, context, builtin=builtin)
             if info is not None:
                 loaded.append(info)
-        await self.engine.flush_item_defs()
+        # v2 / D37：原 `flush_item_defs()`（把物品定义落库）已随物品移除
         await self._notify_plays_changed("load_all")
         return loaded
 
@@ -502,11 +502,13 @@ class PlayLoader:
 
         Args:
             info: 待卸载的包。
-            purge: 真卸载（删包目录）传 True——连**用户数据形态**的物品定义
-                （管理页维护的）与**标签归属记忆**（D26：query 的激活判定用）
-                一并删除；停用/整体卸载传 False，保留用户数据与归属记忆
-                （v0.5.2：原先不分青红皂白全删，停用 items 包会永久丢掉管理员
-                建的物品定义）。
+            purge: 真卸载（删包目录）传 True——连**标签归属记忆**（D26：query 的激活
+                判定用）一并删除；停用/整体卸载传 False，保留归属记忆。
+
+        v2 / D37：原先这里还要"先落库删除本包注册的物品定义"（避免"幽灵物品"残留，
+        并区分"用户数据"不删）——物品不在内核后，那段逻辑连同 ``keep_user_items``
+        参数一起删除；"用户数据 vs 包声明"现在由存储位置天然区分（本地实体模板落
+        `templates` 表、包注册模板在引擎内存表）。
         """
         teardown = getattr(info.module, "teardown", None)
         if callable(teardown):
@@ -518,12 +520,8 @@ class PlayLoader:
                     await result
             except Exception:  # noqa: BLE001
                 logger.exception("[worlditor] 玩法包 teardown 异常：%s", info.play_id)
-        # 先落库删除本包注册的物品定义（v0.2.0：避免"幽灵物品"残留）
-        for item_id in self.engine.item_defs_of_play(info.play_id, include_user=purge):
-            await self.engine.store.delete_item(item_id)
-        self.engine.clear_play_registrations(
-            info.play_id, keep_user_items=not purge, purge=purge
-        )
+        # v2 / D37：原"落库删除本包注册的物品定义"已移除（内核不再有物品定义）
+        self.engine.clear_play_registrations(info.play_id, purge=purge)
         self.engine.detach_play_api(info.play_id)
 
     # ---------- 整体卸载 ----------

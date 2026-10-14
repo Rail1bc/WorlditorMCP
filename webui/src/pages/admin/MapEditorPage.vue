@@ -151,6 +151,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../api";
 import { askConfirm } from "../../confirm";
 import { askDiff, diffFields } from "../../diff";
+import { entityDesc, entityName, entityPosition, withoutPosition } from "../../entity.js";
 import { scheduleToJson } from "../../textSchedule.js";
 import MapGrid from "../../components/editor/MapGrid.vue";
 import TilePanel from "../../components/editor/TilePanel.vue";
@@ -184,6 +185,9 @@ const entityManager = ref(null);
 // 从地图视图"管理本格实体"跳过来时带的过滤条件
 const entityTileFilter = ref(null);
 
+// 从地址栏带进来的选中格（全局实体页「定位」；见 syncFromHash / applyPendingCell）
+const pendingCell = ref(null);
+
 const locationCount = computed(() => locations.value.length);
 const locationTemplates = computed(() => templates.value.filter((t) => t.scope === "location"));
 const entityTemplates = computed(() => templates.value.filter((t) => t.scope === "entity"));
@@ -193,7 +197,11 @@ const primaryTile = computed(() => {
 });
 const primaryEntities = computed(() => {
   if (!primary.value) return [];
-  return entities.value.filter((e) => e.row === primary.value.row && e.col === primary.value.col);
+  // v2：位置在 core:position 组件里；不在世界上的实体不属于任何地块
+  return entities.value.filter((e) => {
+    const p = entityPosition(e);
+    return p && p.row === primary.value.row && p.col === primary.value.col;
+  });
 });
 const selectedWithTile = computed(
   () => selection.value.filter((key) => Boolean(tileAtKey(key))).length
@@ -210,6 +218,26 @@ function syncFromHash() {
   mapId.value = parts[2] || "";
   const next = parts[3] || "map";
   tab.value = TABS.some((t) => t.key === next) ? next : "map";
+  // "#/admin/maps/{map}/{tab}/{row}/{col}"：全局实体页的「定位」跳过来时带的选中格。
+  // 只认**数字**（半截/非数字一律当没带，落到出生点，而不是静默选中 (0,0)）。
+  const row = Number(parts[4]);
+  const col = Number(parts[5]);
+  pendingCell.value =
+    parts.length > 5 && Number.isInteger(row) && Number.isInteger(col)
+      ? { row, col }
+      : null;
+}
+
+/** 应用地址栏带来的选中格（压过"落到出生点"的兜底）。 */
+function applyPendingCell() {
+  if (!pendingCell.value) return;
+  const { row, col } = pendingCell.value;
+  primary.value = { row, col };
+  selection.value = [`${row}:${col}`];
+  entityTileFilter.value = { row, col };
+  tab.value = "map";
+  pendingCell.value = null;
+  setTimeout(() => grid.value?.fit(), 120);
 }
 
 // ---------- 加载 ----------
@@ -249,6 +277,8 @@ async function loadDetail() {
     primary.value = primary.value
       ? { ...primary.value }
       : { row: Number(meta.spawn_row) || 0, col: Number(meta.spawn_col) || 0 };
+    // 地址栏带了具体格子（从全局实体页「定位」过来）→ 以它为准
+    applyPendingCell();
   } catch (e) {
     error.value = e.message;
   }
@@ -274,9 +304,12 @@ function manageTileEntities() {
 }
 
 function locateEntity(entity) {
-  primary.value = { row: entity.row, col: entity.col };
-  selection.value = [`${entity.row}:${entity.col}`];
-  entityTileFilter.value = { row: entity.row, col: entity.col };
+  // v2：位置缺失（不在世界上）就没法在地图上定位——按钮在那边已经禁用，这里再兜一层
+  const p = entityPosition(entity);
+  if (!p) return;
+  primary.value = { row: p.row, col: p.col };
+  selection.value = [`${p.row}:${p.col}`];
+  entityTileFilter.value = { row: p.row, col: p.col };
   gotoTab("map");
 }
 
@@ -536,8 +569,11 @@ async function pasteClipboard() {
 // ---------- 实体 ----------
 
 async function createEntity(payload) {
+  // D36：payload 带坐标 = 放进世界（要 map_id）；不带 = 不进世界——此时**一个坐标都
+  // 不能发**（发了 map_id 而后端收不到 row/col 会被判成"半截位置"直接报错）
+  const pos = payload.row === undefined ? {} : { map_id: mapId.value };
   try {
-    await apiPost("/admin/entities", { map_id: mapId.value, ...payload });
+    await apiPost("/admin/entities", { ...pos, ...payload });
     await loadDetail();
   } catch (e) {
     error.value = e.message;
@@ -545,27 +581,44 @@ async function createEntity(payload) {
   }
 }
 
+/** 组件字典就地拍平成 `components.<组件名>` 键：差异预览按组件逐个对比，不整袋糊成一行。 */
+function componentRows(components) {
+  const rows = {};
+  for (const [name, data] of Object.entries(components || {})) {
+    rows[`components.${name}`] = data;
+  }
+  return rows;
+}
+
 async function updateEntity(entity, patch) {
+  // PATCH 里 components 是**整体替换**（未列出的组件不变）——所以先展开成每个组件
+  // 一行再 diff：删掉一个组件会显示成 "组件 x：{…} →（无）"
+  const afterComponents = patch.components ?? entity.components ?? {};
   const before = {
-    name: entity.name,
-    desc: entity.desc,
+    // v2：名字/描述在 core:info 组件里 → 展示用 entityName（带 id 兜底）
+    name: entityName(entity),
+    desc: entityDesc(entity),
     tags: (entity.tags || []).join("、"),
-    attrs: entity.attrs,
-    state: entity.state,
+    ...componentRows(entity.components),
   };
-  const after = { ...before, ...patch, tags: (patch.tags || []).join("、") };
+  const after = {
+    ...before,
+    ...patch,
+    tags: (patch.tags || []).join("、"),
+    ...componentRows(afterComponents),
+  };
   if (!("kind" in patch) || patch.kind === entity.kind) delete after.kind;
+  delete after.components; // 已展开成每个组件一行
+  const labels = { name: "名称", desc: "描述", tags: "标签", kind: "类型" };
+  for (const key of Object.keys(before)) {
+    if (key.startsWith("components.")) {
+      labels[key] = `组件 ${key.slice("components.".length)}`;
+    }
+  }
   const ok = await askDiff({
-    title: `保存实体「${entity.name}」`,
-    detail: "attrs/state/tags 是整体替换（旧值→新值如下）",
-    changes: diffFields(before, after, {
-      name: "名称",
-      desc: "描述",
-      tags: "标签",
-      attrs: "attrs（玩法数据）",
-      state: "state（动态状态）",
-      kind: "类型",
-    }),
+    title: `保存实体「${entityName(entity)}」`,
+    detail: "tags / components 都是整体替换；components 按组件逐个对比（未列出的组件不变）",
+    changes: diffFields(before, after, labels),
   });
   if (!ok) return;
   try {
@@ -580,7 +633,7 @@ async function removeEntity(entity) {
   const ok = await askConfirm({
     title: "删除实体",
     danger: true,
-    text: `删除实体「${entity.name}」（${entity.kind}）？`,
+    text: `删除实体「${entityName(entity)}」（${entity.kind}）？`,
     detail: (entity.tags || []).length ? `标签：${entity.tags.join("、")}` : "",
   });
   if (!ok) return;
@@ -611,14 +664,18 @@ async function saveTemplate(payload) {
 function saveEntityTemplate(entity) {
   return saveTemplate({
     id: `entity_${entity.kind}_${Date.now().toString(36)}`,
-    name: `${entity.name}（模板）`,
+    name: `${entityName(entity)}（模板）`,
     data: {
       kind: entity.kind,
       tags: [...(entity.tags || [])],
-      name: entity.name,
-      desc: entity.desc || "",
-      attrs: { ...(entity.attrs || {}) },
-      state: { ...(entity.state || {}) },
+      // 模板负载里 name/desc 是**输入便利**（套用时后端折进 core:info）；
+      // 这里取实体的展示名，模板名才好认
+      name: entityName(entity),
+      desc: entityDesc(entity),
+      // 实体模板负载 = {kind, tags[], name, desc, components}（v2：原 attrs/state）
+      // **位置不进模板**：模板是"这东西是什么"，不是"它在哪"——带上位置后套用处会
+      // 静默把实体搬回老地方（D36：位置归"放进世界"这一步）
+      components: withoutPosition(entity.components),
     },
   });
 }
@@ -714,7 +771,10 @@ onMounted(async () => {
       selection.value = [];
       entityTileFilter.value = null;
       if (mapId.value) await loadDetail();
+      return;
     }
+    // 同一张图内的"定位"（全局实体页 → 某格）：只换选中格，不重载
+    applyPendingCell();
   });
   if (mapId.value) {
     await loadDetail();

@@ -787,19 +787,68 @@ async def _template_delete(request: Request) -> Response:
     return _ok()
 
 
+async def _entities_list(request: Request) -> Response:
+    """全部实体（**含不在世界上的**，D36 / v2 1d）。
+
+    与 ``GET /admin/maps/{map_id}`` 的区别：那条是**地图**视角（受 map_id / row /
+    col 三列裁剪，天然只看得到在场实体）；这条是**实体治理**视角——v2 起实体可以
+    合法地不属于任何地块（玩家下线、物品在容器里、尚未投放），那些实体在地图视角里
+    **一个都看不见**，没有一个入口就等于"内核造得出、编辑器管不着"。
+
+    ``?world_id=`` 过滤（按 ``core:position`` 推出的世界；**不在世界上的实体不属于
+    任何世界**，带该参数时会被滤掉）；``?absent=1`` 只列不在世界上的、
+    ``?absent=0`` 只列在世界上（缺省 = 都要）。
+    """
+    _require_admin(request)
+    engine = _engine(request)
+    entities = engine.list_entities(include_absent=True)
+    world_id = request.query_params.get("world_id")
+    absent = request.query_params.get("absent")
+    if world_id:
+        entities = [e for e in entities if engine.entity_world(e.id) == world_id]
+    if absent in ("0", "1"):
+        want = absent == "1"
+        entities = [e for e in entities if (not e.has_position()) is want]
+    return JSONResponse(
+        {
+            # 能力带上（与地图详情同一套）：编辑器要解释"为什么没效果"，
+            # 不能只给一个裸组件字典。不在世界上的实体按**默认世界**算激活
+            # （`_world_for_activation`：没有归属 ≠ 没有规则）。
+            "entities": [
+                {**e.to_dict(), "capabilities": engine.capabilities(e)}
+                for e in entities
+            ],
+            "total": len(entities),
+            "absent": sum(1 for e in entities if not e.has_position()),
+        }
+    )
+
+
 async def _entity_create(request: Request) -> Response:
+    """新建实体：**给了坐标 = 放进世界；一个坐标都不给 = 不进世界**（D36）。
+
+    ``map_id`` / ``row`` / ``col`` **要么全给、要么全不给**——半截会被兜底成
+    `""` / `0`，把"忘了给"变成静默出现在 (0,0) 的实体（内核侧同一规则见
+    ``_resolve_new_position``）。
+    """
     _require_admin(request)
     data = await _json_body(request)
+    raw = (data.get("map_id"), data.get("row"), data.get("col"))
+    pos: dict[str, Any] = {}
+    if any(v is not None for v in raw):
+        # ⚠️ 不能走 `_as_int` 的 None→0 缺省：那会把"没给 col"变成 col=0。
+        pos = {
+            "map_id": str(raw[0] or ""),
+            "row": None if raw[1] is None else _as_int(raw[1], "row"),
+            "col": None if raw[2] is None else _as_int(raw[2], "col"),
+        }
     try:
         entity = await _engine(request).place_entity(
             str(data.get("kind") or ""),
-            str(data.get("map_id") or ""),
-            _as_int(data.get("row"), "row"),
-            _as_int(data.get("col"), "col"),
+            **pos,
             name=data.get("name"),
             desc=str(data.get("desc") or ""),
-            attrs=data.get("attrs"),
-            state=data.get("state"),
+            components=data.get("components"),
             tags=data.get("tags"),
         )
     except WorldError as e:
@@ -808,11 +857,11 @@ async def _entity_create(request: Request) -> Response:
 
 
 async def _entity_update(request: Request) -> Response:
-    """实体编辑（PATCH；未提供的字段不变；attrs/state/tags 整体替换）。"""
+    """实体编辑（PATCH；未提供的字段不变；components/tags 整体替换）。"""
     _require_admin(request)
     data = await _json_body(request)
     want: dict[str, Any] = {}
-    for key in ("name", "desc", "attrs", "state", "tags", "kind"):
+    for key in ("name", "desc", "components", "tags", "kind"):
         if key in data:
             want[key] = data[key]
     try:
@@ -917,6 +966,7 @@ def build_admin_app(
             _template_delete,
             methods=["DELETE"],
         ),
+        Route("/admin/entities", _entities_list),
         Route("/admin/entities", _entity_create, methods=["POST"]),
         Route("/admin/entities/{entity_id}", _entity_update, methods=["PATCH"]),
         Route(

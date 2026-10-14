@@ -3,9 +3,9 @@
 demo_play 已按 D3 删除（领域包即 SDK 模板）；玩法包机制测试需要一个
 行为完整的参考玩法包，此处以字符串常量写入 tmp 目录，覆盖：
 kind（merchant/sign/door）、交互（talk/trade/read/open/eat/bye/buy_*）、
-事件（on_tick / on_entity_enter / on_item_used / on_world_edited）、
-物品定义（apple/megaphone）、**视图组件**（view.js）、**部件聚合**
-（world_whoami 产出 character 块 + ui_hook 展开）、管理页（shop）、
+事件（on_tick / on_entity_enter / on_world_edited + 玩法包自定义 item_used）、
+**组件声明**（apple/megaphone 两条标签，D37：原物品定义）、**视图组件**（view.js）、
+**部件聚合**（world_whoami 产出 character 块 + ui_hook 展开）、管理页（shop）、
 kv 读写、出生礼包。
 
 组件文件（web/*.js）不是字符串常量，而是从 ``tests/fixtures/plays/`` 下
@@ -43,7 +43,6 @@ from worlditor_mcp.world.play.api import WorlditorPlayAPI
 from worlditor_mcp.world import (
     InteractionRequest,
     InteractionResult,
-    ItemDef,
     MenuButton,
     UiBlock,
 )
@@ -52,8 +51,25 @@ APPLE_ITEM = "apple"
 MEGAPHONE_ITEM = "megaphone"
 FOREST_ROW = 4  # 迷雾森林起始行（row >= 4 视为迷雾区域）
 
-_GOLD = "gold"  # 玩家 attrs 中的金币键（演示 attrs 自管玩法数据）
+_GOLD = "gold"  # 玩家 stat 组件里的金币键（演示玩法数据自管）
 _BAG_KEY = "bag"  # play_data 中的背包（D8：持有下沉，演示 kv 自管持有）
+# v2（D32）：玩法数据按**组件**分组——组件名 = source:name 信封；
+# 玩法包不得写 core:（D33），所以这里用 local: 命名空间。
+_STAT = "local:stat"  # 玩家玩法数据组件（金币 / 精力）
+_SIGN = "local:sign"  # 告示牌动态数据
+_DOOR = "local:door"  # 木门状态
+
+
+def _card_rows(components: dict) -> list[dict]:
+    """组件 → 角色卡行（label = 「组件名 · 字段名」；UiBlock character 的数据源）。"""
+    rows: list[dict] = []
+    for comp in sorted(components or {}):
+        data = components.get(comp)
+        if not isinstance(data, dict):
+            continue
+        for key, value in data.items():
+            rows.append({"label": f"{comp} · {key}", "value": value})
+    return rows
 
 
 def _bag(api: WorlditorPlayAPI) -> dict:
@@ -86,7 +102,7 @@ def setup(api: WorlditorPlayAPI, context) -> None:
     """玩法包入口（由内核 PlayLoader 调用）。"""
     api.register_entity_kind("merchant", interactions=("talk", "trade"), label="商贩")
     api.register_entity_kind("sign", interactions=("read",), label="告示牌")
-    api.register_entity_kind("door", block_move=True, interactions=("open",), label="门")
+    api.register_entity_kind("door", interactions=("open",), label="门")
     api.register_interaction("talk", _talk, label="打招呼")
     api.register_interaction("trade", _trade, label="看看货")
     api.register_interaction("buy_apple", _buy_apple, label="买苹果（5金）")
@@ -97,19 +113,33 @@ def setup(api: WorlditorPlayAPI, context) -> None:
     api.register_interaction("eat", _eat, label="吃")
     api.register_world_event("on_tick", _on_tick, interval=5)
     api.register_world_event("on_entity_enter", _on_entity_enter)
-    api.register_world_event("on_item_used", _on_item_used)
     api.register_world_event("on_world_edited", _on_world_edited)
     api.register_tool(
         "world_whoami",
         _whoami,
         description="查看你的当前身份",
     )
-    # 物品定义（D13：定义归注册它的包）：货单引用的两个货品在此登记
-    api.register_item_def(
-        ItemDef(id=APPLE_ITEM, name="苹果", desc="红彤彤的苹果。", stackable=True)
+    # 物品**类型** → 组件声明（D37）：货单引用的两个货品各登记一条标签——标签名
+    # 就是「包自己的物品标识」，字段 schema 承接原 ItemDef 的字段化定义；
+    # 原 ItemDef.use_action 由 interaction 名承担（见上面的 eat 交互）。
+    api.register_entity_tag(
+        APPLE_ITEM,
+        label="苹果",
+        fields=[{"name": "heal", "label": "回复", "type": "int", "default": 3}],
     )
-    api.register_item_def(
-        ItemDef(id=MEGAPHONE_ITEM, name="喇叭", desc="全图广播道具。", stackable=True)
+    api.register_entity_tag(
+        MEGAPHONE_ITEM,
+        label="喇叭",
+        fields=[{"name": "volume", "label": "音量", "type": "int", "default": 10}],
+    )
+    # 实体模板的**包声明**（D22）：随包卸载/停用消失，重新启用即恢复。
+    # 它同时是 D37 的示范——"管理员手工维护的物品定义"原来靠 user_data 标记区分，
+    # 现在这条"包声明 vs 本地数据"的区分由**存储位置**承担（本地模板落 templates 表，
+    # 见管理端 save_template）。测试用它验"停用只清代码声明、不碰本地数据"。
+    api.register_entity_template(
+        "pkg_npc",
+        "包声明 NPC",
+        {"kind": "npc", "name": "路人", "components": {"local:stat": {"hp": 10}}},
     )
     # 视图组件（G3/D7）：参考实现 = tests/fixtures/plays/.../web/view.js
     api.register_view(
@@ -171,7 +201,7 @@ async def _whoami(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
     card = UiBlock(
         kind="character",
         title=entity.name if entity else "（无身份）",
-        data={"attrs": dict(entity.attrs) if entity else {}},
+        data={"attrs": _card_rows(dict(entity.components)) if entity else []},
     )
     card = await api.apply_ui_hooks(card)
     return {
@@ -222,13 +252,13 @@ async def _buy_apple(
     """买苹果：命令式 API 写法（D12：无 effects，handler 直接调原语）。"""
     if req.target is None or req.target.kind != "merchant":
         return InteractionResult(text="这里没有卖苹果的。")
-    gold = api.get_attrs(req.entity_id).get(_GOLD, 0)
+    gold = await api.get_data(req.entity_id, _GOLD, component=_STAT) or 0
     price = _SHOP.get(APPLE_ITEM, {}).get("price", 5)
     if gold < price:
         return InteractionResult(
             text=f"钱不够……一个苹果要 {price} 金（你只有 {gold} 金）。"
         )
-    await api.set_attrs(req.entity_id, {_GOLD: gold - price})
+    await api.set_data(req.entity_id, _GOLD, gold - price, component=_STAT)
     await _bag_add(api, APPLE_ITEM, 1)
     return InteractionResult(
         text=f"「给你，新鲜摘的苹果！」（花费 {price} 金）"
@@ -241,13 +271,13 @@ async def _buy_megaphone(
     """买喇叭：命令式 API 写法（A1：两种写法演示）。"""
     if req.target is None or req.target.kind != "merchant":
         return InteractionResult(text="这里没有卖喇叭的。")
-    gold = api.get_attrs(req.entity_id).get(_GOLD, 0)
+    gold = await api.get_data(req.entity_id, _GOLD, component=_STAT) or 0
     price = _SHOP.get(MEGAPHONE_ITEM, {}).get("price", 10)
     if gold < price:
         return InteractionResult(
             text=f"钱不够……一个喇叭要 {price} 金（你只有 {gold} 金）。"
         )
-    await api.set_attrs(req.entity_id, {_GOLD: gold - price})
+    await api.set_data(req.entity_id, _GOLD, gold - price, component=_STAT)
     await _bag_add(api, MEGAPHONE_ITEM, 1)
     return InteractionResult(
         text=f"「喇叭拿好，喊一嗓子全镇都能听见！」（花费 {price} 金）"
@@ -270,23 +300,42 @@ async def _read(api: WorlditorPlayAPI, req: InteractionRequest) -> InteractionRe
 
 
 async def _open(api: WorlditorPlayAPI, req: InteractionRequest) -> InteractionResult:
-    """开门：演示 state 变更（门开 → block_move 解除）。"""
+    """开门：演示组件写入（v2 / D34：**所有实体都不阻挡**，开门只是写数据）。
+
+    原实现靠 ``set_state(block_move=False)`` 解除阻挡——D33 起玩法包不得写
+    ``core:``，且 D34 已整体移除阻挡机制，所以这里退化为一次普通的组件写。
+    """
     if req.target is None or req.target.kind != "door":
         return InteractionResult(text="这不是一扇能开的门。")
-    if req.target.state.get("open"):
+    if req.target.component(_DOOR).get("open"):
         return InteractionResult(text="木门已经开着呢。")
-    await api.set_state(req.target.id, {"open": True, "block_move": False})
+    await api.set_component(req.target.id, _DOOR, {"open": True})
     return InteractionResult(text="吱呀——木门缓缓打开，迷雾森林的凉意扑面而来。")
 
 
 async def _eat(api: WorlditorPlayAPI, req: InteractionRequest) -> InteractionResult:
-    """吃苹果：物品 use 交互（req.item_id 由 use 流程注入）。"""
-    item_id = req.item_id or APPLE_ITEM
+    """吃苹果：interaction 名即「用途」（D37：原 ItemDef.use_action → interaction）。
+
+    物品标识由玩法包自己从 ``args`` 里取（``interact(..., args={"item": "apple"})``，
+    内核不解释 args 的内容），恢复精力也在本 handler 内完成——D37 之后内核不再代发
+    ``on_item_used``，「用了一个东西」改由本包 ``emit`` 自定义事件（事件名开放，D1/G8）。
+    """
+    item_id = str((req.args or {}).get("item") or APPLE_ITEM)
     bag = _bag(api)
     if bag.get(item_id, 0) < 1:
         return InteractionResult(text="你身上没有苹果。")
     bag[item_id] -= 1
     await api.kv_set(_BAG_KEY, bag)
+    # 原 _on_item_used handler 的逻辑并入本处（D37：内核事件已删除）
+    if item_id == APPLE_ITEM:
+        energy = (await api.get_data(req.entity_id, "energy", component=_STAT) or 0) + 1
+        await api.set_data(req.entity_id, "energy", energy, component=_STAT)
+    # 玩法包自定义事件：演示 D37 的替代路径（log=True 落世界日志，可被别的包订阅）
+    await api.emit(
+        "item_used",
+        {"entity_id": req.entity_id, "item": item_id},
+        log=True,
+    )
     return InteractionResult(text="咔嚓——又脆又甜！感觉精力恢复了一些。")
 
 
@@ -294,7 +343,9 @@ async def _on_tick(api: WorlditorPlayAPI, dt: float) -> None:
     """演示 tick 状态机：告示牌定期更新"张贴时间"。"""
     for entity in api.list_entities():
         if entity.kind == "sign":
-            await api.set_state(entity.id, {"last_updated": time.strftime("%H:%M:%S")})
+            await api.set_data(
+                entity.id, "last_updated", time.strftime("%H:%M:%S"), component=_SIGN
+            )
 
 
 async def _on_entity_enter(
@@ -309,15 +360,6 @@ async def _on_entity_enter(
         )
 
 
-async def _on_item_used(
-    api: WorlditorPlayAPI, entity, item_id: str, args: dict, result
-) -> None:
-    """演示事件响应：吃苹果恢复精力（attrs 玩法数据自管；D8：无 count）。"""
-    if item_id == APPLE_ITEM and entity is not None:
-        energy = api.get_attrs(entity.id).get("energy", 0) + 1
-        await api.set_attrs(entity.id, {"energy": energy})
-
-
 async def _on_world_edited(api: WorlditorPlayAPI, what) -> None:
     """演示编辑事件响应：新玩家实体出生礼包（初始金币）。"""
     if isinstance(what, dict) and what.get("op") == "place_entity":
@@ -325,9 +367,9 @@ async def _on_world_edited(api: WorlditorPlayAPI, what) -> None:
         if (
             entity is not None
             and entity.kind == "player"
-            and "gold" not in entity.attrs
+            and _GOLD not in entity.component(_STAT)
         ):
-            await api.set_attrs(entity.id, {"gold": 100})
+            await api.set_data(entity.id, _GOLD, 100, component=_STAT)
 
 
 def teardown(api: WorlditorPlayAPI) -> None:

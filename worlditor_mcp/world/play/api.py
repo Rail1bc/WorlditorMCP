@@ -10,7 +10,8 @@ from __future__ import annotations
 from typing import Any
 
 from ..engine import WorldEngine
-from ..model import ItemDef
+from ..errors import WorldError
+from ..model import is_core_component
 
 
 class WorlditorPlayAPI:
@@ -20,52 +21,24 @@ class WorlditorPlayAPI:
         self._engine = engine
         self.play_id = play_id
 
+    # ---------- 物品：已移除（v2 / D37） ----------
+    #
+    # 原 `register_item_def` / `save_item_def` / `add_item_fields` / `get_item_def` /
+    # `list_item_defs` / `delete_item_def` / `flush_item_defs` 全部删除——**物品不在内核**：
+    #   - 物品**类型** → 用组件声明表达（`register_entity_tag`：名字 + 字段 schema + 归属）
+    #   - 物品**实例** → 实体 + 组件
+    #   - `use_action` → interaction 名（本 API 的 `register_interaction`）
+    #   - 管理员手工维护的定义 → **实体模板**（`register_entity_template` / `save_template`）
+    #   - 原 `item_id` 交互槽位 → `interact(..., args={"item": ...})`
+    #   - 原 `on_item_used` 事件 → 本包 `emit("item_used", {...})`（任意事件名皆可）
+    # 见 DESIGN §12.8 / D37。
+
     # ---------- 注册 ----------
-
-    def register_item_def(
-        self, item: ItemDef, *, fields: list[dict] | None = None
-    ) -> None:
-        """注册物品定义（持久化；同 id 覆盖更新）；fields 为字段 schema（D9）。
-
-        **包代码声明**用这个——包停用/整体卸载时会随之清理（重新启用即恢复）。
-        管理页让管理员增删改的定义属于**用户数据**，用 ``save_item_def``。
-        """
-        if fields:
-            item.fields = list(item.fields or []) + list(fields)
-        self._engine.register_item_def(item, play_id=self.play_id)
-
-    def save_item_def(self, item: ItemDef, *, fields: list[dict] | None = None) -> None:
-        """保存**用户数据**形态的物品定义（管理页用；v0.5.2）。
-
-        与 ``register_item_def`` 的区别只在生命周期：标了用户数据的定义，
-        包停用/整体卸载时**不会被删**（否则管理员手工维护的物品会在停一下包
-        之后永久消失）；真卸载（删包目录）仍会一并清掉。
-        """
-        if fields:
-            item.fields = list(item.fields or []) + list(fields)
-        self._engine.register_item_def(item, play_id=self.play_id, user_data=True)
-
-    def add_item_fields(self, item_id: str, fields: list[dict]) -> None:
-        """向已有物品类型追加字段（D9）。"""
-        self._engine.add_item_fields(item_id, fields, play_id=self.play_id)
-
-    def get_item_def(self, item_id: str) -> ItemDef | None:
-        """物品定义（内核注册表只读；未注册返回 None）。"""
-        return self._engine.store.items.get(item_id)
-
-    def list_item_defs(self) -> list[dict]:
-        """全部物品定义（dict 列表，UI/工具展示用）。"""
-        return [d.to_dict() for d in self._engine.store.items.values()]
-
-    async def delete_item_def(self, item_id: str) -> None:
-        """删除物品定义（管理页；锁内 + on_world_edited 广播）。"""
-        await self._engine.delete_item_def(item_id)
 
     def register_entity_kind(
         self,
         kind: str,
         *,
-        block_move: bool = False,
         interactions: tuple[str, ...] = (),
         label: str | None = None,
         fields: list[dict] | None = None,
@@ -83,7 +56,6 @@ class WorlditorPlayAPI:
         """
         self._engine.register_entity_kind(
             kind,
-            block_move=block_move,
             interactions=interactions,
             label=label or "",
             play_id=self.play_id,
@@ -98,7 +70,6 @@ class WorlditorPlayAPI:
         *,
         tags: tuple[str, ...] = (),
         label: str | None = None,
-        block_move: bool = False,
         interactions: tuple[str, ...] = (),
         fields: list[dict] | None = None,
         categories: tuple[str, ...] = (),
@@ -106,7 +77,6 @@ class WorlditorPlayAPI:
         """注册"类型 = 标签预设"（D18；``register_entity_kind`` 的同义名，更好读）。"""
         self.register_entity_kind(
             kind,
-            block_move=block_move,
             interactions=interactions,
             label=label,
             fields=fields,
@@ -119,7 +89,6 @@ class WorlditorPlayAPI:
         tag: str,
         *,
         label: str | None = None,
-        block_move: bool = False,
         interactions: tuple[str, ...] = (),
         fields: list[dict] | None = None,
         categories: tuple[str, ...] = (),
@@ -132,7 +101,6 @@ class WorlditorPlayAPI:
         self._engine.register_entity_tag(
             tag,
             label=label or "",
-            block_move=block_move,
             interactions=interactions,
             play_id=self.play_id,
             fields=fields,
@@ -243,7 +211,10 @@ class WorlditorPlayAPI:
 
         ```python
         for e in api.query_entities(tags=["poison"], world_id=world_id):
-            await api.set_data(e.id, "hp", api.get_attrs(e.id).get("hp", 0) - 1)
+            hp = await api.get_data(e.id, "hp", component="worlditor_play_bestiary:stat") or 0
+            await api.set_data(
+                e.id, "hp", hp - 1, component="worlditor_play_bestiary:stat"
+            )
         ```
 
         语义要点（详见 ``WorldEngine.query_entities``）：
@@ -339,33 +310,97 @@ class WorlditorPlayAPI:
         """
         return await self._engine.move(entity_id, direction, path=path)
 
-    async def set_attrs(self, entity_id: str, patch: dict) -> None:
-        await self._engine.set_attrs(entity_id, patch)
+    # ---------- 组件（D32 / D33：实体唯一的数据单位） ----------
+    #
+    # **玩法包不得写 ``core:`` 命名空间**（内核保留，D33）——在这里就拒绝，
+    # 不依赖包自觉；读（get_component / list_components）不受限。
 
-    def get_attrs(self, entity_id: str) -> dict:
-        return self._engine.get_attrs(entity_id)
+    def _guard_component(self, component: str) -> str:
+        if is_core_component(component):
+            raise WorldError(
+                f"core: 是内核保留的组件命名空间，玩法包不得写入（{component}）"
+            )
+        return component
 
-    # ---------- 字段原语（D9：set_data/get_data，可被覆盖/禁用 D11） ----------
+    def list_components(self, entity_id: str) -> list[str]:
+        """该实体的组件名列表（只读）。"""
+        return self._engine.list_components(entity_id)
 
-    async def set_data(self, entity_id: str, name: str, value: Any) -> None:
-        """字段写（合并写；走原语分派，可被其他包 override/disable）。"""
-        await self._engine.set_data(entity_id, name, value)
+    def get_component(self, entity_id: str, component: str) -> dict | None:
+        """整块读组件数据（不存在返回 ``None``；只读）。"""
+        return self._engine.get_component(entity_id, component)
 
-    async def get_data(self, entity_id: str, name: str | None = None) -> Any:
-        """字段读（单字段或全量；走原语分派）。"""
-        return await self._engine.get_data(entity_id, name)
+    async def add_component(
+        self, entity_id: str, component: str, data: dict | None = None
+    ) -> None:
+        """整块新建组件（**已存在 → 报错**；要整体替换用 ``set_component``）。"""
+        await self._engine.add_component(
+            entity_id, self._guard_component(component), data
+        )
 
-    async def remove_data(self, entity_id: str, name: str) -> bool:
-        """删除一个玩法字段（走原语分派，可被 override/过滤器拦；D23 的另一半）。
+    async def set_component(
+        self, entity_id: str, component: str, data: dict | None = None
+    ) -> None:
+        """整块写组件（建或**整体替换**）。"""
+        await self._engine.set_component(
+            entity_id, self._guard_component(component), data
+        )
+
+    async def remove_component(self, entity_id: str, component: str) -> bool:
+        """整块删组件（幂等：不存在 → False）。"""
+        return await self._engine.remove_component(
+            entity_id, self._guard_component(component)
+        )
+
+    async def set_perception(self, entity_id: str, patch: dict) -> None:
+        """设置感知（``invisible`` / ``see_invisible``，布尔）——**写 ``core:perception`` 的唯一入口**。
+
+        玩法包不能直写 ``core:``（D33），但"让一个实体隐身"本来就是玩法包的正当能力，
+        所以内核给这个**窄口受控入口**（与 D20"NPC 升格必须经身份服务"同一做法：
+        规则不放宽，能力不丢失）。语义见 G1 / G12：普通 viewer 看不到 ``invisible``
+        实体；``see_invisible`` 为真的 viewer 能看到。
+        """
+        await self._engine.set_perception(entity_id, patch)
+
+    async def clear_position(self, entity_id: str) -> None:
+        """让实体**离开世界**（下线 / 收进容器 / 传送中间态）——**写 ``core:position`` 的受控入口**。
+
+        与 `remove_entity` 的区别：**实体还在**（组件、标签、账户绑定全保留），只是不在
+        任何地块上。再放回来用 `move_entity`（它接受不在场的实体）。
+
+        同样的理由（D33 让玩法包写不了 ``core:``）——而"下线"正是玩法包最需要的那种状态，
+        所以内核给窄口受控入口而不是让能力消失。幂等。
+        """
+        await self._engine.clear_position(entity_id)
+
+    # ---------- 字段原语（D9 的开放模型保留：字段 = **组件内**的一个键） ----------
+
+    async def set_data(
+        self, entity_id: str, name: str, value: Any, *, component: str
+    ) -> None:
+        """字段写（走原语分派，可被其他包 override/disable；``core:`` 除外）。
+
+        ``component`` 必填——v2 起没有扁平命名空间；写在未建组件上会隐式建出。
+        """
+        await self._engine.set_data(
+            entity_id, name, value, component=self._guard_component(component)
+        )
+
+    async def get_data(
+        self, entity_id: str, name: str | None = None, *, component: str
+    ) -> Any:
+        """字段读（``name=None`` 返回整块组件数据；走原语分派）。"""
+        return await self._engine.get_data(entity_id, name, component=component)
+
+    async def remove_data(self, entity_id: str, name: str, *, component: str) -> bool:
+        """删除组件内的一个字段（走原语分派，可被 override/过滤器拦；D23 的另一半）。
 
         返回是否真的删掉了（字段不存在 → False，幂等）。删掉整个字段比
         ``set_data(name, None)`` 干净：``None`` 仍是"有这个字段、值为空"。
         """
-        return await self._engine.remove_data(entity_id, name)
-
-    async def remove_state(self, entity_id: str, name: str) -> bool:
-        """删除一个 state 字段（不经分派，与 ``set_state`` 对称）。"""
-        return await self._engine.remove_state(entity_id, name)
+        return await self._engine.remove_data(
+            entity_id, name, component=self._guard_component(component)
+        )
 
     # ---------- 原语覆盖（D11 / A3） ----------
 
@@ -391,7 +426,8 @@ class WorlditorPlayAPI:
 
         三态：raise WorldError = 否决；返回参数字典 = 改写继续链；
         返回 ShortCircuit(value) = 短路（跳过后续过滤器与默认实现）。
-        每包每原语至多一个；与 override/disable 互斥；链序 = 注册序。
+        **同一包同一原语可注册多个**（各带 label，链序 = 注册序）；
+        与 override/disable 互斥（原语至多一个覆盖者/禁用者）。
         """
         self._engine.register_primitive_filter(
             name, filter, label=label, play_id=self.play_id
@@ -511,21 +547,27 @@ class WorlditorPlayAPI:
     async def place_entity(
         self,
         kind: str,
-        map_id: str,
-        row: int,
-        col: int,
+        map_id: str | None = None,
+        row: int | None = None,
+        col: int | None = None,
         *,
         name: str | None = None,
         desc: str = "",
-        attrs: dict | None = None,
-        state: dict | None = None,
+        components: dict | None = None,
         tags: list[str] | tuple[str, ...] | None = None,
     ):
         """放置实体（spawn；身份化实体不可被 remove，D14）。
 
         ``tags`` 为实例级标签（D18）——刷怪笼包要"生成一个带刷怪能力的实体"
         就是 ``place_entity("slime", ..., tags=["spawner"])``。
+        ``components`` 为初始组件（v2；``core:`` 一律拒绝，见 ``_guard_component``）。
+        **位置三参数可选（D36）**：全不给 = 造一个**不在世界上**的实体
+        （物品放进容器、待投放的 NPC）——它们不出现在 ``list_entities`` /
+        ``query_entities`` 的默认结果里，要拿得传 ``include_absent=True``。
         """
+        if isinstance(components, dict):
+            for key in components:
+                self._guard_component(str(key))
         return await self._engine.place_entity(
             kind,
             map_id,
@@ -533,8 +575,7 @@ class WorlditorPlayAPI:
             col,
             name=name,
             desc=desc,
-            attrs=attrs,
-            state=state,
+            components=components,
             tags=tags,
         )
 
@@ -608,7 +649,7 @@ class WorlditorPlayAPI:
     ) -> None:
         """注册玩法包自带的实体模板（D22：内存注册表，随包卸载消失）。
 
-        data = ``{kind, tags[], name, desc, attrs, state}``；管理端本地模板落库，
+        data = ``{kind, tags[], name, desc, components}``；管理端本地模板落库，
         两边合并成一个选择列表（``list_templates("entity")``）。
         """
         self._engine.register_entity_template(
@@ -625,22 +666,16 @@ class WorlditorPlayAPI:
         """套用地块模板到 (row, col)（同图目标平移、跨图目标原样；占位则拒绝）。"""
         return await self._engine.apply_location_template(template_id, map_id, row, col)
 
-    async def set_state(self, entity_id: str, patch: dict) -> None:
-        await self._engine.set_state(entity_id, patch)
-
-    def get_state(self, entity_id: str) -> dict:
-        return self._engine.get_state(entity_id)
-
     async def interact(
         self,
         entity_id: str,
         target_id: str,
         action: str,
         args: dict | None = None,
-        item_id: str | None = None,
     ):
-        return await self._engine.interact(entity_id, target_id, action, args, item_id)
+        """交互（走原语分派，可被覆盖/禁用）。
 
-    async def flush_item_defs(self) -> None:
-        """（PlayLoader 内部使用）把注册的物品定义落库。"""
-        await self._engine.flush_item_defs()
+        v2 / D37：原 ``item_id`` 参数已删除——把物品标识放进 ``args`` 即可
+        （如 ``args={"item": "apple"}``），内核不解释其内容。
+        """
+        return await self._engine.interact(entity_id, target_id, action, args)

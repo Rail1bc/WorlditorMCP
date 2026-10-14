@@ -33,11 +33,10 @@ def test_default_world_seeded(tmp_path):
             world = engine.get_world(DEFAULT_WORLD_ID)
             assert world is not None and world.name == "默认世界"
             assert world.play_ids == []  # 空 = 全部激活
-            # v0.2.0：内核不再内置演示世界——地图/地块/实体/物品全由玩法包导入
+            # v0.2.0：内核不再内置演示世界——地图/地块/实体全由玩法包导入
             assert engine.list_maps() == []
             assert engine.list_locations() == []
             assert engine.list_entities() == []
-            assert engine.store.items == {}
             # 归属仍经地图推导：铺一张测试地图并归属到默认世界
             await seed_test_world(engine)
             await engine.assign_map("default", DEFAULT_WORLD_ID)

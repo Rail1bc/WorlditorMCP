@@ -21,7 +21,6 @@ from .errors import IncompatibleDataError, WorldError
 from .identity import Account, TokenInfo
 from .model import (
     Entity,
-    ItemDef,
     Location,
     Target,
     World,
@@ -30,20 +29,39 @@ from .model import (
     WorldTemplate,
     entity_db_row,
     entity_from_row,
-    item_db_row,
-    item_from_row,
     location_to_dict,
     parse_location,
     parse_map,
     parse_text_schedule,
+    split_component_key,
 )
 
-# 表结构版本（沿用 v4 引擎表布局；D13 无迁移逻辑，仅写入 world_meta 记录。
+# 表结构版本（D13：**无迁移逻辑**——读到别的版本直接拒绝启动，见 ``_check_schema``）。
 # v5 = world_maps.sort：组织树内地图与文件夹共用一个排序空间
 # v6 = entities.tags_json（D18 实体标签）+ templates.scope（D22 模板统一）
-# v7 = entities.revision / changed_tick（D28 变更检测）+ world_meta['revision']）
-SCHEMA_VERSION = "7"
+# v7 = entities.revision / changed_tick（D28 变更检测）+ world_meta['revision']
+# v8 = entities.components_json（D32：实体 = id + 组件；attrs_json/state_json 取消）
+# v9 = entities 去掉 name / desc / user_id 三列（D32 §12.4：它们进 core:info / core:account）
+# v10 = entities 去掉 map_id / row / col 三列（D36 §12.4：位置进 core:position，可为缺失）
+SCHEMA_VERSION = "10"
 DEFAULT_MAP_ID = "default"
+
+# 后加列清单——**不是用来补的，是用来检查的**（`_check_schema`）。
+# 这是原 `_ensure_columns`（缺列就 ALTER 补上）的替代物：补列会把旧数据静默改成
+# 新形态（v2 尤其致命——补出来的 components_json 是空默认值 = 实体数据被清空），
+# 所以改成"缺任何一列 = 明确拒绝启动，指名删哪个文件"。
+_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
+    "world_maps": ("sort",),
+    "entities": ("tags_json", "revision", "changed_tick", "components_json"),
+    "templates": ("scope",),
+}
+
+# 「**不该存在**」的列（同样只在启动闸里用）。它们守的是**静默丢数据**的另一半：
+# 一个没有版本记录的库如果还带着 v9 之前那三列（name/desc/user_id），只查"需要的列在不在"
+# 是查不出来的——载入会成功，而名字/描述/账户绑定被**无声丢掉**。所以显式拒绝。
+_FORBIDDEN_COLUMNS: dict[str, tuple[str, ...]] = {
+    "entities": ("name", "desc", "user_id", "map_id", "row", "col"),
+}
 
 # 世界日志保留上限（超出后裁掉最旧记录；防高频事件刷爆库）
 WORLD_LOG_LIMIT = 5000
@@ -111,30 +129,18 @@ def _bad_location_field(payload: dict) -> str:
 _ENTITY_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS entities (
     id TEXT PRIMARY KEY,
-    map_id TEXT NOT NULL,
-    row INTEGER NOT NULL,
-    col INTEGER NOT NULL,
     kind TEXT NOT NULL,
-    name TEXT NOT NULL,
-    desc TEXT NOT NULL DEFAULT '',
-    user_id TEXT,
-    attrs_json TEXT NOT NULL DEFAULT '{}',
-    state_json TEXT NOT NULL DEFAULT '{}',
+    components_json TEXT NOT NULL DEFAULT '{}',
     last_active_ts REAL NOT NULL DEFAULT 0,
     tags_json TEXT NOT NULL DEFAULT '[]',
     revision INTEGER NOT NULL DEFAULT 0,
     changed_tick INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_entities_pos ON entities(map_id, row, col);
-CREATE TABLE IF NOT EXISTS items (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    desc TEXT NOT NULL DEFAULT '',
-    icon TEXT NOT NULL DEFAULT '',
-    stackable INTEGER NOT NULL DEFAULT 1,
-    use_action TEXT,
-    attrs_json TEXT NOT NULL DEFAULT '{}'
-);
+-- v2（D32）：实体表只留"存储与治理"需要的列——位置/名字/描述/账户绑定都在 components 里
+-- （``core:position`` / ``core:info`` / ``core:account``，D36/§12.4）。
+-- 原 idx_entities_pos 已删——实测**无任何 SQL 使用它**（实体相关 SQL 只有 SELECT * 与
+-- DELETE WHERE id），位置筛选一律走内存（索引策略见 D39 / GAPS G42）。
+-- v2 / D37：原 `items` 表已删除——物品不在内核（定义 → 组件声明，实例 → 实体 + 组件）。
 CREATE TABLE IF NOT EXISTS play_data (
     namespace TEXT NOT NULL,
     key TEXT NOT NULL,
@@ -240,7 +246,6 @@ class WorldStore:
         self.loc_by_pos: dict[tuple[str, int, int], Location] = {}
         self.templates: dict[str, WorldTemplate] = {}
         self.entities: dict[str, Entity] = {}
-        self.items: dict[str, ItemDef] = {}
         self.play_data: dict[tuple[str, str], Any] = {}
         self.accounts: dict[str, Account] = {}
         self.tokens: dict[str, TokenInfo] = {}
@@ -259,17 +264,20 @@ class WorldStore:
     # ---------- 生命周期 ----------
 
     async def initialize(self) -> None:
-        """打开连接、建表、幂等播种（maps/entities/items/worlds 各自空则播）、全量载入内存。"""
+        """打开连接、建表、**版本闸**、幂等播种、全量载入内存。"""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = await aiosqlite.connect(self.db_path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.executescript(_MAP_TABLES_SQL)
         await self._conn.executescript(_ENTITY_TABLES_SQL)
+        # D13 版本闸：**先于一切读与写**。旧版本库在这里就被拒绝——绝不能让后续步骤
+        # 用"ALTER 补列"或默认值把旧数据悄悄改成新形态（v2 起实体列变了，
+        # 补出来的 components_json 是空默认值 = 旧实体数据被静默清空）
+        await self._check_schema()
         # D28：**在任何启动写之前**续号——迁移/播种的提交也会推进变更号，
         # 先读旧号才能保证"结构变更多于实体变更"的库重启后号不回退
         await self._resume_revision()
-        await self._ensure_columns()
         await self._seed_if_empty()
         await self._load_all()
 
@@ -312,39 +320,61 @@ class WorldStore:
         )
         await self._conn.commit()
 
-    async def _ensure_columns(self) -> None:
-        """补齐后加列（幂等）。
+    async def _check_schema(self) -> None:
+        """版本闸（D13）：库的表结构版本或**表形态**与本版本不符 → **拒绝启动**。
 
-        SQLite 的 ``CREATE TABLE IF NOT EXISTS`` 不会给**既有表**补列，所以旧库
-        升级时必须显式 ALTER；这是唯一的"迁移逻辑"，D13 的"不迁移"指不做语义
-        转换，不是不给表加列。
+        两道检查，缺一不可：
+
+        1. ``world_meta.schema_version`` 记录不符 → 拒绝；
+        2. **后加列清单**（``_REQUIRED_COLUMNS``）缺任何一列 → 拒绝。
+           第 2 道是给"**连版本记录都没有的极老库 / 手造库**"兜底的——只靠第 1 道的话，
+           那种库会一路走到 ``_load_all`` 撞出裸 ``IndexError``（一屏栈、没有可操作的
+           指引），正好违背 D13 承诺的"读到不兼容内容就指明删哪个文件"。
+
+        为什么必须有这道闸：v2 起 ``entities`` 的列变了（``components_json`` 取代
+        ``attrs_json`` / ``state_json``）。若沿用"缺列就 ALTER 补上"的旧做法
+        （原 ``_ensure_columns``），补出来的列是**空默认值**——旧实体的数据会被
+        **静默清空**，比拒绝启动危险得多（D23"不静默丢数据"的同一条原则）。
+        所以那个补列函数**已被删除，改成这里的检查**。
+
+        空库 / 全新库（无版本记录、表由本版本 DDL 建出）放行。
         """
         assert self._conn is not None
-        wanted = {
-            # 表 → {列名: 列定义}
-            "world_maps": {"sort": "INTEGER NOT NULL DEFAULT 0"},
-            "entities": {
-                "tags_json": "TEXT NOT NULL DEFAULT '[]'",
-                # D28 变更检测（v0.6.0）：老库补列，已有实体按 0 起算
-                "revision": "INTEGER NOT NULL DEFAULT 0",
-                "changed_tick": "INTEGER NOT NULL DEFAULT 0",
-            },
-        }
-        for table, columns in wanted.items():
+        cur = await self._conn.execute(
+            "SELECT value FROM world_meta WHERE key = 'schema_version'"
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            found = str(row["value"])
+            if found != SCHEMA_VERSION:
+                raise self._refuse(
+                    f"库的表结构版本是 v{found}，本版本需要 v{SCHEMA_VERSION}"
+                    f"（实体数据形态已在 v2 变更：实体 = id + 组件，DESIGN D32）"
+                )
+        missing: list[str] = []
+        for table, columns in _REQUIRED_COLUMNS.items():
             cur = await self._conn.execute(f"PRAGMA table_info({table})")
-            existing = {row["name"] for row in await cur.fetchall()}
-            for name, ddl in columns.items():
-                if name not in existing:
-                    await self._conn.execute(
-                        f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"
-                    )
-        cur = await self._conn.execute("PRAGMA table_info(templates)")
-        template_cols = {row["name"] for row in await cur.fetchall()}
-        if "scope" not in template_cols:
-            await self._conn.execute(
-                "ALTER TABLE templates ADD COLUMN scope TEXT NOT NULL DEFAULT 'location'"
+            existing = {r["name"] for r in await cur.fetchall()}
+            if not existing:
+                continue  # 表不存在/刚由本版本 DDL 建出
+            missing.extend(f"{table}.{c}" for c in columns if c not in existing)
+        if missing:
+            raise self._refuse(
+                f"库缺本版本需要的列：{', '.join(missing)}"
+                f"——库是更早版本的形态（实体数据形态已在 v2 变更："
+                f"实体 = id + 组件，DESIGN D32）"
             )
-        await self._commit()
+        stale: list[str] = []
+        for table, columns in _FORBIDDEN_COLUMNS.items():
+            cur = await self._conn.execute(f"PRAGMA table_info({table})")
+            existing = {r["name"] for r in await cur.fetchall()}
+            stale.extend(f"{table}.{c}" for c in columns if c in existing)
+        if stale:
+            raise self._refuse(
+                f"库还带着 v9 之前已被取消的列：{', '.join(stale)}"
+                f"——名字/描述/账户绑定已进 core:info / core:account 组件（DESIGN §12.4），"
+                f"继续启动会把它们静默丢掉"
+            )
 
     async def _seed_if_empty(self) -> None:
         """空库只建「默认世界」这一结构性容器（幂等）。
@@ -367,17 +397,21 @@ class WorldStore:
 
     # ---------- 全量载入 ----------
 
-    def _incompatible_error(
-        self, where: str, field: str, cause: Exception
-    ) -> IncompatibleDataError:
-        """构造「数据不兼容」的启动错误：指明位置 + 处理方式（不迁移）。"""
+    def _refuse(self, headline: str) -> IncompatibleDataError:
+        """构造「数据不兼容」的启动错误（D13：拒绝 + 指明删哪个文件，不迁移）。"""
         return IncompatibleDataError(
-            f"数据不兼容：{where} 的 {field} 读不了 —— {cause}\n"
+            f"数据不兼容：{headline}\n"
             f"本版本不迁移历史数据（DESIGN D13）。"
             f"处理：删除 {self.db_path} 后重新启动"
             f"（想先留档就 mv 到 {self.db_path}.old）。\n"
             "注意：删除会一并清空地图、地块、实体与账户，重建后需重新注册管理员。"
         )
+
+    def _incompatible_error(
+        self, where: str, field: str, cause: Exception
+    ) -> IncompatibleDataError:
+        """构造「某行某字段读不了」的启动错误：指明位置 + 处理方式（不迁移）。"""
+        return self._refuse(f"{where} 的 {field} 读不了 —— {cause}")
 
     def _load_json_field(self, raw: Any, where: str, field: str) -> Any:
         """启动期读 JSON 列：坏值 → 不兼容错误（而不是裸 JSONDecodeError）。"""
@@ -387,6 +421,32 @@ class WorldStore:
             return json.loads(raw)
         except ValueError as e:
             raise self._incompatible_error(where, f"{field}（不是合法 JSON）", e) from e
+
+    def _check_components(self, raw: Any, where: str) -> None:
+        """启动期校验组件字典（D13：坏数据拒绝启动，**不静默丢弃**）。
+
+        ``parse_components``（模型层）对非法条目是"丢弃"，那适合 API 输入容错；
+        落库读回时丢弃等于**吃掉这个实体的数据**，所以这里改为拒绝并指名位置。
+        """
+        if raw is None:
+            return
+        if not isinstance(raw, dict):
+            raise self._incompatible_error(
+                where, "components（不是对象）", TypeError("收到非对象")
+            )
+        for key, data in raw.items():
+            try:
+                split_component_key(key)
+            except WorldError as e:
+                raise self._incompatible_error(
+                    where, f"components[{key!r}]（组件名非法）", e
+                ) from e
+            if not isinstance(data, dict):
+                raise self._incompatible_error(
+                    where,
+                    f"components[{key!r}]（组件数据不是对象）",
+                    TypeError("收到非对象"),
+                )
 
     async def _load_all(self) -> None:
         assert self._conn is not None
@@ -452,14 +512,22 @@ class WorldStore:
             )
         cur = await self._conn.execute("SELECT * FROM entities")
         for row in await cur.fetchall():
+            where = f"entities.id={row['id']!r}"
+            # D13：组件列坏值 → 拒绝启动（不静默当空处理——那等于吃掉这个实体的数据）
+            self._check_components(
+                self._load_json_field(
+                    row["components_json"], where, "components（组件）"
+                ),
+                where,
+            )
             entity = entity_from_row(row)
-            if entity is not None:
-                self.entities[entity.id] = entity
-        cur = await self._conn.execute("SELECT * FROM items")
-        for row in await cur.fetchall():
-            item = item_from_row(row)
-            if item is not None:
-                self.items[item.id] = item
+            if entity is None:
+                raise self._incompatible_error(
+                    where,
+                    "整行（id / 位置 / 类型 / 名称 / 坐标）",
+                    ValueError("行不合法"),
+                )
+            self.entities[entity.id] = entity
         cur = await self._conn.execute("SELECT * FROM play_data")
         for row in await cur.fetchall():
             try:
@@ -672,9 +740,9 @@ class WorldStore:
             entity.changed_tick = self.tick
         await self._conn.executemany(
             "INSERT OR REPLACE INTO entities("
-            "id, map_id, row, col, kind, name, desc, user_id, attrs_json, state_json, "
+            "id, kind, components_json, "
             "last_active_ts, tags_json, revision, changed_tick"
-            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ") VALUES(?, ?, ?, ?, ?, ?, ?)",
             [entity_db_row(e) for e in entities],
         )
         await self._commit()
@@ -688,30 +756,10 @@ class WorldStore:
         await self._commit()
         self.entities.pop(entity_id, None)
 
-    # ---------- 物品 ----------
-
-    async def save_item(self, item: ItemDef) -> None:
-        """写回 / 新建一个物品定义。"""
-        assert self._conn is not None
-        await self._insert_item(item)
-        self.items[item.id] = item
-
-    async def _insert_item(self, item: ItemDef) -> None:
-        assert self._conn is not None
-        await self._conn.execute(
-            "INSERT OR REPLACE INTO items("
-            "id, name, desc, icon, stackable, use_action, attrs_json"
-            ") VALUES(?, ?, ?, ?, ?, ?, ?)",
-            item_db_row(item),
-        )
-        await self._commit()
-
-    async def delete_item(self, item_id: str) -> None:
-        """删除物品定义行。"""
-        assert self._conn is not None
-        await self._conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
-        await self._commit()
-        self.items.pop(item_id, None)
+    # ---------- 物品：已移除（v2 / D37） ----------
+    #
+    # 原 `save_item` / `_insert_item` / `delete_item` + `self.items` 内存表已删除：
+    # 内核不再有物品定义（定义 → 组件声明，实例 → 实体 + 组件）。见 model.py 顶部说明。
 
     # ---------- 玩法数据 KV（namespace 隔离） ----------
 

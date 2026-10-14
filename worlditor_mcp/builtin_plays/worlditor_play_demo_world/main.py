@@ -79,8 +79,7 @@ async def setup(api: WorlditorPlayAPI, context) -> None:
             int(entity["col"]),
             name=entity.get("name"),
             desc=str(entity.get("desc") or ""),
-            attrs=entity.get("attrs") or {},
-            state=entity.get("state") or {},
+            components=entity.get("components") or {},
         )
 
 

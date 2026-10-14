@@ -104,7 +104,7 @@ def test_query_respects_world_activation(tmp_path):
             # 能力面：标签在该世界不活跃（D21）
             caps = engine.capabilities(entity)
             assert "poisoned" in caps["inactive_tags"]
-            # 查询面：能力不存在 → 不匹配（与 available_actions/_is_blocking 同源）
+            # 查询面：能力不存在 → 不匹配（与 available_actions 同源）
             assert engine.query_entities(tags=["poisoned"]) == []
             assert _ids(engine.query_entities(exclude_tags=["poisoned"])) == {entity.id}
             # 无声明者的纯数据标签不受激活过滤影响
@@ -193,11 +193,21 @@ def test_query_viewer_perception(tmp_path):
         engine = await _engine(tmp_path)
         try:
             spy = await engine.place_entity(
-                "player", "default", 0, 0, name="潜行者", attrs={"invisible": True}
+                "player",
+                "default",
+                0,
+                0,
+                name="潜行者",
+                components={"core:perception": {"invisible": True}},
             )
             guard = await engine.place_entity("player", "default", 0, 0, name="守卫")
             seer = await engine.place_entity(
-                "player", "default", 0, 0, name="先知", attrs={"see_invisible": True}
+                "player",
+                "default",
+                0,
+                0,
+                name="先知",
+                components={"core:perception": {"see_invisible": True}},
             )
             assert spy.id not in _ids(engine.query_entities(viewer_id=guard.id))
             assert spy.id in _ids(engine.query_entities(viewer_id=spy.id))
@@ -219,10 +229,14 @@ def test_query_where_and_limit(tmp_path):
     async def fn():
         engine = await _engine(tmp_path)
         try:
-            weak = await engine.place_entity("wolf", "default", 0, 0, attrs={"hp": 1})
-            await engine.place_entity("wolf", "default", 1, 0, attrs={"hp": 9})
+            weak = await engine.place_entity(
+                "wolf", "default", 0, 0, components={"local:stat": {"hp": 1}}
+            )
+            await engine.place_entity(
+                "wolf", "default", 1, 0, components={"local:stat": {"hp": 9}}
+            )
             found = engine.query_entities(
-                where=lambda e: e.attrs.get("hp", 0) < 5, limit=10
+                where=lambda e: e.component("local:stat").get("hp", 0) < 5, limit=10
             )
             assert _ids(found) == {weak.id}
         finally:

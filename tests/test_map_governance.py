@@ -16,9 +16,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from world_fixtures import seed_test_world
 
 from worlditor_mcp.world.engine import WorldEngine, WorldError
+from worlditor_mcp.world.errors import IncompatibleDataError
 from worlditor_mcp.world.model import Entity
 from worlditor_mcp.world.store import WorldStore
 
@@ -428,14 +430,15 @@ def test_lint_reports_spawn_missing_and_dangling_entity(tmp_path):
             await engine.create_location("broken", 0, 0, "孤岛")
             await engine.assign_map("broken", "default")
             # 手工塞一个坐标上没有地块的实体（模拟数据损坏）
+            # v2 / D36：位置与名字都在组件里（core:position / core:info）
             await engine.store.save_entity(
                 Entity(
                     id="ghost",
-                    map_id="broken",
-                    row=3,
-                    col=3,
                     kind="sign",
-                    name="幽灵",
+                    components={
+                        "core:position": {"map_id": "broken", "row": 3, "col": 3},
+                        "core:info": {"name": "幽灵"},
+                    },
                 )
             )
             report = engine.lint_map("broken")
@@ -669,22 +672,25 @@ def test_admin_round_trip_keeps_windowed_text_schedule(tmp_path):
     _run(_admin_scenario(tmp_path, fn))
 
 
-# ---------- 旧库升级（v0.4.0 新增列；CHANGELOG 承诺"旧 world.db 直接可用"） ----------
+# ---------- 旧库：v2 起**拒绝启动**（版本闸；"旧 world.db 直接可用"的承诺已撤回） ----------
 
 
-def test_legacy_db_without_sort_column_is_upgraded_in_place(tmp_path):
-    """v0.3.0 及更早的库（world_maps 无 sort 列）能被原地升级并正常读写。
+def test_legacy_db_is_refused_on_startup(tmp_path):
+    """v0.3.0 及更早版本的库（world_maps 无 sort 列、schema_version=v7）拒绝启动。
 
-    ``CREATE TABLE IF NOT EXISTS`` 不会给既有表补列，旧库全靠 `_ensure_columns`
-    的 `ALTER TABLE`——这是"旧数据不丢"的唯一保障，不能只靠新库跑通就算过了。
+    原用例断言"旧库被 `ALTER TABLE` 原地补列"（v0.4.0 的承诺）。v2 第 1 期改了
+    ``entities`` 的列形态（``components_json`` 取代 ``attrs_json`` / ``state_json``），
+    补列只能补出**空默认值** = 旧实体数据被静默清空——比拒绝启动危险得多。
+    所以 ``_ensure_columns`` 整个删除，改成版本闸（D13）：消息必须**指名
+    world.db**，并给出"删除…后重新启动"的处理方式。
     """
 
     async def fn():
         import aiosqlite
 
-        db = tmp_path / "legacy.db"
+        db = tmp_path / "world.db"
         conn = await aiosqlite.connect(db)
-        # 故意用 v0.3.0 的旧表结构（world_maps 没有 sort）
+        # 故意用 v0.3.0 的旧表结构（world_maps 没有 sort）+ 旧版本号
         await conn.executescript(
             """
             CREATE TABLE maps (
@@ -708,6 +714,7 @@ def test_legacy_db_without_sort_column_is_upgraded_in_place(tmp_path):
             CREATE TABLE world_maps (map_id TEXT PRIMARY KEY, world_id TEXT NOT NULL, folder_id TEXT);
             """
         )
+        await conn.execute("INSERT INTO world_meta VALUES('schema_version','7')")
         await conn.execute("INSERT INTO worlds VALUES('default','默认世界','','[]')")
         await conn.execute(
             "INSERT INTO maps(id, name, spawn_row, spawn_col) "
@@ -724,35 +731,30 @@ def test_legacy_db_without_sort_column_is_upgraded_in_place(tmp_path):
         await conn.close()
 
         engine = WorldEngine(WorldStore(db))
-        await engine.initialize()
-        try:
-            # 旧数据完好，且补列后序号可用
-            assert engine.map_world("legacy_map") == "default"
-            assert engine.store.map_sort["legacy_map"] == 0
-            assert engine.get_location("legacy_map", 0, 0).name == "旧广场"
-            # 补列后排序功能正常：新文件夹排到已有条目之后
-            folder = await engine.create_folder("default", "新组")
-            assert folder.sort == 1
-            await engine.reorder_tree(
-                "default",
-                None,
-                [
-                    {"type": "folder", "id": folder.id},
-                    {"type": "map", "id": "legacy_map"},
-                ],
-            )
-            assert engine.list_folders("default")[0].id == folder.id
-            assert engine.store.map_sort["legacy_map"] == 1
-        finally:
-            await engine.terminate()
+        with pytest.raises(IncompatibleDataError) as ei:
+            await engine.initialize()
+        msg = str(ei.value)
+        assert "world.db" in msg  # 指明该删哪个文件（而不是打一屏栈）
+        assert (
+            "v7" in msg and "v10" in msg
+        )  # 说清版本落差（SCHEMA_VERSION=10，升版要跟着改）
+        assert "删除" in msg and "重新启动" in msg
+        await engine.terminate()
 
-        # 二次打开（列已存在）仍然幂等
-        again = WorldEngine(WorldStore(db))
-        await again.initialize()
+        # 拒绝启动 = 库**原样不动**：既不补列也不改写版本号（旧数据留着等人工处理）
+        conn = await aiosqlite.connect(db)
         try:
-            assert again.store.map_sort["legacy_map"] == 1
+            cur = await conn.execute("PRAGMA table_info(world_maps)")
+            cols = {r[1] for r in await cur.fetchall()}
+            assert "sort" not in cols, "拒绝启动就不能偷偷补列"
+            cur = await conn.execute(
+                "SELECT value FROM world_meta WHERE key = 'schema_version'"
+            )
+            assert (await cur.fetchone())[0] == "7", "版本号不该被改写"
+            cur = await conn.execute("SELECT COUNT(*) FROM locations")
+            assert (await cur.fetchone())[0] == 1, "旧数据不能丢"
         finally:
-            await again.terminate()
+            await conn.close()
 
     _run(fn())
 
