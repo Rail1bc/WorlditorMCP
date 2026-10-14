@@ -81,6 +81,10 @@ let events = null; // EventSource（null = 未连接）
 let eventsDead = false; // 事件流不可用（403/404/网络失败）→ 本次凭据不再重试
 let eventsWarned = false; // 降级只在控制台提示一次，不打扰玩家
 
+// 凭据在**模块加载时**就位（而不是等 onMounted）：否则首帧必然先渲染登录页，
+// 已登录的玩家每次刷新都会闪一下登录界面。
+store.token = getToken();
+
 const hasToken = computed(() => Boolean(store.token));
 const currentView = computed(() => {
   const key = route.value.startsWith("/view/") ? route.value.slice(6) : "";
@@ -281,6 +285,16 @@ onMounted(async () => {
   try {
     const meta = await getMeta();
     store.mode = meta.mode === "admin" ? "admin" : "play";
+    // 陈旧凭据清理：本地有 token 而服务端解析不出 → 清掉、回登录页。
+    // 不这么做的话"凭据失效"在界面上没有任何出口：启动只打 /meta 与 /views，
+    // 两个都是免认证端点、恒 200，于是 api.js 里那条"收到 401 才清 token"的
+    // 自愈永远不会触发（删库/吊销凭据后每个浏览器都卡在空壳界面里）。
+    // 判定用 === false：老服务端没有该字段时（undefined）维持原行为。
+    if (meta.authenticated === false && store.token) {
+      setToken("");
+      store.token = "";
+      store.error = "登录凭据已失效，请重新登录";
+    }
   } catch (e) {
     store.error = e.message;
   }

@@ -32,7 +32,7 @@
 | GET | `/scene?entity_id=` | read / play / admin | 单实体场景 `{entity, scene, peers}`（含动作菜单；`entity_id` 缺省 = 调用者自己） |
 | GET | `/events` | play / admin | SSE 事件流（`?token=` 支持） |
 | GET | `/views` | 免认证 | 视图清单 `{views: [{key,title,icon,play_id}]}`；**带凭据时按调用者所在世界过滤**（D15） |
-| GET | `/meta` | 免认证 | `{"mode": "play"}`（前端模式识别） |
+| GET | `/meta` | 免认证 | `{"mode":"play","authenticated":bool}`（前端模式识别 + **连接身份状态**）。带有效凭据时补 `tier` / `entity_id` / `username`；无凭据或凭据解析不出 → `authenticated:false`（仍 200，登录页要用它判断端口模式）。前端启动时若本地存有 token 而这里是 `false`，就清掉凭据回登录页——否则删库/吊销后界面停在打不开任何东西的空壳上 |
 | POST | `/auth/register` | 免认证 | 人类注册（`{username, password, invite_code?, admin_key?}`） |
 | POST | `/auth/login` | 免认证 | 人类登录 → `{"ok":true,"token":{…}}` |
 | POST | `/auth/agent-register` | 免认证 | agent/脚本无密码自助注册（`{"name": "…"}`，按 `AUTH_MODE` / `ALLOW_AGENT_REGISTER` 判定） |
@@ -49,7 +49,7 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/auth/register` `/auth/login` `/auth/agent-register` | 同玩家端口语义 |
-| GET | `/meta` | 模式识别 |
+| GET | `/meta` | 模式识别 + 连接身份状态（同玩家端口语义，`mode` = `admin`） |
 
 ### 2.2 玩法包（全局层，§4.3）
 

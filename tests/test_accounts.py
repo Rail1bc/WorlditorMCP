@@ -201,6 +201,61 @@ def test_meta_endpoints(tmp_path):
         admin = TestClient(admin_app)
         assert play.get("/meta").json()["mode"] == "play"
         assert admin.get("/meta").json()["mode"] == "admin"
+        # 免认证 ≠ 已认证：无凭据时明确报告"这次连接没有身份"
+        assert play.get("/meta").json()["authenticated"] is False
+
+    _run(_scenario(tmp_path / "world.db", fn))
+
+
+def test_meta_reports_stale_token_as_unauthenticated(tmp_path):
+    """/meta 带身份状态：陈旧/吊销凭据 → ``authenticated=false``。
+
+    背景（真实事故）：前端原先只凭 localStorage 里"有一串 token"就跳过登录页，
+    而唯一会清掉失效凭据的自愈路径是"某个非 ``/auth`` 请求收到 401"。可启动时
+    只打 ``/meta`` 与 ``/views``——两个都免认证、**恒 200**——所以删库/吊销之后
+    前端永远发现不了，玩家卡在一个看得见、点什么都失败的空壳里。这条测试守住
+    那个信号：状态用**字段**表达（端点仍 200），前端据此清凭据回登录页。
+    """
+
+    async def fn(engine, identity):
+        from worlditor_mcp.world.mcp import build_mcp_server
+
+        play = TestClient(
+            build_http_app(build_mcp_server(engine), identity, engine=engine)
+        )
+        admin = TestClient(build_admin_app(identity, engine=engine))
+        player = await identity.register_human("小明", "pass123")
+        admin_info = await identity.register_human(
+            "管理员", "pass123", admin_key="sekret"
+        )
+        good = {"Authorization": f"Bearer {player.token}"}
+        dead = {"Authorization": "Bearer deadbeef"}
+
+        # 有效凭据：authenticated + 档位/实体/用户名（界面也靠它显示"我是谁"）
+        body = play.get("/meta", headers=good).json()
+        assert body["authenticated"] is True
+        assert body["tier"] == "play"
+        assert body["entity_id"] == player.entity_id
+        assert body["username"] == "小明"
+
+        # 陈旧/伪造凭据：200 + authenticated=false（**不是 401**——登录页也要用它）
+        resp = play.get("/meta", headers=dead)
+        assert resp.status_code == 200
+        assert resp.json()["authenticated"] is False
+        assert "tier" not in resp.json()
+
+        # 管理端口同一套语义
+        assert (
+            admin.get(
+                "/meta", headers={"Authorization": f"Bearer {admin_info.token}"}
+            ).json()["tier"]
+            == "admin"
+        )
+        assert admin.get("/meta", headers=dead).json()["authenticated"] is False
+
+        # 被吊销的凭据立刻变 false（管理员吊销 / 改密 → 下次启动即回登录页）
+        await identity.logout(player.token)
+        assert play.get("/meta", headers=good).json()["authenticated"] is False
 
     _run(_scenario(tmp_path / "world.db", fn))
 

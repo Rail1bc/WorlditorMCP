@@ -208,6 +208,34 @@ def _identity_of(scope: dict) -> TokenInfo | None:
     return scope.get("state", {}).get(_SCOPE_IDENTITY_KEY)
 
 
+def meta_payload(mode: str, info: TokenInfo | None) -> dict:
+    """``/meta`` 响应体：端口模式 + **这次连接**的身份状态（两个端口共用）。
+
+    ``authenticated`` 存在的理由是一个真实缺陷：前端原先只凭 localStorage 里
+    "有一串 token"就认定已登录（于是跳过登录页），而唯一会清掉失效凭据的自愈
+    路径是"某个非 ``/auth`` 请求收到 401"——可启动时只打 ``/meta`` 与 ``/views``，
+    两个都是**免认证端点、恒 200**。于是删库/吊销凭据后前端永远发现不了：玩家停在
+    一个看得见、点什么都失败的空壳里，界面上没有任何出口。
+
+    这里把"凭据是否有效"变成启动时必打的那一次请求的返回内容：无凭据或解析不出
+    → ``authenticated: false``，前端据此清凭据回登录页。端点本身仍免认证（登录页
+    要靠它判断端口模式），所以状态用**字段**表达、而不是 401。
+
+    Args:
+        mode: 端口模式（``play`` / ``admin``）——前端据此切换两套界面。
+        info: 中间件解析出的凭据（公共路径也解析；无/失效为 None）。
+
+    Returns:
+        响应体 dict；``info`` 为 None 时只有 mode 与 authenticated。
+    """
+    payload: dict[str, Any] = {"mode": mode, "authenticated": info is not None}
+    if info is not None:
+        payload["tier"] = info.tier
+        payload["entity_id"] = info.entity_id
+        payload["username"] = info.username or ""
+    return payload
+
+
 def _require_tier(info: TokenInfo | None, tiers: tuple[str, ...]) -> None:
     if info is None:
         raise HTTPException(401, "未认证或凭据无效")
@@ -424,8 +452,8 @@ async def _views(request: Request) -> Response:
 
 
 async def _meta(request: Request) -> Response:
-    """前端模式识别：玩家端 = play（管理模式界面分离的运行时依据）。"""
-    return JSONResponse({"mode": "play"})
+    """前端模式识别 + **连接身份状态**（玩家端 = play；见 ``meta_payload``）。"""
+    return JSONResponse(meta_payload("play", _identity_of(request.scope)))
 
 
 async def _play_web(request: Request) -> Response:

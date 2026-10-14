@@ -22,7 +22,7 @@ from starlette.staticfiles import StaticFiles
 
 from .world import WorldError
 from .world.identity import IdentityError
-from .world.mcp.http import AuthMiddleware, _identity_of, _play_web
+from .world.mcp.http import AuthMiddleware, _identity_of, _play_web, meta_payload
 from .world.model import location_to_dict
 from .world.store import DEFAULT_WORLD_ID
 
@@ -175,8 +175,8 @@ async def _views(request: Request) -> Response:
 
 
 async def _meta(request: Request) -> Response:
-    """前端模式识别：管理端 = admin（前端据此切换管理界面，与玩家端分离）。"""
-    return JSONResponse({"mode": "admin"})
+    """前端模式识别 + **连接身份状态**（管理端 = admin；见 ``meta_payload``）。"""
+    return JSONResponse(meta_payload("admin", _identity_of(request.scope)))
 
 
 async def _services(request: Request) -> Response:

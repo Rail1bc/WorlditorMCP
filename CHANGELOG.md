@@ -127,6 +127,34 @@
   （`if d in DIRECTIONS`），即"连接方向写错"不会报错只会少一条路——与本次的严格
   拒绝口径不一致，记为待议（未改）。
 
+### 前端登录态修复：失效凭据在界面上没有出口（"网页不用登录就能进"）
+- **现象**：删库重启后打开玩家端，**不显示登录页**，直接进到"已登录"的界面
+  （空视图 + header 两个按钮），点什么都失败，且没有任何提示。
+- **根因不在服务端**（实测：无凭据 / 陈旧凭据下 `/state`、`/scene`、`/world/mcp`、
+  `/auth/logout` 一律 401；免认证的只有 `/meta`、`/views` 与注册类），而在**客户端**：
+  登录与否只由 `localStorage` 里"有没有一串字符"决定（`App.vue` 的 `hasToken`），
+  从不向服务端校验；而唯一会清掉失效凭据的自愈路径是 `api.js` 里"某个非 `/auth`
+  请求收到 401"——启动只打 `/meta` 与 `/views`，两个都免认证、**恒 200**，于是
+  **这条自愈永远不会触发**；SSE 的 401 也只 `console.warn`（零提示）。
+  → "凭据失效"在 UI 上零出口：不显示登录页、不报错、不清凭据。
+- **修法**：`/meta` 增加 `authenticated`（有效时补 `tier` / `entity_id` / `username`），
+  两个端口共用 `meta_payload`；前端启动时若本地有 token 而 `authenticated === false`
+  → 清凭据 + 回登录页 + 提示"登录凭据已失效，请重新登录"。**零新增端点、零额外请求**
+  （`/meta` 本来就必打一次）；判定用 `=== false`，老服务端无此字段时维持原行为。
+- 顺带修掉一个"每次刷新都闪一下登录页"的老毛病：`store.token` 原先只在 `onMounted`
+  里从 localStorage 读入 → 首帧必然先渲染登录页（已登录的玩家每次刷新都看得见）。
+  改为**模块加载时就位**。
+- 顺带：界面从此有了"我是谁"的依据（原先 header 完全不显示身份与档位）。
+- 测试：`test_meta_endpoints` 扩展 + 新增
+  `test_meta_reports_stale_token_as_unauthenticated`（有效 / 伪造 / 无凭据 / 吊销后
+  四种状态 × 两个端口）；`docs/HTTP_API.md` §1、§2.1 同步；`webui/dist` 重新构建。
+- 独立浏览器验收（`.uitools/verify_stale_token.mjs`，不入库）：陈旧 / 有效 / 无凭据
+  三种初始状态各跑一次，断言最终界面、本地凭据是否被清、提示语是否可见 →
+  `STALE TOKEN OK`；另用既有 `verify_sse_refresh.mjs` / `verify_page_switch.mjs`
+  回归前端改动 → `SSE REFRESH OK` / `PAGE SWITCH OK`。
+- 同族记录：与"`rm -f` 对错路径静默成功""`instructions` 刷新失败被吞掉"一样——
+  **失效没有信号**。
+
 ## v0.6.0（2026-09-24）
 
 **按 ECS 对照清单补齐 A–D 四项**：一次架构自问"我们现在算 ECS 吗"引出逐项盘点
