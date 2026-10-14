@@ -428,10 +428,18 @@ class IdentityService:
                 raise IdentityError("邀请码无效或已使用")
 
     def _find_entity_of_account(self, account_id: str):
-        for e in self._engine.list_entities():
-            if e.user_id == account_id:
-                return e
-        return None
+        """账户绑定的玩家实体（**必须用 `identity_entity_of`**）。
+
+        ⚠️ v2 / D36 的坑（1d 落地时踩到）：这里原本写的是 `list_entities()`，而那
+        从第 1d 期起**默认只返回"在世界上"的实体**。于是一个**下线玩家**（玩法包
+        `clear_position` 过，位置组件被摘掉）在登录时会被判成"没有实体"→
+        `login()` 走 `_materialize()` **又造一个玩家实体**：同一账户两个身份化实体，
+        旧的成了孤儿（仍绑着账户、仍不可被 `remove_entity` 删），账户页则显示成"没有实体"。
+
+        这正是 D36 那类"默认值改变语义"的读点——**"按账户找实体"与位置无关**，
+        所以它必须绕开"位置"这个维度（`identity_entity_of` 直接扫 `store.entities`）。
+        """
+        return self._engine.identity_entity_of(account_id)
 
     def _spawn_pos(self) -> tuple[str, int, int] | None:
         """出生点（注册时的初始位置）= 首张地图的 spawn；世界还没有地图 → None。

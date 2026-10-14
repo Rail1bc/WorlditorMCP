@@ -80,6 +80,46 @@ def test_delete_own_account_read_tier_rejected(tmp_path):
     _run(_scenario(tmp_path / "world.db", fn))
 
 
+def test_offline_player_keeps_the_same_entity(tmp_path):
+    """下线的玩家登录回来**还是同一个实体**（D36 的默认值坑）。
+
+    "按账户找实体"与**位置无关**。但 `list_entities()` 从 v2 第 1d 期起默认只返回
+    "在世界上"的实体——照它找，一个下线的玩家会被判成"没有实体"，`login()` 于是
+    `_materialize()` **又造一个玩家实体**：同一账户两个身份化实体，旧的成孤儿
+    （仍绑着账户、仍不可被 `remove_entity` 删），账户页则显示成"没有实体"。
+
+    这类"默认值改了、调用点没跟着改"的读点不会报错，只会悄悄多出一个实体——
+    所以要有一条断言盯着**实体数量**。
+    """
+
+    async def fn(engine, identity):
+        info = await identity.register_human("小明", "pass123")
+        entity_id = info.entity_id
+        before = set(engine.store.entities)
+
+        # 下线：位置组件被摘掉（玩法包走 api.clear_position）
+        await engine.clear_position(entity_id)
+        assert engine.get_entity(entity_id).pos_key() is None
+        assert entity_id not in {e.id for e in engine.list_entities()}  # 默认查不到
+
+        # 重新登录：仍然是同一个实体，不新造
+        again = await identity.login("小明", "pass123")
+        assert again.entity_id == entity_id
+        assert set(engine.store.entities) == before, "登录不该凭空多出一个玩家实体"
+
+        # 账户检索也要看得到它（离线 ≠ 没有实体）
+        page = identity.search_accounts(q="小明")
+        row = next(a for a in page["accounts"] if a["username"] == "小明")
+        assert row["entity"] is not None
+        assert row["entity"]["id"] == entity_id
+
+        # 注销仍然级联到它（走 identity_entity_of，与位置无关）
+        await identity.delete_account(info.account_id)
+        assert engine.get_entity(entity_id) is None
+
+    _run(_scenario(tmp_path / "world.db", fn))
+
+
 # ---------- 管理员删除 / 角色变更 ----------
 
 

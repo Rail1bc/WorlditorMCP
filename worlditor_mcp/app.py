@@ -81,7 +81,9 @@ class WorlditorService:
         logger.info(
             "worlditor %s 已就绪：实体 %d 个，玩法包 %d 个，工具 %d 个",
             __version__,
-            len(self.engine.list_entities()),
+            # 含**不在世界上**的实体（D36）——否则启动日志会把下线玩家/容器里的东西
+            # 一起漏掉，"实体数"与实际存量对不上（排查时会让人怀疑数据丢了）
+            len(self.engine.list_entities(include_absent=True)),
             len(loaded),
             len(self.engine.list_tools()),
         )
