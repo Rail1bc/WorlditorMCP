@@ -715,6 +715,12 @@ await api.remove_data(entity_id, "gold", component="local:stat")    # 删字段�
   任务只做纯计算/IO，并必须在 `teardown(api)` 中取消
 - handler 保持短小（毫秒级）；长耗时任务（LLM 调用、网络、重计算）按上条
   自管 asyncio task
+  - ⚠ **红线是"handler 不得 `await` 那个子任务"**（handler 持锁等它 = 它永远拿不到锁
+    = 死锁），而**不是**"子任务永远不能碰引擎 API"：handler 返回、锁释放之后，
+    分离式任务自己去抢锁是安全的
+  - **结果怎么落回世界**：两条路都行——① 子任务把结果放进自己的队列/变量，
+    由**后续的 handler**（如 `on_tick`）在锁内落地；② 子任务自己
+    `await api.set_data(...)`（它会在锁空闲时拿到锁）。**唯一不能做的是让 handler 等它**
 - 过滤器必须纯函数（只读）；世界变更只发生在默认实现
 - 事件 handler 异常被隔离（记日志不拖垮内核）；交互 handler 异常转可展示错误
 

@@ -148,7 +148,10 @@ Entity(
    `_entity_specs`（能力并集）/ `_live_tags`（query 匹配）/ `capabilities`（诊断）
 3. **归属进名字**：`_tag_owner` 那张表可以删（归属变成组件键的结构信息）
 4. **身份拆除**（A1）+ **写入边界**（B1）+ **删摊平与分类字段**（A4）
-5. **薄适配层**：`kind` / `tags` 两列暂时保留，读的时候折成组件键
+5. **顺手修 C8**（见 §6）：停用包时**不再删规格**，改由 `capabilities()` 多看一条
+   "该包是否已加载"——这样 `inactive_tags` 终于能表达**"这个包被停用了"**
+   （今天表现为 `unknown_tags`"未声明"，而"包被停用"恰恰是最该被解释的那种没效果）
+6. **薄适配层**：`kind` / `tags` 两列暂时保留，读的时候折成组件键
    → 让 2a **能独立跑绿**，且不动数据
 
 ### 2b：改表（v11）
@@ -191,8 +194,9 @@ Entity(
 |---|---|---|
 | C1 | `update_entity(kind="player")` 反向升格洞 | 随 A1 **消失** |
 | C2 | 身份服务没有 D20 承诺的升格通道 | 不做（见上） |
-| C3 | 包在 handler 里 `await` 外部 IO 会长时间占着世界锁 | PLAY_DEV 提示一句 |
+| C3 | 包在事件 handler 里 `await` 外部 IO 会长时间占着世界锁 | ✅ **文档已有**（PLAY_DEV「性能与并发」写着"handler 保持短小；长耗时任务自管 asyncio task"）。本轮只补了两句精度：**红线是"handler 不得 await 那个子任务"**（不是"子任务永远不能碰引擎 API"），以及**结果怎么落回世界**（后续 handler 落地，或子任务自己抢锁写） |
 | C4 | 身份找实体用 `list_entities()` → 下线玩家被克隆 | ✅ 已修（`7e6ff8a`，有守卫） |
 | C5 | `on_entity_move` 对 `None` 调 `list()` | ✅ 已修 |
 | C6 | D19 里 `block_move` 残留 / G42·D39 索引不变式过时 | ✅ 已清 |
 | C7 | `delete_identity_entity` docstring 写"player/agent"，实际只有 `player` | 随 A1 消失 |
+| C8 | **停用包之后，它声明的标签在编辑器里显示"未声明"**：`clear_play_registrations(purge=False)` **把规格也删了**、只留 `_tag_owner`，于是 `capabilities()` 报 `unknown_tags`（"没人声明"）而 `_live_tags()`（query 匹配）仍认为"有主但不活跃"。两边**结论一致**（都没能力）但**解释不一致**，结果是 `inactive_tags` 那个桶**永远装不到"包被停用"**——而停用恰好是最常发生、最该被解释的情况 | **2a 顺手修**（见 §3.5）：停用不删规格，改由 `capabilities()` 多看一条"该包是否已加载" |
