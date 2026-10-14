@@ -814,13 +814,19 @@
 
 ### G42 地块 → 实体 id 索引（策略已定，暂不实施）
 - **触发**：同上；且实测发现 `idx_entities_pos` **是 v4 遗留死重**——实体相关 SQL 只有
-  `SELECT *` 与 `DELETE WHERE id = ?`，**没有任何查询用它**；`_blocker_at` /
-  `list_entities(row,col)` / `query_entities(row,col)` **全部是内存线性扫描**
+  `SELECT *` 与 `DELETE WHERE id = ?`，**没有任何查询用它**；`list_entities(row,col)` /
+  `query_entities(row,col)` / `/scene` **全部是内存线性扫描**
+  （⚠ 原条目把 `_blocker_at` 也列在这里，它已随 v2 第 1b 期**整体移除**——阻挡机制没了）
 - **策略（D39）**：**只存内存**（`store.entities_at`），不落库——纯派生数据，落库只增加跨表
   不一致风险、零收益（启动本就全量载入）；维护点收敛到 `save_entities` +
   **反查表 `entity_id → pos_key`**（因为 `save_entities` 拿到的实体**位置已被就地改过**，
   看不出旧格）+ `delete_entity`；配自检"**索引 id 总数 == 实体总数**"（占位搁置后不变式
   简化为"每个实体恰好出现一次"，一个 count 即可发现漏摘/漏登）
+  - ⚠ **自检不变式已被 D36 改写**（v2 第 1d 期起，**实施时按新口径写**）：
+    "不在世界上"的实体（没有 `core:position`）**本来就不该出现在索引里**，所以不变式是
+    "**每个在世界上的实体**（`has_position()` 为真）**恰好出现一次**"，count 一侧要拿
+    `has_position()` 过滤后的数量去比——照抄原文的"== 实体总数"会**永远差着那几个离线实体**，
+    自检当场误报（而一个会误报的自检等于没有自检）
 - **成本**：约 10 个位置写入点（place / move / move_entity / move_location / copy_map /
   delete_location / delete_map / 账户注销 / 模板套用 / 启动重建）
 - **注意**：这是"**漏一处就是静默错误**"的那类东西（与 G38 残留 1 的标签倒排索引同族）——
