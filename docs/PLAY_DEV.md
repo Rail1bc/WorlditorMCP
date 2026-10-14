@@ -184,7 +184,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `clear_position(entity_id)` | 让实体**离开世界**（下线 / 收进容器 / 传送中间态）——**写 `core:position` 的受控入口**（与 `set_perception` 同性质，不受分派表影响）。组件 / 标签 / 账户绑定全保留，只去掉位置；幂等。放回世界用 `move_entity`。见 §10 / D36 |
 | `interact(entity_id, target_id, action, args)` | 交互（**可被覆盖/禁用**）。**没有 `item_id` 槽位**（D37）：物品标识放 `args`，如 `args={"item": "apple"}`——内核不解释其内容 |
 | `emit(event, data, log=False)` | 自定义事件（SSE 推送；`log=True` 写 world_log） |
-| `place_entity(kind, map_id=None, row=None, col=None, *, name=None, desc="", components=None, tags=[...])` / `remove_entity(id)` | 实体生命周期（D14；身份化实体不可 remove）。**位置三参数可选（D36）**：全给 = 放进世界；**全不给 = 造一个不在世界上的实体**（物品放进容器、待投放的 NPC）；只给一部分 → 报错。不在世界上的实体**不出现在** `list_entities` / `query_entities` 的默认结果里（要它们传 `include_absent=True`），移动会被拒绝。`components` = 初始组件（dict，`core:` 一律拒绝）；`tags` = 实例级标签（D18），如 `place_entity("slime", ..., tags=["spawner"])`。**`name` / `desc` 是输入便利**：折进 `core:info` 组件（实体没有顶层名字字段；读回用 `entity.name` / `entity.desc`，§10） |
+| `place_entity(kind, map_id=None, row=None, col=None, *, name=None, desc="", components=None, tags=[...])` / `remove_entity(id)` | 实体生命周期（D14；**绑定了账户的实体不可 remove**，D42）。**位置三参数可选（D36）**：全给 = 放进世界；**全不给 = 造一个不在世界上的实体**（物品放进容器、待投放的 NPC）；只给一部分 → 报错。不在世界上的实体**不出现在** `list_entities` / `query_entities` 的默认结果里（要它们传 `include_absent=True`），移动会被拒绝。`components` = 初始组件（dict，`core:` 一律拒绝）；`tags` = 实例级标签（D18），如 `place_entity("slime", ..., tags=["spawner"])`。**`name` / `desc` 是输入便利**：折进 `core:info` 组件（实体没有顶层名字字段；读回用 `entity.name` / `entity.desc`，§10） |
 | `set_tags(entity_id, tags)` | 整体替换实例标签（"给玩家加一个刷怪笼标签"）——**基底 kind 不在其中**（身份/类型是治理域，D20） |
 | `call_service(play_id, name, **params)` | 跨包服务调用（§6） |
 | `call_default_primitive(name, *args, **kwargs)` | super 通道：显式调内核默认实现（覆盖者前置/后置用） |
@@ -232,7 +232,13 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 **账户生命周期（内核提供，玩法包感知）**：
 - 玩家可永久注销（`POST /auth/delete-account`，级联吊销凭据 + 删除玩家实体）；管理员可删除账户/变更角色（`PATCH /admin/accounts/{id}`，变更即吊销旧凭据强制重登）
-- **对玩法包的影响**：注销 = 身份化实体被**受控删除**（非玩法包 remove_entity 通道），会触发 `on_entity_removed` / `on_world_edited`——需要按实体清理自身数据的包订阅该事件（如背包类包的持有数据、说话类包的广播冷却）
+- **对玩法包的影响**：注销 = **绑定了该账户的实体**被**受控删除**（非玩法包 `remove_entity` 通道），会触发 `on_entity_removed` / `on_world_edited`——需要按实体清理自身数据的包订阅该事件（如背包类包的持有数据、说话类包的广播冷却）
+
+> **内核没有"身份"这个概念**（v2 / D42，已删除 `IDENTITY_KINDS` / `is_identity()`）。
+> 唯一相关的判据是一个**数据事实**：实体**带 `core:account`** = 绑着账户 →
+> `remove_entity` 拒绝、`delete_map` / `copy_map` / `delete_location` 一起护着它。
+> 所以**别再造"player 实体"**：`kind="player"` 现在只是**一个没人注册的标签名**，
+> 不带任何特权；玩家实体就是"身份服务创建、带 `core:account` 的那个普通实体"。
 
 ## 5. 原语、查询、顺序与变更（D11 / G14 / D26–D28）
 
@@ -515,8 +521,9 @@ name, desc, uid = entity.name, entity.desc, entity.user_id
 - `entity.name` / `entity.desc` / `entity.user_id` 是**只读 property（派生视图）**，
   缺失依次兜底为 `id` 前 8 位 / `""` / `None`——**别再给它们赋值**（没有 setter），
   玩法包也**写不进** `core:info` / `core:account`（`core:` 保留命名空间，写入直接报错）
-- **位置（`map_id` / `row` / `col`）与能力（`kind` / `tags`）当前仍是表列 / 字段**——
-  `core:position` / `core:player` 未落地（第 2 期）
+- **位置（`core:position`）已是组件**（v10）；**能力（`kind` / `tags`）当前仍是表列**——
+  第 2 期折叠（D41：能力 = 组件的存在）设计已定、待实施；**`core:player` 已取消**
+  （D42：身份概念整个删除，不引入该组件）
 
 ### 组件名 = `source:name` 信封
 
@@ -533,17 +540,20 @@ entity.components == {
 | source | 说明 |
 |---|---|
 | `core` | **内核保留命名空间**（仅内核可写）——玩法包写入**直接报错**（`WorldError`）；它的写入还**绕过分派表**（玩法包拦不住） |
-| `local` | 编辑器 / 人手写的本地命名空间——管理端编辑虚构组件的落点（保证"信封必填"无例外） |
-| `<play_id>` | 该玩法包自己的组件——**推荐用自己的 play_id 作 source**，天然不撞名 |
+| `local` | 编辑器 / 人手写的本地命名空间——管理端编辑虚构组件的落点（保证"信封必填"无例外）。**玩法包当前也写得进**（D43 暂不收紧） |
+| `<自己的 play_id>` | 自己的组件——**推荐用它作 source**，天然不撞名 |
+| `<别人的 play_id>` | **写不进**（D43：包名写在键里就是真规则，不是命名约定）。要影响别人的数据走 `call_service`（让对方自己写）或事件；**声明期**的跨包扩展走 `add_tag_fields`（"扩展可以，但要留痕"） |
 
 - 组件名**必须含一个冒号**（`source:name`），字符集 = 字母 / 数字 / `_` / `.` / `-`；
   非法名**报错**，不静默兜底
-- **内核组件共 3 个**（v9）：`core:info`（`name` / `desc`）、`core:account`（`user_id`）、
-  `core:perception`（`invisible` / `see_invisible`，见下）。**位置（`core:position`）与
-  身份（`core:player`）还没落地**——位置仍是 `map_id` / `row` / `col` 表列，身份仍看 `kind`
+- **内核组件共 4 个**（v10）：`core:info`（`name` / `desc`）、`core:account`（`user_id`）、
+  `core:position`（`map_id` / `row` / `col`，可选，见 §「不在世界上」）、`core:perception`
+  （`invisible` / `see_invisible`，见下）。**能力（`kind` / `tags`）仍是表列**——第 2 期
+  折叠（D41）设计已定、待实施
 - **`core:` 读得到、写不了**：`get_component` / `list_components` 读 `core:` 不受限；
-  写只有内核能做——**但正当能力走窄口**：目前只有 `core:perception` 有玩法包入口
-  **`api.set_perception(...)`**（见下）；`core:info` / `core:account` 由内核侧写入
+  写只有内核能做——**但正当能力走窄口**：目前有两个入口
+  **`api.set_perception(...)`** 与 **`api.clear_position(...)`**（见下）；`core:info` /
+  `core:account` 由内核侧写入
   （`place_entity(name=…, desc=…)`、身份服务、管理端 `PATCH /admin/entities/{id}`），
   玩法包不直接改——**名字是内核文案**（lint / 删除保护 / 日志），D40
 
@@ -621,7 +631,7 @@ await api.remove_data(entity_id, "gold", component="local:stat")    # 删字段�
   这个**窄口受控入口**——只收 `invisible` / `see_invisible` 两个布尔字段
   （白名单之外的键直接报错；空 dict 幂等无操作）。
   这正是"规则不放宽（`core:` 仍只有内核能直写）、能力不丢失"的平衡点，
-  与 D20"NPC 升格必须经身份服务这个受控通道"是同一种做法。
+  与 `clear_position`（位置）同一种做法：**受控窄口入口**，而不是把命名空间打开。
 
   ```python
   await api.set_perception(npc.id, {"invisible": True})   # 藏起来
@@ -681,7 +691,9 @@ await api.remove_data(entity_id, "gold", component="local:stat")    # 删字段�
 | 广播冷却 | kv `broadcast_cd:<entity_id>`——原内置 social 包 |
 
 **现在有归属机制了**：组件名自带 source（§10）——包自己的组件用
-`<自己的 play_id>:<名字>`，`local:` 留给编辑器 / 人手写，`core:` 是内核保留。
+`<自己的 play_id>:<名字>`，`core:` 是内核保留，**写别人的 `<play_id>:` 直接报错**（D43）。
+`local:` 的定位是"编辑器 / 人手写"，但**当前玩法包也写得进**（D43 只拦"别人的前缀"，
+收紧 `local:` 留到以后单独一步）——**新代码建议写自己的 play_id**，归属一眼可见。
 **撞名由命名空间解决**，所以本表的意义从"防撞名"降级为"让人找得到"：写通用数据
 （金币、精力这类跨包会互相认的字段）时，按本表用**同一个组件名 + 字段名**，
 别的包才认得出你的数据；只给自己用的数据随便放自己的组件，不必登记。

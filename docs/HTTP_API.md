@@ -86,12 +86,12 @@
 | POST | `/admin/maps` | 新建（`{id, name, description?, timezone?, spawn_row?, spawn_col?, visible?}`） |
 | GET | `/admin/maps/{map_id}` | 详情：`{map, locations, entities}`；`entities[].capabilities` = 合并能力（D19，按世界过滤后的真相）。**实体形态同 `/state`**（名字在 `components["core:info"]`，无顶层 `name` / `desc` / `user_id`）。⚠ 这是**地图视角**：按 `core:position` 裁，**不在世界上的实体不在结果里**（要它们用 `GET /admin/entities`） |
 | PATCH | `/admin/maps/{map_id}` | 元数据局部更新；⚠ `spawn_row` / `spawn_col` **需成对提供**（只给其一，另一个按 0 落库） |
-| DELETE | `/admin/maps/{map_id}` | 删除（图上有身份化实体 → 拒绝，G2） |
-| POST | `/admin/maps/{map_id}/copy` | 复制另存（`{new_id, name?, world_id?, folder_id?, with_entities}`；身份化实体永不复制） |
+| DELETE | `/admin/maps/{map_id}` | 删除（图上还有**绑定了账户**的实体 → 拒绝，G2 / D42） |
+| POST | `/admin/maps/{map_id}/copy` | 复制另存（`{new_id, name?, world_id?, folder_id?, with_entities}`；**绑定了账户的实体永不复制**，D42） |
 | POST | `/admin/maps/{map_id}/move` | 搬家（`{world_id?, folder_id?, sort?}`；跨世界自动落世界根） |
 | GET | `/admin/lint[?map_id=][&world_id=]` | 地图体检（死连接 / 孤立地块 / 出生点落空 / 实体悬空 / 未归属世界 / 空图，错误+提示两级） |
 | POST | `/admin/locations` | 建/改地块（`{map_id, row, col, name, description?}`；`description` 缺省 = **清空**；文案必须是结构化 JSON，纯文本 → 400） |
-| DELETE | `/admin/locations` | 删地块（请求体 `{map_id, row, col}`；身份化实体在场 → 拒绝） |
+| DELETE | `/admin/locations` | 删地块（请求体 `{map_id, row, col}`；**绑定了账户的实体**在场 → 拒绝，D42） |
 | POST | `/admin/locations/move` | 原子移动地块（`{map_id, row, col, to_row, to_col}`：自身坐标 + 全图指向它的连接 + 其上实体） |
 | POST | `/admin/connections` | 更新一条出口槽（`{map_id, row, col, direction, enabled, paths}`，**整槽替换**，两个字段都要给全；路径 `label` 同文案格式） |
 | GET | `/admin/templates[?scope=location\|entity]` | 模板清单（`source` = play / local） |
@@ -101,7 +101,7 @@
 | GET | `/admin/kinds[?category=]` | 类型 + 标签名词表（`kinds` / `types`(隐式) / `tags`(显式)，含字段 schema、来源包） |
 | GET | `/admin/entities[?absent=0\|1][&world_id=]` | **全部实体**（跨地图）——`entities[].capabilities` 同地图详情。**这是唯一能看见"不在世界上的实体"的入口**（D36：位置是可选的 `core:position`，玩家下线 / 物品在容器里 / 尚未投放的 NPC 都属此类；地图详情按坐标裁，一个都看不见）。`absent=1` 只列不在世界上的、`absent=0` 只列在世界的；响应另带 `total` / `absent` 计数 |
 | POST | `/admin/entities` | 新建实体（`{kind, name?, desc?, components?, tags?, map_id?, row?, col?}`）。**位置三参数要么全给、要么全不给**：给了 = 放进世界（写 `core:position`）；**一个都不给 = 造一个不在世界上的实体**；只给一部分 → 400（"半截位置"会被兜底成 `""` / `0`，把"忘了给"变成静默出现在 (0,0) 的实体）。`name` / `desc` 是**输入便利**：折进 `core:info` 组件，实体上没有这两列（v9）。`components` = 组件名 → 数据，组件名须为 `source:name` 信封 |
-| PATCH / DELETE | `/admin/entities/{entity_id}` | 改实体（`name` / `desc` / `components`（整体替换）/ `tags` / `kind`；身份化实体的 kind 锁定，D20）/ 删除（身份化实体拒绝）。`name` / `desc` 折进 `core:info` 组件——**只动这两个键**，不碰同组件其它数据（传空 `desc` = 删该键，`name` 随即回落到 `id` 前 8 位兜底）；`components` 是**整体替换**，**建议不要在同一次 PATCH 里混用**两者（整体替换会盖掉显式键以外的组件数据） |
+| PATCH / DELETE | `/admin/entities/{entity_id}` | 改实体（`name` / `desc` / `components`（整体替换）/ `tags` / `kind`——**kind 只是标签，可自由改**，D42 起没有"身份实体类型锁定"了）/ 删除（**绑定了账户的实体**拒绝，D14 / D42）。`name` / `desc` 折进 `core:info` 组件——**只动这两个键**，不碰同组件其它数据（传空 `desc` = 删该键，`name` 随即回落到 `id` 前 8 位兜底）；`components` 是**整体替换**，**建议不要在同一次 PATCH 里混用**两者（整体替换会盖掉显式键以外的组件数据） |
 
 ### 2.5 账户 / 凭据 / 邀请码
 
