@@ -842,6 +842,8 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 > 实体可以合法地不属于任何地块，`list_entities` / `query_entities` **默认跳过**它们。
 > **第 2 期只剩一件**：`kind` / `tags` 折叠为组件 + `core:player`——**卡在 G47**
 > （能力名要不要遵守 `source:name` 信封尚未决定，见 §12.4 / GAPS G47）。
+> **2026-10-14 裁定：先别动能力面，保持现状**——本期**暂缓而非撤销**：数据面已完整，
+> 能力面保持旧模型不影响"实体可以带任意组件"这一核心诉求，想清楚再开。
 > **第 3 期已落地**：内核移除物品（D37，见 §12.0 / §12.8——`ItemDef` / `items` 表 /
 > 7 个注册与落库 API / `item_id` 槽位 / `on_item_used` 事件全删）。
 > **实施跟踪**：`GAPS.md` G40；**影响面实测**：内核 105 处 / 前端 74 处 / 测试约 263 处。
@@ -854,7 +856,7 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 | **1b** | **阻挡机制整体移除**（D34 的一半，原排第 2 期） | ✅ **已落地**（`block_move` / `_is_blocking` / `_blocker_at` / `core:state` 全删，见 12.7） |
 | **1c** | **名字 / 描述 / 账户绑定进组件**（原属第 2 期）：`core:info`（`name` / `desc`）+ `core:account`（`user_id`） | ✅ **已落地**（表结构 **v9**、`entities` **10 列**——`name` / `desc` / `user_id` 三列删除；`to_dict()` 不再给顶层三键，见 12.3 / 12.4） |
 | **1d** | **位置进组件**：`core:position`（`map_id` / `row` / `col`）+ **D36"不在任何地方"**（原属第 2 期） | ✅ **已落地**（表结构 **v10**、`entities` **7 列**——位置三列删除；`Entity.map_id` / `row` / `col` 变**只读 property**（缺失 → `None`，**不是** `""` / `0`），新增 `has_position()` / `pos_key()` / `require_position()`；`list_entities` / `query_entities` 默认 `include_absent=False` 跳过无位置实体；`move()` 对无位置实体报错"实体不在任何地块"；前端位置读点收进 `entity.js` 的 `entityPosition()` / `positionLabel()` / `positionSortKey()`） |
-| **2** | `kind` / `tags` 折叠为组件 + `core:player` | ⏸ **未做**（能力面仍是 D18/D19/D21 的标签模型，身份仍看表列 `kind`）。⚠ **原排在本期的 `core:info` / `core:account` 已随 1c 落地、`core:position` 已随 1d 落地**，所以本期**只剩能力面折叠 + `core:player`**，且**卡在 G47**（能力名与 `source:name` 信封的关系未决——定了才能动） |
+| **2** | `kind` / `tags` 折叠为组件 + `core:player` | ⏸ **暂缓**（2026-10-14 用户裁定「先别动能力面，保持现状」——能力面仍是 D18/D19/D21 的标签模型，身份仍看表列 `kind`，`core:player` 不做，D35 暂缓而非撤销）。⚠ **原排在本期的 `core:info` / `core:account` 已随 1c 落地、`core:position` 已随 1d 落地**，所以本期**只剩能力面折叠 + `core:player`**，而它**卡在 G47**（能力名与 `source:name` 信封的关系未决——定了才能动；两条路都自洽，但组件键一旦落库，改命名 = 又一次全量数据作废，所以值得先想清楚） |
 | **3** | 内核移除物品（D37） | ✅ **已落地**（落地面全删：`ItemDef` / `items` 表 / 7 个注册与落库 API（`register_item_def` / `save_item_def` / `add_item_fields` / `get_item_def` / `list_item_defs` / `delete_item_def` / `flush_item_defs`）/ `InteractionRequest.item_id` 槽位 / `on_item_used` 内核事件——见 12.8） |
 | **4** | 索引（G42） | ⏸ 不做（可无限期推迟） |
 
