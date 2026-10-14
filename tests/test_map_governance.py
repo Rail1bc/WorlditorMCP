@@ -304,14 +304,16 @@ def test_copy_map_rewrites_same_map_targets(tmp_path):
 
 
 def test_copy_map_entities_optional_and_players_excluded(tmp_path):
-    """实体可选带过去；身份化实体（玩家）永不复制。"""
+    """实体可选带过去；**绑定了账户的实体永不复制**（D42：判据 core:account）。"""
 
     async def fn():
         engine = await _engine(tmp_path)
         try:
             await _world_with_two_maps(engine)
             await engine.place_entity("merchant", "m1", 0, 0, name="商贩")
-            await engine.place_entity("player", "m1", 0, 0, name="小明")
+            await engine.place_entity(
+                "player", "m1", 0, 0, name="小明", user_id="acct_1"
+            )
 
             await engine.copy_map("m1", "no_ent")
             assert list(engine.list_entities(map_id="no_ent")) == []
@@ -878,7 +880,13 @@ def test_admin_location_move_endpoint(tmp_path):
 
 
 def test_identity_entity_kind_is_locked(tmp_path):
-    """基底类型可改，但**身份化实体**的类型由身份服务管（D20）——编辑器改不动。"""
+    """（D42 改判：**这条锁已删除**）基底类型只是标签，谁都能改，包括玩家实体。
+
+    原规则（D20）：身份化实体的类型由身份服务管，编辑器改不动。
+    D42 删掉身份概念后它没有依据了——而且原检查**只锁了一半**：
+    拦得住"玩家改成别的"，拦不住"别的改成 player"，后者会让实体立刻变成
+    `remove_entity` 删不掉的东西（编辑器里点一下类型就锁死）。这条一并修掉。
+    """
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -887,16 +895,20 @@ def test_identity_entity_kind_is_locked(tmp_path):
             npc = await engine.place_entity("merchant", "m1", 0, 0, name="NPC")
             await engine.update_entity(npc.id, kind="sign")
             assert npc.kind == "sign"
-            player = await engine.place_entity("player", "m1", 0, 1, name="小明")
-            try:
-                await engine.update_entity(player.id, kind="statue")
-            except WorldError as e:
-                assert "身份服务" in str(e)
-            else:
-                raise AssertionError("玩家基底类型居然能改")
-            # 同名重复设置 = 不报错（幂等）
-            await engine.update_entity(player.id, kind="player")
-            assert player.kind == "player"
+            # 绑了账户的实体也能改 kind（D42 前会拒绝）——kind 不再是判据
+            player = await engine.place_entity(
+                "player", "m1", 0, 1, name="小明", user_id="acct_1"
+            )
+            await engine.update_entity(player.id, kind="statue")
+            assert player.kind == "statue"
+            # **但红线仍在**：绑账户的实体依然不能被 remove（判据是 core:account）
+            with pytest.raises(WorldError, match="绑定了账户"):
+                await engine.remove_entity(player.id)
+            # 反向升格不再是"锁死"（D42 前：普通实体改成 player 就删不掉了）
+            wolf = await engine.place_entity("wolf", "m1", 1, 0, name="狼")
+            await engine.update_entity(wolf.id, kind="player")
+            await engine.remove_entity(wolf.id)  # 没绑账户 → 照常能删
+            assert engine.get_entity(wolf.id) is None
         finally:
             await engine.terminate()
 

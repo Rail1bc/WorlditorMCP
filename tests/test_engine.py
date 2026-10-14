@@ -135,7 +135,7 @@ def test_place_entity(tmp_path):
 
 
 def test_remove_entity(tmp_path):
-    """移除实体：实体消失 + on_entity_removed 事件；身份化实体拒绝（D14）。"""
+    """移除实体：实体消失 + on_entity_removed 事件；**绑定了账户**的实体拒绝（D14 / D42）。"""
 
     async def fn(engine: WorldEngine, clock=None):
         await seed_test_world(engine)  # 中央广场 (0,0)
@@ -149,11 +149,24 @@ def test_remove_entity(tmp_path):
         assert removed == [npc.id]
         with pytest.raises(WorldError, match="实体不存在"):
             await engine.remove_entity(npc.id)
-        # D14：身份化实体（玩家/agent）不可被玩法包移除
-        player = await engine.place_entity("player", "default", 0, 0, name="小明")
-        with pytest.raises(WorldError, match="身份化"):
-            await engine.remove_entity(player.id)
-        assert engine.get_entity(player.id) is not None
+        # D42：判据是**账户绑定**（core:account），不是 kind——
+        # 所以 kind=player 但没绑账户的实体**可以**被移除
+        loose = await engine.place_entity("player", "default", 0, 0, name="野玩家")
+        await engine.remove_entity(loose.id)
+        assert engine.get_entity(loose.id) is None
+        # 绑了账户的（不管 kind 叫什么）拒绝移除
+        bound = await engine.place_entity(
+            "player", "default", 0, 0, name="小明", user_id="acct_1"
+        )
+        with pytest.raises(WorldError, match="绑定了账户"):
+            await engine.remove_entity(bound.id)
+        assert engine.get_entity(bound.id) is not None
+        # 内核受控通道（账户注销）能删，且只接受绑账户的实体
+        stray = await engine.place_entity("wolf", "default", 0, 1, name="另一只狼")
+        with pytest.raises(WorldError, match="只支持绑定了账户"):
+            await engine.delete_account_entity(stray.id)
+        await engine.delete_account_entity(bound.id)
+        assert engine.get_entity(bound.id) is None
 
     _run(_scenario(tmp_path, fn))
 
@@ -162,7 +175,11 @@ def test_remove_entity(tmp_path):
 
 
 def test_move_identity_entity(tmp_path):
-    """身份化实体路径移动（v3 语义）：广场 (0,0) 向北到步行街南街口。"""
+    """路径移动（v3 语义）：广场 (0,0) 向北到步行街南街口。
+
+    D42：**不再限"只有玩家能走"**（身份概念已删）——`kind="door"` 的实体同样能走；
+    "谁能移动"归能力（组件声明 / override / disable，D11）。
+    """
 
     async def fn(engine: WorldEngine, clock=None):
         await install_demo_world(engine)  # 广场 (0,0) 北上是步行街·南街口
@@ -170,10 +187,10 @@ def test_move_identity_entity(tmp_path):
         scene = await engine.move(player.id, "up")
         assert (scene.map_id, scene.row, scene.col) == ("default", -1, 0)
         assert scene.location.name == "步行街·南街口"
-        # 非身份化实体不能路径移动
+        # 非玩家实体也能走（D42 前这里会报"只有玩家/agent 实体可以按路径移动"）
         door = [e for e in engine.list_entities() if e.kind == "door"][0]
-        with pytest.raises(WorldError, match="只有玩家/agent"):
-            await engine.move(door.id, "up")
+        await engine.move_entity(door.id, "default", 0, 0)
+        assert (await engine.move(door.id, "up")).location.name == "步行街·南街口"
         # 方向非法
         with pytest.raises(WorldError, match="方向"):
             await engine.move(player.id, "north")
@@ -531,7 +548,7 @@ async def _bad_tick_handler(api, dt: float):
 
 
 def test_delete_location_cascade(tmp_path):
-    """删除地块：级联删其上实体 + 全图引用清理；有身份化实体在场拒绝。"""
+    """删除地块：级联删其上实体 + 全图引用清理；**有绑定了账户的实体在场**拒绝（D42）。"""
 
     async def fn(engine: WorldEngine, clock=None):
         await install_demo_world(engine)  # 告示牌 + 广场 (0,0) / (-1,0) / (1,0)
@@ -544,14 +561,21 @@ def test_delete_location_cascade(tmp_path):
         # 引用清理：广场 (0,0) 的北向路径应已移除
         plaza = engine.get_location("default", 0, 0)
         assert plaza.connections["up"].paths == []
-        # 有身份化实体在场拒绝
-        player = await engine.place_entity("player", "default", 1, 0, name="小明")
+        # 有**绑定了账户**的实体在场拒绝（D42：判据是 core:account，不是 kind）
+        player = await engine.place_entity(
+            "player", "default", 1, 0, name="小明", user_id="acct_1"
+        )
         with pytest.raises(WorldError, match="无法删除"):
             await engine.delete_location("default", 1, 0)
         await engine.move_entity(
             player.id, "default", 0, 0
-        )  # 身份化实体移走（不可移除）
+        )  # 绑账户的实体移走（不可被 remove）
         await engine.delete_location("default", 1, 0)
+        # 反面对照：kind=player 但**没绑账户**的实体不挡删地块（D42 前会白挡）
+        await engine.create_location("default", 5, 5, "空地")
+        loose = await engine.place_entity("player", "default", 5, 5, name="野玩家")
+        await engine.delete_location("default", 5, 5)
+        assert engine.get_entity(loose.id) is None
 
     _run(_scenario(tmp_path, fn))
 

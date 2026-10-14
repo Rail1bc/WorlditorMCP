@@ -340,8 +340,8 @@ class IdentityService:
     async def delete_account(self, account_id: str) -> None:
         """永久注销账户（管理员 / 本人通道共用）。
 
-        级联：账户行 + 全部凭据（吊销）+ 身份化实体（受控删除，D14），
-        玩家实体删除会触发 on_entity_removed / on_world_edited（玩法包可响应清理）。
+        级联：账户行 + 全部凭据（吊销）+ **绑定了该账户的实体**（受控删除，D14 / D42），
+        实体删除会触发 on_entity_removed / on_world_edited（玩法包可响应清理）。
 
         Raises:
             IdentityError: 账户不存在。
@@ -353,7 +353,7 @@ class IdentityService:
             await self._engine.store.revoke_tokens_of_account(account_id)
             entity = self._engine.identity_entity_of(account_id)
             if entity is not None:
-                await self._engine.delete_identity_entity(entity.id)
+                await self._engine.delete_account_entity(entity.id)
             await self._engine.store.delete_account(account_id)
 
     async def set_account_role(self, account_id: str, role: str) -> dict:
@@ -433,7 +433,7 @@ class IdentityService:
         ⚠️ v2 / D36 的坑（1d 落地时踩到）：这里原本写的是 `list_entities()`，而那
         从第 1d 期起**默认只返回"在世界上"的实体**。于是一个**下线玩家**（玩法包
         `clear_position` 过，位置组件被摘掉）在登录时会被判成"没有实体"→
-        `login()` 走 `_materialize()` **又造一个玩家实体**：同一账户两个身份化实体，
+        `login()` 走 `_materialize()` **又造一个玩家实体**：同一账户两个绑账户实体，
         旧的成了孤儿（仍绑着账户、仍不可被 `remove_entity` 删），账户页则显示成"没有实体"。
 
         这正是 D36 那类"默认值改变语义"的读点——**"按账户找实体"与位置无关**，

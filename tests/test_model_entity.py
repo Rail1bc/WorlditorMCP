@@ -41,7 +41,7 @@ def test_entity_from_dict_ok():
     assert e.has_position() is True
     assert e.component("local:stat") == {"gold": 5}
     assert e.component("local:missing") == {}  # 缺失组件 → 空 dict
-    assert e.is_identity() is False
+    assert e.is_account_bound() is True  # D42：判据是 core:account，不是身份
     # 名字的兜底语义：没有 core:info → id 前 8 位
     bare = Entity.from_dict(
         {"id": "0123456789abcdef", "kind": "k", "row": 0, "col": 0, "map_id": "m"}

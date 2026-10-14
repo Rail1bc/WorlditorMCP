@@ -11,7 +11,7 @@ from typing import Any
 
 from ..engine import WorldEngine
 from ..errors import WorldError
-from ..model import is_core_component
+from ..model import COMPONENT_LOCAL, is_core_component
 
 
 class WorlditorPlayAPI:
@@ -316,9 +316,24 @@ class WorlditorPlayAPI:
     # 不依赖包自觉；读（get_component / list_components）不受限。
 
     def _guard_component(self, component: str) -> str:
+        """组件写入的命名空间守卫（D33 / D43）。
+
+        - `core:` —— 内核保留，玩法包一律拒写（D33）；
+        - **`<别人的 play_id>:` —— 拒写**（D43）：包名写在键里就该是真规则，
+          不能只是"命名约定"。要影响别人的组件，走 `call_service`（让对方自己写）、
+          事件，或在**声明期**用 `add_tag_fields` 显式登记扩展（"扩展可以，但要留痕"）；
+        - `<自己的 play_id>:` 与 `local:` —— 可写（`local:` **暂不收紧**，D43：
+          夹具与文档例子都在写它，收紧留到以后单独一步）。
+        """
         if is_core_component(component):
             raise WorldError(
                 f"core: 是内核保留的组件命名空间，玩法包不得写入（{component}）"
+            )
+        source = str(component).split(":", 1)[0]
+        if source not in (COMPONENT_LOCAL, self.play_id):
+            raise WorldError(
+                f"{source}: 是别的玩法包的命名空间，本包（{self.play_id}）不得写入"
+                f"（{component}）——要影响对方的数据请走 call_service 或事件"
             )
         return component
 
@@ -556,7 +571,7 @@ class WorlditorPlayAPI:
         components: dict | None = None,
         tags: list[str] | tuple[str, ...] | None = None,
     ):
-        """放置实体（spawn；身份化实体不可被 remove，D14）。
+        """放置实体（spawn；绑定了账户的实体不可被 remove，D14 / D42）。
 
         ``tags`` 为实例级标签（D18）——刷怪笼包要"生成一个带刷怪能力的实体"
         就是 ``place_entity("slime", ..., tags=["spawner"])``。
@@ -580,7 +595,7 @@ class WorlditorPlayAPI:
         )
 
     async def remove_entity(self, entity_id: str) -> None:
-        """移除实体（despawn；身份化实体被拒绝，D14）。"""
+        """移除实体（despawn；**绑定了账户的实体被拒绝**，D14 / D42）。"""
         await self._engine.remove_entity(entity_id)
 
     async def set_tags(self, entity_id: str, tags: list[str]) -> None:

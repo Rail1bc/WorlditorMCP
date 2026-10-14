@@ -33,7 +33,7 @@ async def _engine(tmp_path: Path) -> WorldEngine:
 
 
 def test_delete_map_cascade(tmp_path):
-    """delete_map：级联删地块/实体/归属；图上玩家在场拒绝。"""
+    """delete_map：级联删地块/实体/归属；图上有**绑定了账户**的实体拒绝（D42 判据）。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -43,9 +43,11 @@ def test_delete_map_cascade(tmp_path):
             await engine.create_location("raid1", 1, 0, "终点")
             npc = await engine.place_entity("wolf", "raid1", 0, 0, name="狼")
             await engine.assign_map("raid1", "default")
-            # 图上玩家在场 → 拒绝
-            player = await engine.place_entity("player", "raid1", 0, 0, name="小明")
-            with pytest.raises(WorldError, match="玩家/agent"):
+            # 图上绑账户的实体在场 → 拒绝（D42：判据是 core:account，不是 kind）
+            player = await engine.place_entity(
+                "player", "raid1", 0, 0, name="小明", user_id="acct_1"
+            )
+            with pytest.raises(WorldError, match="绑定了账户"):
                 await engine.delete_map("raid1")
             # 玩家离开后可删
             await engine.move_entity(player.id, "default", 0, 0)

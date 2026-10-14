@@ -1,8 +1,8 @@
 """世界引擎：世界底子的核心动作（协议无关，见 DESIGN.md）。
 
 设计要点：
-- **实体统一模型**：玩家/agent/布景实体都是 ``Entity``（entities 表）；
-  玩家/agent 为身份化实体（可认证绑定、位置持久化）。
+- **实体统一模型**：玩家/布景实体都是 ``Entity``（entities 表）；
+  玩家实体 = 带 ``core:account`` 的普通实体（可认证绑定、位置持久化）——**D42 起没有"身份"这个概念**。
 - **物品**：**不在内核**（v2 / D37 取代 D8）——定义与持有都下沉玩法包；
   物品类型用组件声明表达，实例用"实体 + 组件"。见 model.py 顶部说明。
 - **交互**：handler 命令式调用内核原语（D12，无 effects 清单）。
@@ -23,7 +23,7 @@
 - 事件总线区（emit / SSE 推送 / tick 循环）
 - 只读查询（实体 / 地图 / 世界 / 组织）
 - 世界组织 CRUD（worlds / folders / 归属）
-- 实体原语（place / remove / 身份化受控删除）
+- 实体原语（place / remove / 账户注销的受控删除）
 - 移动区（move / move_entity / 默认实现）——**无阻挡检查**（v2/D34 已整体移除）
 - 组件与字段区（components / 组件原语 / set·get·remove_data / 内核协议受控入口）
 - 场景构建（路径解析 / SceneView）
@@ -56,7 +56,6 @@ from .model import (
     DEFAULT_EVENT_PHASE,
     DIRECTIONS,
     EVENT_PHASES,
-    IDENTITY_KINDS,
     WORLD_EVENTS,
     ConnectionPath,
     Entity,
@@ -86,7 +85,8 @@ from .store import DEFAULT_WORLD_ID, WorldStore
 logger = logging.getLogger("worlditor")
 
 TICK_GRANULARITY_SECONDS = 1.0
-# IDENTITY_KINDS 权威定义在 model.py（v0.2.0 起只有 player）
+# D42：内核**没有"身份"这个概念**——D14 的红线判据是"**绑定了账户**"（`core:account`），
+# 见 `Entity.is_account_bound()`。原 `IDENTITY_KINDS` 已整个删除。
 
 # 哨兵：update 类动作用于区分「参数未提供（不变）」与「显式传 None（清空/重置）」
 _UNSET = object()
@@ -2179,7 +2179,7 @@ class WorldEngine:
     ) -> bool:
         """地图对某身份的可见性（G1）。
 
-        public 全可见；private 仅该图上有自己身份化实体的玩家可见
+        public 全可见；private 仅该图上有**自己那个实体**的玩家可见
         （"在场即可见"，零名单概念）+ admin 全见。
         """
         m = self.store.maps.get(map_id)
@@ -2586,32 +2586,39 @@ class WorldEngine:
     async def remove_entity(self, entity_id: str) -> None:
         """移除实体（地图编辑，admin；B8）。
 
-        D14：身份化实体（玩家/agent）**不可**被玩法包移除——账户注销走
-        ``delete_identity_entity``（身份服务受控通道）。
+        D14 / D42：**绑定了账户的实体**（带 ``core:account``）**不可**被玩法包移除
+        ——账户注销走 ``delete_account_entity``（身份服务受控通道）。
+        判据从"身份化"（`kind == "player"`）换成"账户绑定"，理由见
+        ``Entity.is_account_bound()``：那是真正起作用的事实，也更准。
 
         Raises:
-            WorldError: 实体不存在 / 身份化实体。
+            WorldError: 实体不存在 / 绑定了账户。
         """
         async with self._lock:
             entity = self._require_entity(entity_id)
-            if entity.kind in IDENTITY_KINDS:
-                raise WorldError("身份化实体（玩家/agent）不可被移除（注销走身份服务）")
+            if entity.is_account_bound():
+                raise WorldError(
+                    "绑定了账户的实体不可被移除（账户注销走身份服务，D14 / D42）"
+                )
             await self.store.delete_entity(entity_id)
             await self._emit("on_entity_removed", entity)
             await self._emit(
                 "on_world_edited", {"op": "remove_entity", "entity_id": entity_id}
             )
 
-    async def delete_identity_entity(self, entity_id: str) -> None:
-        """（身份服务受控）删除身份化实体：账户永久注销专用，发事件。
+    async def delete_account_entity(self, entity_id: str) -> None:
+        """（身份服务受控）删除**绑定了账户**的实体：账户永久注销专用，发事件。
 
-        与 remove_entity 的区别：允许 kind=player/agent（D14 的受控豁免——
-        调用方是内核身份服务，非玩法包权限）。
+        与 ``remove_entity`` 的区别：允许账户绑定的实体（D14 的受控豁免——调用方是
+        内核身份服务，非玩法包权限；**玩法包拿不到这条通道**，`play/api.py` 不导出它）。
+
+        原 `delete_identity_entity`（D42 改名）："身份"这个概念已删除，
+        它实际管的一直是"账户绑定的实体"。
         """
         async with self._lock:
             entity = self._require_entity(entity_id)
-            if entity.kind not in IDENTITY_KINDS:
-                raise WorldError("只支持身份化实体")
+            if not entity.is_account_bound():
+                raise WorldError("只支持绑定了账户的实体（账户注销通道）")
             await self.store.delete_entity(entity_id)
             await self._emit("on_entity_removed", entity)
             await self._emit(
@@ -2619,7 +2626,11 @@ class WorldEngine:
             )
 
     def identity_entity_of(self, account_id: str):
-        """账户绑定的身份化实体（user_id == account_id；无则 None）。"""
+        """账户绑定的实体（`core:account.user_id == account_id`；无则 None）。
+
+        名字保留（调用方是身份服务与账户页），但它找的是**账户绑定**而不是"身份"
+        ——D42 之后内核没有身份这个概念。
+        """
         for entity in self.store.entities.values():
             if entity.user_id == account_id:
                 return entity
@@ -2631,19 +2642,23 @@ class WorldEngine:
         """路径移动（分派入口，D11；默认实现见 _move_default）。
 
         Raises:
-            WorldError: 实体不存在/非身份化、方向非法、无路径、能力被禁用。
-            （**不再有"被阻挡"**——v2/D34 已整体移除阻挡机制。）
+            WorldError: 实体不存在、方向非法、不在任何地块、无路径、能力被禁用。
+            （**不再有"被阻挡"**——v2/D34 已整体移除阻挡机制；
+            **也不再有"只有玩家能走"**——v2/D42 已删除身份概念。）
         """
         return await self._dispatch_primitive("move", entity_id, direction, path=path)
 
     async def _move_default(
         self, entity_id: str, direction: str, *, path: int | None = None
     ) -> SceneView:
-        """默认路径移动（死引用剔除 + 加权抽目标；可被覆盖，D11）。"""
+        """默认路径移动（死引用剔除 + 加权抽目标；可被覆盖，D11）。
+
+        D42：**不再限"只有玩家能走"**——身份概念已删除，"谁能移动"是**能力问题**
+        （组件声明 / 玩法包 override / disable，D11）。这也修掉了一处旧的不一致：
+        `move_entity`（传送）本来就不限身份。
+        """
         async with self._lock:
             entity = self._require_entity(entity_id)
-            if entity.kind not in IDENTITY_KINDS:
-                raise WorldError("只有玩家/agent 实体可以按路径移动")
             direction = _check_direction(direction)
             # D36：路径移动要求"必须在场"——不在世界上的实体没有地块可读
             key = entity.require_position()
@@ -3317,8 +3332,8 @@ class WorldEngine:
     ) -> Entity:
         """更新实体字段（admin 编辑；components/tags 整体替换）。
 
-        类型（基底 kind）可改，但**身份化实体的类型由身份服务管理**（D20）——
-        编辑器不能把玩家改成别的东西，也不能把别的东西改成玩家。
+        类型（基底 `kind`）可改——**D42 起它只是个标签**，没有任何身份含义
+        （原"身份化实体的类型由身份服务管理"整条删除，连带修掉反向升格洞）。
 
         v2 / D32（§12.4）：``name`` / ``desc`` 写在 ``core:info`` 里（★只动这两个键，
         不碰同一组件下的其它数据）；传空串等于把该键删掉（``name`` 随即回落到
@@ -3327,12 +3342,11 @@ class WorldEngine:
         async with self._lock:
             entity = self._require_entity(entity_id)
             if kind is not _UNSET:
-                new_kind = _clean_required(kind, "类型")
-                if entity.kind in IDENTITY_KINDS and new_kind != entity.kind:
-                    raise WorldError(
-                        "身份化实体的类型由身份服务管理（D20），不能在编辑器里改"
-                    )
-                entity.kind = new_kind
+                # D42：原来的"身份化实体类型锁定"已删除——身份概念没了，
+                # `kind` 只是个标签。**连带修掉一个实测到的洞**：原检查只拦
+                # "身份实体改走"，不拦"普通实体改成 player"，而后者会让实体
+                # 立刻变成 `remove_entity` 删不掉的东西（编辑器里点一下类型就锁死）。
+                entity.kind = _clean_required(kind, "类型")
             if components is not _UNSET:
                 entity.components = _clean_components(components)
             if name is not _UNSET or desc is not _UNSET:
@@ -3398,18 +3412,23 @@ class WorldEngine:
             return m
 
     async def delete_map(self, map_id: str) -> None:
-        """删除地图（G2：级联地块/实体/世界归属；图上身份化实体在场 → 拒绝）。
+        """删除地图（G2：级联地块/实体/世界归属；图上还有**绑定了账户**的实体 → 拒绝）。
+
+        D42：判据从 `kind == "player"` 换成 `core:account`——这条闸门真正想问的是
+        "这张图上还有绑着账户的人吗"（删了会让 token 悬空），而不是"有没有身份实体"。
 
         Raises:
-            WorldError: 地图不存在 / 图上仍有玩家/agent 实体。
+            WorldError: 地图不存在 / 图上仍有绑定了账户的实体。
         """
         async with self._lock:
             map_id = _clean_required(map_id, "地图 id")
             if map_id not in self.store.maps:
                 raise WorldError(f"地图不存在：{map_id}")
             for e in self.store.entities.values():
-                if e.map_id == map_id and e.kind in IDENTITY_KINDS:
-                    raise WorldError("地图上仍有玩家/agent 实体，无法删除")
+                if e.map_id == map_id and e.is_account_bound():
+                    raise WorldError(
+                        f"地图上仍有绑定了账户的实体「{e.name}」，无法删除"
+                    )
             await self.store.delete_map(map_id)
             await self._emit("on_world_edited", {"op": "delete_map", "map_id": map_id})
 
@@ -3428,7 +3447,7 @@ class WorldEngine:
         语义：
         - 同图目标（``map_id`` 空或等于源地图）→ 重写为"新地图自己"，副本内自洽；
         - 跨图目标（显式指向别的地图）→ 原样保留（那是作者写的跨图连线）；
-        - 身份化实体（玩家）**不复制**——人是人，不是布景；
+        - 绑定了账户的实体（`core:account`）**不复制**——人是人，不是布景（D42）；
         - 归属默认跟随源地图（同世界同组织节点，排到该节点末尾）。
         """
         async with self._lock:
@@ -3474,7 +3493,9 @@ class WorldEngine:
             if with_entities:
                 cloned_entities = []
                 for e in list(self.store.entities.values()):
-                    if e.map_id != map_id or e.kind in IDENTITY_KINDS:
+                    # D42：**绑定了账户的实体永不复制**（判据从 kind 换成 core:account）
+                    # ——复制一份"别人账户的实体"会造出两个都指向同一账户的实体
+                    if e.map_id != map_id or e.is_account_bound():
                         continue
                     # v2：位置也在 components 里（core:position）→ 深拷贝组件即复制位置；
                     # 但目标地图是**副本**，所以只把 map_id 指过去（行列不变）
@@ -3839,10 +3860,10 @@ class WorldEngine:
     async def delete_location(self, map_id: str, row: int, col: int) -> None:
         """删除地块：级联清除全图指向它的连接目标 + 删除其上实体（B8）。
 
-        拒绝删除有身份化实体占据的地块（玩家/agent 在场）。
+        拒绝删除**有绑定了账户的实体**占据的地块（D42：判据是账户绑定，不是身份）。
 
         Raises:
-            WorldError: 地块不存在 / 有身份化实体在场。
+            WorldError: 地块不存在 / 有绑定了账户的实体在场。
         """
         async with self._lock:
             map_id = self._map_arg(map_id)
@@ -3851,8 +3872,11 @@ class WorldEngine:
             if key not in self.store.loc_by_pos:
                 raise WorldError(f"地块不存在：({row}, {col})")
             for e in self.store.entities.values():
-                if e.pos_key() == key and e.kind in IDENTITY_KINDS:
-                    raise WorldError(f"有玩家「{e.name}」位于该地块，无法删除")
+                # D42：判据换成"绑定了账户"（这块地上还站着一个绑账户的人 → 别删）
+                if e.pos_key() == key and e.is_account_bound():
+                    raise WorldError(
+                        f"有绑定了账户的实体「{e.name}」位于该地块，无法删除"
+                    )
             await self._clear_targets_to(key)
             await self.store.delete_location(map_id, row, col)
             for e in list(self.store.entities.values()):

@@ -317,25 +317,33 @@ def test_http_admin_invite_revoke(tmp_path):
     _run(_scenario(tmp_path / "world.db", fn))
 
 
-# ---------- D14 身份化保护（内核层） ----------
+# ---------- D14 账户绑定保护（内核层，D42 改判据） ----------
 
 
-def test_remove_identity_entity_protected(tmp_path):
-    """remove_entity 拒绝身份化实体；delete_identity_entity 为受控通道。"""
+def test_remove_account_bound_entity_protected(tmp_path):
+    """remove_entity 拒绝**绑定了账户**的实体；delete_account_entity 为受控通道。
+
+    D42：判据从 `kind == "player"` 换成 `core:account`——所以这里额外验证
+    "kind=player 但没绑账户也能删"（旧判据会白挡）。
+    """
 
     async def fn(engine, identity):
         info = await identity.register_human("小明", "pass123")
-        with pytest.raises(WorldError, match="身份化"):
+        with pytest.raises(WorldError, match="绑定了账户"):
             await engine.remove_entity(info.entity_id)
         assert engine.get_entity(info.entity_id) is not None
         # 受控通道（身份服务）
         from worlditor_mcp.world import WorldError as WE
 
-        await engine.delete_identity_entity(info.entity_id)
+        await engine.delete_account_entity(info.entity_id)
         assert engine.get_entity(info.entity_id) is None
-        # 非身份化实体走受控通道 → 拒绝
+        # 没绑账户的实体走受控通道 → 拒绝
         wolf = await engine.place_entity("wolf", "default", 0, 0, name="狼")
-        with pytest.raises(WE, match="身份化"):
-            await engine.delete_identity_entity(wolf.id)
+        with pytest.raises(WE, match="只支持绑定了账户"):
+            await engine.delete_account_entity(wolf.id)
+        # kind=player 但没绑账户 → 普通实体，可以被 remove
+        loose = await engine.place_entity("player", "default", 0, 1, name="野玩家")
+        await engine.remove_entity(loose.id)
+        assert engine.get_entity(loose.id) is None
 
     _run(_scenario(tmp_path / "world.db", fn))

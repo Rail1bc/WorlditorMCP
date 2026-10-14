@@ -127,7 +127,68 @@ def test_component_write_primitives_are_dispatchable():
         assert name not in OVERRIDABLE_PRIMITIVES
 
 
-# ---------- 已移除面（D34 / D37）：防止静默回归 ----------
+# ---------- 已移除面（D34 / D37 / D42）：防止静默回归 ----------
+
+
+def test_identity_concept_is_gone():
+    """D42：内核**没有"身份"这个概念**——相关符号与闸门全部不存在。
+
+    红线没有消失，只是换了判据：**绑定了账户的实体（`core:account`）不可被移除**。
+    这条守卫盯的是"身份"这个名字有没有偷偷长回来（它承载过 `kind == "player"`）。
+    """
+    import worlditor_mcp.world.model as model_mod
+
+    for gone in ("IDENTITY_KINDS",):
+        assert not hasattr(model_mod, gone), f"{gone} 应已随 D42 移除"
+    assert not hasattr(Entity, "is_identity"), "is_identity 应已换名 is_account_bound"
+    assert hasattr(Entity, "is_account_bound")
+    assert not hasattr(WorldEngine, "delete_identity_entity"), (
+        "应已换名 delete_account_entity"
+    )
+    assert hasattr(WorldEngine, "delete_account_entity")
+
+
+def test_play_cannot_write_other_plays_namespace(tmp_path):
+    """D43：组件命名空间即写入边界——写**别人的** `<play_id>:` 报错。
+
+    `core:` 的保护从第 1 期就有（D33）；D43 把同一条道理推广到玩法包之间：
+    包名写在键里就该是真规则，不能只是"命名约定"。`local:` **暂不收紧**（D43）。
+    """
+
+    async def fn():
+        engine = WorldEngine(WorldStore(tmp_path / "world.db"))
+        await engine.initialize()
+        try:
+            await seed_test_world(engine)
+            e = await engine.place_entity("thing", "default", 0, 0, name="箱子")
+            api = WorlditorPlayAPI(engine, "worlditor_play_probe")
+
+            # 别人的命名空间 → 拒（四条写入路径都要拦）
+            for call in (
+                api.set_data(e.id, "x", 1, component="worlditor_play_other:stat"),
+                api.add_component(e.id, "worlditor_play_other:stat", {}),
+                api.set_component(e.id, "worlditor_play_other:stat", {}),
+                api.remove_component(e.id, "worlditor_play_other:stat"),
+                api.place_entity(
+                    "thing", components={"worlditor_play_other:stat": {"x": 1}}
+                ),
+            ):
+                with pytest.raises(WorldError, match="别的玩法包"):
+                    await call
+
+            # 自己的命名空间 → 放行
+            await api.set_data(e.id, "hp", 3, component="worlditor_play_probe:stat")
+            assert engine.get_component(e.id, "worlditor_play_probe:stat") == {"hp": 3}
+            # local: 暂不收紧（夹具与文档例子都在写它）→ 放行
+            await api.set_data(e.id, "gold", 1, component="local:stat")
+            assert engine.get_component(e.id, "local:stat") == {"gold": 1}
+            # core: 一如既往拒（D33 不变）
+            with pytest.raises(WorldError, match="内核保留"):
+                await api.set_component(e.id, CORE_INFO, {"name": "x"})
+        finally:
+            await engine.terminate()
+
+    _run(fn())
 
 
 def test_blocking_mechanism_is_gone():
@@ -443,7 +504,7 @@ def test_place_entity_without_position(tmp_path):
             # "必须在场"的路径要显式失败，而不是拿 None 继续算
             with pytest.raises(WorldError, match="不在任何地块"):
                 box.require_position()
-            # move 只对身份化实体开放（先查 kind），所以用一个**不在世界上的玩家**试
+            # move 对不在场实体报错（D42 起不再限身份，所以随便什么 kind 都行）
             # 方向只认 up/right/down/left（"north" 会被方向校验先拦下）
             ghost = await engine.place_entity("player", name="掉线的小明")
             with pytest.raises(WorldError, match="不在任何地块"):

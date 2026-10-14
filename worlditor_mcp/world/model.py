@@ -26,10 +26,6 @@ from .errors import WorldError
 
 DIRECTIONS = ("up", "right", "down", "left")
 
-# 身份化实体类型（v0.2.0：只有 player——人类玩家与 agent 不区分，都由身份服务创建；
-# 权威定义，engine 与 identity 共用）
-IDENTITY_KINDS = ("player",)
-
 # ---------- 组件信封（D32 / D33；DESIGN §12.2） ----------
 #
 # 组件是实体**唯一的数据单位**：实体 = id + components（D32，取代 D9 的"字段化"）。
@@ -55,7 +51,7 @@ CORE_INFO = "core:info"
 文案**（lint / 删除保护 / 世界日志）使用；客户端要不要用它显示归玩法（D40）。
 """
 CORE_ACCOUNT = "core:account"
-"""内核协议组件：``{user_id}``——身份化实体与账户的绑定（原 ``entities.user_id`` 列）。"""
+"""内核协议组件：``{user_id}``——实体与账户的绑定（原 ``entities.user_id`` 列）。"""
 
 ATTR_INVISIBLE = "invisible"
 """``core:perception`` 内的字段：实体对普通 viewer 隐藏（G1 可见性通道）。"""
@@ -318,7 +314,7 @@ class Location:
 class WorldMap:
     """地图：地图唯一，地块不唯一。timezone 为地图级时区，None = 服务器本地。
 
-    visible（G1）：public = 所有人可见；private = 仅该图上有自己身份化实体
+    visible（G1）：public = 所有人可见；private = 仅该图上有自己那个实体
     的玩家（+admin）可见——家地图/对局地图用 private 隐藏内容。
     """
 
@@ -672,7 +668,7 @@ class Entity:
     """
 
     id: str  # uuid4 hex（B5）
-    kind: str  # 基底类型；player 为内置身份类型（IDENTITY_KINDS），或玩法包注册的名字
+    kind: str  # 基底类型（玩法包自由声明的名字；**v2 第 2 期将删除此列**，见 D41）
     components: dict[str, dict] = field(default_factory=dict)
     last_active_ts: float = 0.0  # 在线状态（动作/SSE 活动维护）
     tags: list[str] = field(default_factory=list)  # 实例级标签（D18，有序、去重）
@@ -761,20 +757,26 @@ class Entity:
 
     @property
     def user_id(self) -> str | None:
-        """账户绑定 = ``core:account.user_id``；缺失 → ``None``（非身份化）。
+        """账户绑定 = ``core:account.user_id``；缺失 → ``None``（这个实体没有账户）。
 
         只读派生视图：写入请用 ``place_entity(user_id=…)`` 或身份服务的受控通道。
         """
         value = self.component(CORE_ACCOUNT).get("user_id")
         return value if isinstance(value, str) and value else None
 
-    def is_identity(self) -> bool:
-        """身份化实体（可认证绑定、不可被玩法包移除、位置持久化）。
+    def is_account_bound(self) -> bool:
+        """**绑定了账户的实体**（带 ``core:account``）——D14 红线（v2 / D42 起）的判据。
 
-        D20：**只看基底 kind**——标签里出现 ``player`` 不改变身份，
-        所以不存在"删掉标签就绕过身份保护"的路径。
+        **不是"身份"**：内核没有"身份"这个概念（D42 已把 `IDENTITY_KINDS` 整个删除）。
+        这条只回答一个数据事实：它绑着一个可登录的账户吗？绑了就不许玩法包删
+        （删掉会让 token 悬空），`delete_map` / `copy_map` / `delete_location`
+        也用它避免误伤"有人操作的实体"。
+
+        为什么比原来的 `kind == "player"` 更准：那是**代理判据**——
+        一个没绑账户的 `player` 实体会白挡删图，而一个绑了账户却换了 kind 的实体反而不挡。
+        账户绑定本来就是真正起作用的事实（`identity_entity_of` / `delete_account` 一直按它找）。
         """
-        return self.kind in IDENTITY_KINDS
+        return self.user_id is not None
 
     def to_dict(self) -> dict[str, Any]:
         """线上投影＝**模型实况**：名字/描述/账户绑定都在 ``components`` 里，不在顶层。
@@ -943,7 +945,7 @@ EntityKindSpec = TagSpec
 class InteractionRequest:
     """一次交互请求：发起者与目标都是实体（含自己，如物品 use）。"""
 
-    entity_id: str  # 发起者（身份化实体）
+    entity_id: str  # 发起者（带 core:account 的实体）
     target: Entity | None  # 目标实体（含玩家/agent 实体，如查看角色卡）
     action: str
     args: dict = field(default_factory=dict)

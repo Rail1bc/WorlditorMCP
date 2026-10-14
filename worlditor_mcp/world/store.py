@@ -679,7 +679,7 @@ class WorldStore:
         self.loc_by_pos.pop((map_id, row, col), None)
 
     async def delete_map(self, map_id: str) -> None:
-        """删除地图（级联地块/实体/世界归属；调用方负责身份化实体在场校验）。"""
+        """删除地图（级联地块/实体/世界归属；调用方负责"绑账户实体在场"校验）。"""
         assert self._conn is not None
         if map_id not in self.maps:
             raise KeyError(f"地图不存在：{map_id}")
@@ -895,7 +895,7 @@ class WorldStore:
         }
 
     async def delete_account(self, account_id: str) -> None:
-        """删除账户行（永久注销；调用方负责吊销凭据与身份化实体）。"""
+        """删除账户行（永久注销；调用方负责吊销凭据与删除绑账户实体）。"""
         assert self._conn is not None
         await self._conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
         await self._commit()

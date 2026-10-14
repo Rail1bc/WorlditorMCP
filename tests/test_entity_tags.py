@@ -108,14 +108,16 @@ def test_composition_player_plus_spawner(tmp_path):
             )
             caps = engine.capabilities(player)
             assert caps["tags"] == ["player", "spawner"]
-            # player 没有注册过规格（身份由基底 kind 表达，D20）→ 只有 spawner 在贡献
+            # player 没有注册过规格（v2/D42：身份概念已删，player 只是个未声明的标签名）
+            # → 只有 spawner 在贡献
             assert caps["active_tags"] == ["spawner"]
             assert caps["unknown_tags"] == ["player"]
             assert "tune" in caps["interactions"]
             assert "tune" in engine.available_actions(player.id)
             assert {f["name"] for f in caps["fields"]} == {"mob"}
-            # 身份仍是玩家（D20：只看基底 kind）
-            assert player.is_identity() is True
+            # D42：**没有"身份"这回事**——kind=player 不带任何特权，
+            # 判据是账户绑定（这个实体没绑账户 → 普通实体，可以被 remove）
+            assert player.is_account_bound() is False
         finally:
             await engine.terminate()
 
@@ -285,27 +287,37 @@ def test_unregistered_tag_is_harmless(tmp_path):
     _run(fn())
 
 
-# ---------- D20：身份只看基底 kind ----------
+# ---------- D42：身份概念已删，红线判据 = 账户绑定 ----------
 
 
-def test_identity_ignores_tags(tmp_path):
-    """标签里写 player 不改变身份；基底 kind=player 才是身份化实体（D20）。"""
+def test_account_bound_is_the_red_line_not_kind_and_not_tags(tmp_path):
+    """D42：`kind` 与 `tags` **都不**决定保护——只有 `core:account` 决定。
+
+    取代原 `test_identity_ignores_tags`（D20）：
+    - `kind=player` 但没绑账户 → **普通实体**，可以被 `remove_entity`；
+    - `kind=npc` 但**绑了账户** → 受保护，玩法包删不掉；
+    - 标签里写 `player` 一如既往地什么都不影响（它不是判据）。
+    """
 
     async def fn():
         engine = await _engine(tmp_path)
         try:
             npc = await engine.place_entity("npc", "default", 0, 0, tags=["player"])
-            assert npc.is_identity() is False
-            player = await engine.place_entity(
-                "player", "default", 0, 1, tags=["stone"]
-            )
-            assert player.is_identity() is True
-            # 身份保护不看标签：kind=npc 的实体照样可被玩法包移除
+            assert npc.is_account_bound() is False
+            player = await engine.place_entity("player", "default", 0, 1)
+            assert player.is_account_bound() is False
+            # 身份保护不看标签、也不看 kind：没绑账户就是普通实体
             await engine.remove_entity(npc.id)
             assert engine.store.entities.get(npc.id) is None
-            # 反之 kind=player 即便挂了别的标签也拒绝移除
-            with pytest.raises(WorldError, match="身份化实体"):
-                await engine.remove_entity(player.id)
+            await engine.remove_entity(player.id)
+            assert engine.store.entities.get(player.id) is None
+            # 反过来：kind 是 npc、但绑了账户 → 拒绝移除
+            bound = await engine.place_entity(
+                "npc", "default", 1, 0, name="挂了账户的 NPC", user_id="acct_1"
+            )
+            assert bound.is_account_bound() is True
+            with pytest.raises(WorldError, match="绑定了账户"):
+                await engine.remove_entity(bound.id)
         finally:
             await engine.terminate()
 
