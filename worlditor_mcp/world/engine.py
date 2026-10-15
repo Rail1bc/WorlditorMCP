@@ -3500,8 +3500,18 @@ class WorldEngine:
             and self._world_play_active(world_id, self._interactions[a].play_id)
         )
 
-    def list_actions(self, target_id: str) -> list[MenuButton]:
-        """实体可用动作按钮（UI 菜单生成用）。"""
+    def list_actions(
+        self,
+        target_id: str,
+        *,
+        viewer_id: str | None = None,
+        tier: str = "",
+    ) -> list[MenuButton]:
+        """实体可用动作按钮；传 viewer 时先经过观察权限。"""
+        if viewer_id is not None and not self.can_observe_entity(
+            target_id, viewer_id, tier
+        ):
+            return []
         return [
             MenuButton(label=self._interactions[a].label, action=a)
             for a in self.available_actions(target_id)

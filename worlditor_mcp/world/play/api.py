@@ -692,8 +692,9 @@ class WorlditorPlayAPI:
     ) -> None:
         """注册玩法包自带的实体模板（D22：内存注册表，随包卸载消失）。
 
-        data = ``{kind, tags[], name, desc, components}``；管理端本地模板落库，
-        两边合并成一个选择列表（``list_templates("entity")``）。
+        data = ``{name, desc, components}``；管理端本地模板落库，
+        两边合并成一个选择列表（``list_templates("entity")``）。能力由组件键表达，
+        不再使用 kind / tags。
         """
         self._engine.register_entity_template(
             template_id, name, data, play_id=self.play_id, label=label

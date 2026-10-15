@@ -300,13 +300,23 @@ async def _scene(request: Request) -> Response:
         {
             "entity": {
                 **entity.to_dict(),
-                "actions": [a.to_dict() for a in engine.list_actions(entity.id)],
+                "actions": [
+                    a.to_dict()
+                    for a in engine.list_actions(
+                        entity.id, viewer_id=info.entity_id, tier=info.tier
+                    )
+                ],
             },
             "scene": scene.to_dict(),
             "peers": [
                 {
                     "entity": p.to_dict(),
-                    "actions": [a.to_dict() for a in engine.list_actions(p.id)],
+                    "actions": [
+                        a.to_dict()
+                        for a in engine.list_actions(
+                            p.id, viewer_id=info.entity_id, tier=info.tier
+                        )
+                    ],
                 }
                 for p in peers
             ],
