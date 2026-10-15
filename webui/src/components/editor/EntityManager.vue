@@ -185,8 +185,22 @@
       <aside class="detail">
         <template v-if="current">
           <div class="detail-head">
-            <b>实体详情</b>
-            <code class="dim">{{ current.id.slice(0, 8) }}</code>
+            <div>
+              <b>{{ entityName(current) }}</b>
+              <div class="dim">实体详情 · {{ current.id.slice(0, 8) }}</div>
+            </div>
+            <span class="component-count">{{ componentKeys(current).length }} 个组件</span>
+          </div>
+          <div class="component-summary">
+            <span
+              v-for="key in componentKeys(current)"
+              :key="key"
+              class="summary-chip"
+              :class="{ core: isCoreComponent(key), unknown: isUnknown(current, key) }"
+            >
+              {{ key }}
+            </span>
+            <span v-if="!componentKeys(current).length" class="dim">暂无组件</span>
           </div>
           <label class="field">
             名称
@@ -552,7 +566,42 @@ tr.on td {
 .detail-head {
   display: flex;
   gap: 8px;
-  align-items: baseline;
+  align-items: center;
+  justify-content: space-between;
+}
+.detail-head > div {
+  min-width: 0;
+}
+.component-count {
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.component-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--bg-3);
+}
+.summary-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  border: 1px solid var(--bg-3);
+  border-radius: 999px;
+  padding: 2px 6px;
+  color: var(--text-dim);
+}
+.summary-chip.core {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.summary-chip.unknown {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 .field {
   display: flex;

@@ -10,51 +10,58 @@
     <p v-if="jsonError" class="error-text">{{ jsonError }}</p>
 
     <div class="comps">
-      <details
-        v-for="c in componentList"
-        :key="c.name"
-        class="comp"
-        :open="c.name === justAdded || null"
-      >
-        <summary>
-          <code class="cname">{{ c.name }}</code>
-          <span class="chip" :class="c.badgeClass" :title="c.badgeTitle">{{ c.badge }}</span>
-          <span v-if="c.fields.length" class="dim">{{ c.fields.length }} 个声明字段</span>
-          <span
-            v-if="c.extraCount"
-            class="bad"
-            title="这个组件里没有声明过的键：不贡献任何能力，但会原样保存"
-          >
-            其余键 {{ c.extraCount }}
-          </span>
-        </summary>
-        <div class="comp-body">
-          <div v-if="c.fields.length" class="declared">
-            <div v-for="f in c.fields" :key="f.name" class="field">
-              <label :title="`${f.name}（${f.type}）—— 声明自组件 ${c.name}`">
-                {{ f.label || f.name }}
-              </label>
-              <FieldControl
-                :field="f"
-                :model-value="controlValue(c.name, f)"
-                @update:model-value="(v) => setControl(c.name, f, v)"
-                @commit="commit"
-              />
-            </div>
+      <section v-for="group in componentGroups" :key="group.source" class="source-group">
+        <header class="source-head">
+          <div>
+            <strong>{{ group.title }}</strong>
+            <code>{{ group.source }}:</code>
           </div>
-          <p v-else class="tiny">这个组件没有声明任何字段（数据可以直接写在下面的 JSON 里）。</p>
-          <label class="tiny">其余键（未声明字段）—— 原始 JSON，整块替换本组件的数据</label>
-          <textarea
-            v-model="extraText[c.name]"
-            rows="2"
-            placeholder="{}"
-            @change="commit"
-          ></textarea>
-          <button class="mini-btn danger" @click="dropComponent(c.name)">删除组件</button>
-        </div>
-      </details>
-      <p v-if="!componentList.length" class="dim">
-        这个实体还没有任何组件（没有必填组件，空字典也是合法状态）。
+          <span class="dim">{{ group.items.length }} 个组件</span>
+        </header>
+        <details
+          v-for="c in group.items"
+          :key="c.name"
+          class="comp"
+          :open="c.name === justAdded || null"
+        >
+          <summary>
+            <code class="cname">{{ c.name }}</code>
+            <span class="chip" :class="c.badgeClass" :title="c.badgeTitle">{{ c.badge }}</span>
+            <span v-if="c.fields.length" class="dim">{{ c.fields.length }} 个声明字段</span>
+            <span v-if="c.extraCount" class="bad">其余键 {{ c.extraCount }}</span>
+            <span v-if="c.locked" class="lock" title="core 组件由内核协议管理">锁定</span>
+          </summary>
+          <div class="comp-body">
+            <div v-if="c.fields.length" class="declared">
+              <div v-for="f in c.fields" :key="f.name" class="field">
+                <label :title="`${f.name}（${f.type}）—— 声明自组件 ${c.name}`">
+                  {{ f.label || f.name }}
+                </label>
+                <FieldControl
+                  :field="f"
+                  :model-value="controlValue(c.name, f)"
+                  @update:model-value="(v) => setControl(c.name, f, v)"
+                  @commit="commit"
+                />
+              </div>
+            </div>
+            <p v-else class="tiny">没有声明字段；可在下方编辑组件 JSON。</p>
+            <label class="tiny">未声明字段（其余键）—— JSON，整块替换本组件的数据</label>
+            <textarea
+              v-model="extraText[c.name]"
+              rows="3"
+              placeholder="{}"
+              @change="commit"
+            ></textarea>
+            <button v-if="!c.locked" class="mini-btn danger" @click="dropComponent(c.name)">
+              删除组件
+            </button>
+            <span v-else class="tiny">core 组件不可从此处删除。</span>
+          </div>
+        </details>
+      </section>
+      <p v-if="!componentList.length" class="empty-state">
+        还没有组件。空组件字典是合法实体状态，可以从下方添加 local: 组件。
       </p>
     </div>
 
@@ -167,9 +174,31 @@ const componentList = computed(() =>
     const data = props.components[name] || {};
     const declared = new Set(declaredFieldsOf(name).map((f) => f.name));
     const extraCount = Object.keys(data).filter((key) => !declared.has(key)).length;
-    return { name, fields: declaredFieldsOf(name), extraCount, ...badgeOf(name) };
+    return {
+      name,
+      fields: declaredFieldsOf(name),
+      extraCount,
+      locked: name.startsWith(`${CORE}:`),
+      ...badgeOf(name),
+    };
   })
 );
+
+const componentGroups = computed(() => {
+  const groups = new Map();
+  for (const item of componentList.value) {
+    const source = item.name.split(":")[0] || "local";
+    if (!groups.has(source)) {
+      groups.set(source, {
+        source,
+        title: source === CORE ? "内核协议" : source === LOCAL ? "本地内容" : `玩法包：${source}`,
+        items: [],
+      });
+    }
+    groups.get(source).items.push(item);
+  }
+  return [...groups.values()];
+});
 
 /** 来源标记：core → 内核保留；已声明玩法包 → 该来源包；已声明 local → 已声明；否则虚构组件。 */
 function badgeOf(name) {
@@ -327,6 +356,10 @@ function addComponent() {
 }
 
 async function dropComponent(name) {
+  if (name.startsWith(`${CORE}:`)) {
+    jsonError.value = "core 组件由内核协议管理，不能在实体编辑器中删除";
+    return;
+  }
   const ok = await askConfirm({
     title: "删除组件",
     danger: true,
@@ -403,7 +436,41 @@ watch(() => props.components, syncFromProps, { immediate: true });
   margin-top: 6px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
+}
+.source-group {
+  border: 1px solid var(--bg-3);
+  border-radius: 8px;
+  padding: 6px;
+}
+.source-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 2px 6px;
+  color: var(--text);
+}
+.source-head div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.source-head code {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.lock {
+  color: var(--accent);
+  font-size: 10px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+.empty-state {
+  border: 1px dashed var(--bg-3);
+  padding: 12px;
+  text-align: center;
 }
 .comp,
 .new-comp {

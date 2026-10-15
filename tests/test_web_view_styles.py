@@ -280,6 +280,8 @@ def test_entity_panel_renders_schema_and_tags():
     assert "FieldForm" in panel and "ComponentPicker" in panel
     assert "TagPicker" not in panel  # D41：标签选择器已换成组件选择器
     assert "合并后的能力" in panel  # A4：让管理员看见并集结果
+    # v0.7.1：详情面板给**组件摘要**（名字 + 短 id + 组件数 + 组件键 chip）
+    assert "component-summary" in panel and "component-count" in panel
     fields = (_WEBUI / "components" / "editor" / "FieldForm.vue").read_text(
         encoding="utf-8"
     )
@@ -290,6 +292,10 @@ def test_entity_panel_renders_schema_and_tags():
     assert "内核保留" in fields  # core: 是内核保留命名空间（D33）
     assert "local:" in fields  # 手输裸名自动补 local: 前缀（信封无例外）
     assert "askConfirm" in fields  # 删整个组件走站内确认层（管理端禁原生 confirm）
+    # v0.7.1：组件按**来源分组**显示（core / local / 各玩法包），core: 锁定不可删
+    assert "componentGroups" in fields and "source-group" in fields
+    assert "内核协议" in fields and "本地内容" in fields
+    assert "locked" in fields  # core: 组件在编辑器里锁定（删除按钮不出现）
     # D41：删掉"猜字段落点"那套——字段的家就是声明它的组件
     for gone in ("homeOf", "fallbackName", "extraOf", "preset_tags", "isDocked"):
         assert gone not in fields, f"FieldForm 不该再有「猜落点」逻辑：{gone}"
