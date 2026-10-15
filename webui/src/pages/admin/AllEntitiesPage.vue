@@ -48,7 +48,7 @@ import { apiDelete, apiGet, apiPatch, apiPost } from "../../api";
 import { askConfirm } from "../../confirm";
 import { askDiff, diffFields } from "../../diff";
 import {
-  abilityComponents,
+  contentComponents,
   entityDesc,
   entityName,
   entityPosition,
@@ -152,15 +152,15 @@ async function updateEntity(entity, patch) {
 }
 
 async function removeEntity(entity) {
-  // D41：能力 = 组件的存在——删实体时列一下它带的能力组件，别拿已删掉的 kind 说事
-  const comps = abilityComponents(entity);
+  // 实体只有组件：删之前列一下它的内容组件（core: 是协议数据，不必列）
+  const comps = contentComponents(entity);
   const ok = await askConfirm({
     title: "删除实体",
     danger: true,
     text: `删除实体「${entityName(entity)}」？`,
     detail: comps.length
-      ? `能力组件：${comps.join("、")}（能力 = 组件的存在，会随实体一起消失）`
-      : "它没有任何能力组件。",
+      ? `内容组件：${comps.join("、")}（会随实体一起消失）`
+      : "它没有任何内容组件。",
   });
   if (!ok) return;
   try {
@@ -172,8 +172,8 @@ async function removeEntity(entity) {
 }
 
 async function saveEntityTemplate(entity) {
-  // 模板 id 里带一个能力组件名做 slug（组件键可能带 `:`，换成 `_` 保证 id 干净）
-  const slug = abilityComponents(entity)[0]?.replace(/[^A-Za-z0-9_.-]/g, "_") || "bare";
+  // 模板 id 里带一个内容组件名做 slug（组件键可能带 `:`，换成 `_` 保证 id 干净）
+  const slug = contentComponents(entity)[0]?.replace(/[^A-Za-z0-9_.-]/g, "_") || "bare";
   try {
     await apiPost("/admin/templates", {
       id: `entity_${slug}_${Date.now().toString(36)}`,

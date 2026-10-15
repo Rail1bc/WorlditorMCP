@@ -7,8 +7,8 @@
  *     components: { "core:info": {name, desc}, "core:account": {user_id},
  *                   "core:position": {map_id, row, col}, ... }
  *
- * 投影里**没有 `kind`、没有 `tags`**（D41-b 已从实体上删除）：能力组件就是
- * `components` 里的键，纯能力组件的数据是 `{}`。
+ * 投影里**没有 `kind`、没有 `tags`**（D41-b 已从实体上删除）：实体上只有 `components`
+ * 里的键，纯标记组件的数据是 `{}`，带数据的组件照样只是组件。
  *
  * 读名规则（内核的缺失语义，前端照做，且只在这一处实现）：
  *   name = components["core:info"].name  ||  id 前 8 位
@@ -130,18 +130,46 @@ export function isCoreComponent(key) {
 }
 
 /**
- * 能力组件键（排除 `core:`）——界面上"这个实体有什么能力"要显示的那一列。
+ * 内容组件键（排除 `core:`）——**"这个实体带了哪些非协议组件"**。
  *
- * 注意：**有键 ≠ 有能力**。"没有声明的组件"（虚构组件）照样在这里，但它不贡献
- * 任何能力；要判断生效与否看 `capabilities.active_components` /
- * `inactive_components` / `orphan_components` / `fictional_components`
- * （那是后端的裁决，前端不重算）。
+ * ⚠️ 名字：v0.7.2 前叫 `abilityComponents`（"能力组件"），但**内核没有"能力"这个数据概念**
+ * ——实体上只有组件：带了某个组件就是带了它，组件的数据是 `{}`（纯标记）还是 `{...}`
+ * （带数据）都不改变这一点。所以界面上统一说"组件"，判断"能不能做某件事"看**声明**
+ * （`capabilities.interactions` 等，后端的裁决，前端不重算）。
+ *
+ * `core:` 是内核协议数据（名字 / 账户 / 位置 / 感知），不是内容——列表里想显示**全部**
+ * 组件就用 `componentKeys()`，这里只排除协议组件。
  *
  * ⚠️ 能力键会随设计演进改名（D44 把 `unknown_components` 拆成 `orphan_components` +
  * `fictional_components`）。**别在模板里直读 `capabilities.<键>`**——后端不再返回旧键时
  * 读到的是 `undefined`，`.length` / `.join` 当场抛错、整块 UI 白屏（v0.7.1 事故）。
  * 统一经归一化读取（`EntityManager.vue` 的 `capsOf()`）：缺键 = 空数组。
  */
-export function abilityComponents(e) {
+export function contentComponents(e) {
   return componentKeys(e).filter((key) => !isCoreComponent(key));
+}
+
+/**
+ * 单个组件的**数据摘要**（列表预览用，与组件键拼在一起显示）。
+ *
+ * 位置是组件（`core:position`）而不是实体的字段，所以在同一列里以坐标形式出现：
+ *   - `core:position` → `"default 2,5"`
+ *   - 其它有数据的组件 → `"3 键"`
+ *   - 空组件（纯标记，数据 `{}`）→ `""`（不显示后缀，**空组件不是错误**）
+ *
+ * 组件数据本身**没有形状约定**（任意 JSON 对象），所以这里只做"有多少数据"的中性摘要，
+ * 不假装知道每个键的含义。
+ */
+export function componentSummary(e, key) {
+  const data = e && e.components ? e.components[key] : null;
+  if (!data || typeof data !== "object") return "";
+  if (key === CORE_POSITION) return positionLabel(e);
+  const count = Object.keys(data).length;
+  return count ? `${count} 键` : "";
+}
+
+/** 组件数据的原始 JSON（详情 / 折叠行的 title 用；空组件给 `{}`）。 */
+export function componentJson(e, key) {
+  const data = e && e.components ? e.components[key] : null;
+  return JSON.stringify(data ?? {}, null, 2);
 }

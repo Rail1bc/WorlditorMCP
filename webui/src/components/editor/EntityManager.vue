@@ -25,7 +25,7 @@
       </button>
     </div>
 
-    <!-- 放置（从模板 + 能力组件 + 组件数据组合） -->
+    <!-- 放置（从模板 + 组件 + 组件数据组合） -->
     <div v-if="showCreate" class="create">
       <div class="row">
         <select v-model="draft.template_id" class="mini" @change="applyTemplate">
@@ -38,7 +38,7 @@
           v-model="draft.ability"
           class="mini"
           list="component-options"
-          placeholder="能力组件（可自由输入，裸名由后端解析）"
+          placeholder="组件（可自由输入，裸名由后端解析）"
         />
         <datalist id="component-options">
           <option v-for="k in kinds" :key="k.key" :value="k.key">{{ k.label }}</option>
@@ -84,8 +84,6 @@
             <tr>
               <th>名称</th>
               <th>组件</th>
-              <th>位置</th>
-              <th>能力</th>
               <th class="ops-col">操作</th>
             </tr>
           </thead>
@@ -102,47 +100,25 @@
                 <div v-if="entityDesc(e)" class="dim ell">{{ entityDesc(e) }}</div>
               </td>
               <td class="comp-cell">
-                <!-- 能力组件就是 components 里的键（core: 是协议数据，不进这一列）；
-                     没有声明的键照样显示，但要标红说明它不贡献能力 -->
-                <span v-if="!abilityComponents(e).length" class="dim">—</span>
+                <!-- **只有组件**（v0.7.2）：位置与"能力"都不是独立概念——位置就是
+                     `core:position` 组件的数据，能力就是"带了某个组件"。
+                     所以这一列显示**全部**组件键（含 core:），每个键后面跟它自己的
+                     数据摘要（位置给坐标、其余给键数、空组件不给后缀）。 -->
+                <span v-if="!componentKeys(e).length" class="dim">—</span>
                 <span
-                  v-for="k in abilityComponents(e)"
+                  v-for="k in componentKeys(e)"
                   :key="k"
                   class="chip"
-                  :class="{ bad: isUnknown(e, k) }"
-                  :title="
-                    isUnknown(e, k)
-                      ? '虚构组件：没有声明，不贡献能力'
-                      : `组件 ${k}（能力 = 组件的存在）`
-                  "
+                  :class="{
+                    core: isCoreComponent(k),
+                    bad: isUnknown(e, k),
+                  }"
+                  :title="chipTitle(e, k)"
                 >
                   {{ k }}
-                </span>
-              </td>
-              <td class="dim">{{ positionLabel(e) }}</td>
-              <td class="caps-cell">
-                <span
-                  v-for="a in (e.capabilities?.interactions || []).slice(0, 2)"
-                  :key="a"
-                  class="chip"
-                >
-                  {{ a }}
-                </span>
-                <span v-if="(e.capabilities?.interactions || []).length > 2" class="dim">
-                  +{{ e.capabilities.interactions.length - 2 }}
-                </span>
-                <span v-if="capsOf(e).fictional.length" class="chip bad" title="虚构组件：没有声明，不贡献能力">
-                  ⚠{{ capsOf(e).fictional.length }}
-                </span>
-                <span v-if="capsOf(e).orphan.length" class="chip bad" title="声明它的玩法包已停用 / 卸载">
-                  ⛔{{ capsOf(e).orphan.length }}
-                </span>
-                <span
-                  v-if="capsOf(e).inactive.length"
-                  class="chip bad"
-                  title="有声明，但它所属的玩法包在本世界未启用"
-                >
-                  ⏸{{ capsOf(e).inactive.length }}
+                  <span v-if="componentSummary(e, k)" class="sum">
+                    · {{ componentSummary(e, k) }}
+                  </span>
                 </span>
               </td>
               <td class="ops-col">
@@ -162,7 +138,7 @@
               </td>
             </tr>
             <tr v-if="!filtered.length">
-              <td colspan="5" class="dim">
+              <td colspan="3" class="dim">
                 {{ tileFilter && tileOnly ? "这个地块上没有实体。" : "没有匹配的实体。" }}
               </td>
             </tr>
@@ -223,7 +199,10 @@
             @update="(v) => (edit.components = v.components)"
           />
           <div v-if="current.capabilities" class="caps">
-            <b>合并后的能力</b>
+            <b>组件声明的汇总</b>
+            <div class="dim">
+              实体本身只有组件；下面这些是**声明**（玩法包 / 内核）按组件算出来的结果。
+            </div>
             <div>生效组件：{{ caps.active.join("、") || "（无）" }}</div>
             <div v-if="caps.inactive.length" class="bad">
               本世界未启用：{{ caps.inactive.join("、") }}
@@ -269,8 +248,9 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
 import {
-  abilityComponents,
+  componentJson,
   componentKeys,
+  componentSummary,
   entityDesc,
   entityName,
   entityPosition,
@@ -308,7 +288,7 @@ const selectedId = ref("");
 
 const draft = reactive({
   template_id: "",
-  ability: "", // 单个能力组件：自由输入，裸名由后端解析成组件键（省略 = 不带能力组件）
+  ability: "", // 单个组件键：自由输入，裸名由后端解析（省略 = 不带任何内容组件）
   name: "",
   components: {}, // 组件键 → 数据（实体数据的唯一单位）
   row: 0,
@@ -338,7 +318,7 @@ function setEditKeys(keys) {
   edit.components = withKeys(edit.components, keys);
 }
 
-/** 组件筛选选项 = 所有实体带的组件键（先非 core:，再字典序——有能力的排在前面）。 */
+/** 组件筛选选项 = 所有实体带的组件键（先非 core:，再字典序——内容组件排在前面）。 */
 const componentOptions = computed(() => {
   const rank = (key) => (isCoreComponent(key) ? 1 : 0);
   return [...new Set(props.entities.flatMap((e) => componentKeys(e)))].sort(
@@ -346,9 +326,9 @@ const componentOptions = computed(() => {
   );
 });
 
-/** "按组件"排序键：能力组件键排好序拼起来（core: 不参与——它是协议数据不是能力）。 */
+/** "按组件"排序键：内容组件键排好序拼起来（core: 是协议数据，每个实体都有，排序无信息）。 */
 function componentSortKey(e) {
-  return abilityComponents(e).sort().join("、");
+  return contentComponents(e).sort().join("、");
 }
 
 const filtered = computed(() => {
@@ -435,13 +415,23 @@ function capsOf(e) {
   };
 }
 
-/** 当前实体的能力快照（详情面板用）。 */
+/** 当前实体的声明快照（详情面板用）。 */
 const caps = computed(() => capsOf(current.value));
 
-/** 这个组件键有没有声明（后端裁决：orphan / fictional 都不贡献能力）。 */
+/** 这个组件键有没有声明（后端裁决：orphan / fictional 都是"查无声明"）。 */
 function isUnknown(e, key) {
   const c = capsOf(e);
   return c.orphan.includes(key) || c.fictional.includes(key);
+}
+
+/** 组件 chip 的悬浮说明：声明状态 + 该组件的完整数据（摘要只有几个字，细节在这里）。 */
+function chipTitle(e, key) {
+  const state = isUnknown(e, key)
+    ? capsOf(e).orphan.includes(key)
+      ? "声明它的玩法包已停用 / 卸载（启用即恢复）"
+      : "没有声明（虚构组件，允许存在）"
+    : "已声明";
+  return `${key} · ${state}\n${componentJson(e, key)}`;
 }
 
 /** 深拷贝组件字典：编辑面板不能直接改 props.entities 里的对象。 */
@@ -477,7 +467,7 @@ function create() {
     ? cloneComponents(draft.components)
     : withoutPosition(draft.components);
   emit("create", {
-    // 能力组件是**输入便利**：裸名由后端解析成组件键；不填 = 不带能力组件
+    // 组件键是**输入便利**：裸名由后端解析成 `source:name`；不填 = 不带内容组件
     kind: draft.ability.trim() || undefined,
     name: draft.name.trim() || undefined,
     components,
@@ -562,10 +552,15 @@ table.tight th {
   font-weight: 600;
 }
 .comp-cell {
-  max-width: 260px;
+  max-width: 520px;
 }
-.caps-cell {
-  white-space: nowrap;
+/* 组件 chip：空组件（纯标记）只有键名，带数据的跟一个中性摘要 */
+.comp-cell .chip.core {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.comp-cell .sum {
+  color: var(--text-dim);
 }
 .ops-col {
   white-space: nowrap;

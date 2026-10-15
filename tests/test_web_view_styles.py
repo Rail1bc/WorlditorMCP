@@ -279,7 +279,13 @@ def test_entity_panel_renders_schema_and_tags():
     )
     assert "FieldForm" in panel and "ComponentPicker" in panel
     assert "TagPicker" not in panel  # D41：标签选择器已换成组件选择器
-    assert "合并后的能力" in panel  # A4：让管理员看见并集结果
+    # v0.7.2：列表**只有组件**一列——位置是 core:position 的数据、"能力"不是一个数据概念，
+    # 两个预览列都删掉；声明侧的汇总留在详情面板（措辞也不再叫"能力"）
+    assert "组件声明的汇总" in panel
+    assert "<th>位置</th>" not in panel and "<th>能力</th>" not in panel
+    assert "componentSummary" in panel  # 摘要与组件键同列显示
+    assert "contentComponents" in panel  # "能力组件"改名（内核没有"能力"这个数据概念）
+    assert "abilityComponents" not in _strip_comments(panel)
     # v0.7.1：详情面板给**组件摘要**（名字 + 短 id + 组件数 + 组件键 chip）
     assert "component-summary" in panel and "component-count" in panel
     fields = (_WEBUI / "components" / "editor" / "FieldForm.vue").read_text(

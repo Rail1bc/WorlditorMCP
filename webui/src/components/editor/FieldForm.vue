@@ -399,7 +399,7 @@ function addComponent() {
   }
   const next = buildComponents();
   if (next === null) return; // 已有行/字段写坏了：先修好再加
-  next[named.name] = {}; // 纯能力组件的数据就是 {}；要带数据就加完在它那块里逐行填
+  next[named.name] = {}; // 纯标记组件的数据就是 {}；要带数据就加完在它那块里逐行填
   justAdded.value = named.name;
   newName.value = "";
   jsonError.value = "";

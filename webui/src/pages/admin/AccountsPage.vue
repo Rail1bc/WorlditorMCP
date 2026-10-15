@@ -52,7 +52,7 @@
               <template v-if="a.entity">
                 {{ entityName(a.entity) }}
                 <span class="dim"
-                  >（{{ abilityComponents(a.entity).join("、") || "无能力组件" }} ·
+                  >（{{ contentComponents(a.entity).join("、") || "无内容组件" }} ·
                   {{ positionLabel(a.entity) }}）</span
                 >
               </template>
@@ -122,7 +122,7 @@
 import { computed, onMounted, ref } from "vue";
 import { apiGet, apiPatch, apiDelete } from "../../api";
 import { askConfirm } from "../../confirm";
-import { abilityComponents, entityName, positionLabel } from "../../entity.js";
+import { contentComponents, entityName, positionLabel } from "../../entity.js";
 
 const PAGE_SIZE = 20;
 

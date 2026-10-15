@@ -8,9 +8,10 @@
     <p v-if="!entities.length" class="dim">这一格上还没有实体（用右侧「实体」视图放置）。</p>
     <div v-for="e in entities" :key="e.id" class="row">
       <span class="name">{{ entityName(e) }}</span>
-      <!-- D41：能力 = 组件的存在——显示非 core: 的组件键；没有就是"没有能力组件" -->
-      <span v-if="!abilityComponents(e).length" class="dim">—</span>
-      <span v-for="k in abilityComponents(e)" :key="k" class="chip" :title="`组件 ${k}`">
+      <!-- 实体只有组件：这里显示**非 core:** 的内容组件（协议组件每个实体都有，
+           在这一格里没有信息量）。没有内容组件也是合法状态。 -->
+      <span v-if="!contentComponents(e).length" class="dim">—</span>
+      <span v-for="k in contentComponents(e)" :key="k" class="chip" :title="`组件 ${k}`">
         {{ k }}
       </span>
       <span class="grow" />
@@ -21,7 +22,7 @@
 </template>
 
 <script setup>
-import { abilityComponents, entityName } from "../../entity.js";
+import { contentComponents, entityName } from "../../entity.js";
 
 defineProps({
   entities: { type: Array, default: () => [] },
