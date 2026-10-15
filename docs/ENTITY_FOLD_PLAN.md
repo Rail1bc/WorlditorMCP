@@ -14,7 +14,7 @@
   - `D41–D44` 决策入册（本轮讨论的产物，含 G47 结案、G48 记档）
   - **D42 身份概念移除**（代码 + 测试 + 文档）
   - **D43 组件命名空间即写入边界**（代码 + 测试 + 文档）
-- **当前**：**D41-a / D41-b 已提交（`b632373` / `38a0be9`，全量 339 绿）**；前端「按组件分组渲染」进行中；之后为 D44/G48（四象限 + 孤儿清理）
+- **当前**：**D41-a / D41-b / 前端已提交（`b632373` / `38a0be9` / `8d152d5`，全量 339 绿、`npm run build` 通过）**；下一步 = **D44/G48**（四象限诊断 + 孤儿清理 + 删 `_tag_owner`，"玩法包"页加"已卸载包的遗留组件"一栏）
 - **铁律**（三次都写进了 DESIGN，别绕）：
   1. **DESIGN 是唯一权威**——改行为先改决策，别让代码与文档打架
   2. **一步做到位**：不设"能力仍存表列、只是键变全名"的中间态（§12.0 已明确放弃 2a/2b 切分）
@@ -122,8 +122,12 @@ D44（卸载与清理语义）+ §12.6（折叠后的规则汇总）+ §12.0（�
 
 ### 前端
 
-> **状态：进行中**（D41-b 落地后立刻做——后端把 `kind` / `tags` 删了，编辑器不改就是坏的：
-> `/admin/kinds` 只剩 `key`、实体投影没有 `kind`/`tags`、PATCH 不再收它们）。
+> **状态：✅ 已落地**（`8d152d5`）。类型 / 标签两区合成一张组件清单；`TagPicker` →
+> `ComponentPicker`；`FieldForm` 删掉"猜字段落点"（`homeOf` / `fallbackName` / `extraOf`），
+> 改成**每个组件一块、块内渲染该组件自己声明的字段**；`dist/` 已重建。
+> 守卫同步：`tests/test_web_view_styles.py`（组件文件名与"两区合一"）+
+> `tests/test_editor_integrity.py`（位置读法、全有或全无坐标、JSON 写坏不发）。
+> **仍未做**：下面第 3 条（"玩法包"页的遗留组件栏）——那要等 **D44** 的孤儿诊断端点。
 
 - `EntityManager` / `FieldForm` / `TemplateManager` / `MapEditorPage`：
   类型 / 标签两区 → **按组件分组**；`TagPicker` → 组件选择器
@@ -219,8 +223,9 @@ cd webui; npm run build        # 期望 "✓ built"，dist/ 是**入库的**，�
 - [ ] **四象限**：`active` / `inactive` / `orphan` / `fictional` 都测得出来（含 C8 那条）（D44）
 - [ ] **孤儿清理**：只接受 `orphan`（服务端强制）、dry-run、按 source / keys 两种粒度（D44）
 - [ ] 前端按组件分组渲染，`homeOf` 那套已删；"已卸载包的遗留组件"单开一栏
-- [ ] `PLAY_DEV` / `HTTP_API` / `CHANGELOG` / `DESIGN` §12.0 全部同步；**版本 bump 与 tag 由用户决定**（DESIGN 已同步；其余见本轮提交）
-- [ ] `pytest` / `ruff` / `format` / `utf8_audit` / 冒烟 / `npm run build` 全绿（D41-b 后端部分已验证）
+      （**按组件分组渲染 + 删 `homeOf` 已 ✅**；"遗留组件"栏要等 D44 的孤儿端点）
+- [x] `PLAY_DEV` / `HTTP_API` / `CHANGELOG` / `DESIGN` §12.0 全部同步；**版本 bump 与 tag 由用户决定**
+- [x] `pytest`（339 绿）/ `ruff` / `format` / `utf8_audit`（0 坏文件）/ 冒烟（58/58）/ `npm run build` 全绿
 
 > **提醒**：实施完成后是**又一次破坏性变更**，部署侧需要**删掉数据目录下的 `world.db`
 > 并重新注册管理员**（D13 无迁移）。这句话要写进 `CHANGELOG` 与部署说明。
