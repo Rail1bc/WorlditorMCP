@@ -285,7 +285,7 @@ def test_entity_panel_renders_schema_and_tags():
     fields = (_WEBUI / "components" / "editor" / "FieldForm.vue").read_text(
         encoding="utf-8"
     )
-    assert "未声明字段" in fields  # 未声明字段走原始 JSON 兜底（A2/D23）
+    assert "未声明字段" not in fields  # v0.7.2：整块 JSON 文本框已废弃
     # v2（D32）：数据按**组件**分组——面板必须按组件分块、标明来源、给信封兜底。
     # 原断言是"attrs / state 两个数据袋分开标注"，两个容器已随 v2 取消（第 1 期）。
     assert "未声明组件" in fields  # 无任何声明的组件要标出来（沿用"未注册标签"范式）
@@ -296,6 +296,12 @@ def test_entity_panel_renders_schema_and_tags():
     assert "componentGroups" in fields and "source-group" in fields
     assert "内核协议" in fields and "本地内容" in fields
     assert "locked" in fields  # core: 组件在编辑器里锁定（删除按钮不出现）
+    # v0.7.2：组件数据改**键值对逐行编辑**（左键右值）——不再有整块 JSON 文本框
+    assert "kvRows" in fields and "rowsToObject" in fields
+    assert "键值对" in fields
+    assert "extraText" not in fields, "整块 JSON 文本框的状态已删除"
+    # 逐行错误落在行上（而不是整块发不出去）
+    assert "row.error" in fields
     # D41：删掉"猜字段落点"那套——字段的家就是声明它的组件
     for gone in ("homeOf", "fallbackName", "extraOf", "preset_tags", "isDocked"):
         assert gone not in fields, f"FieldForm 不该再有「猜落点」逻辑：{gone}"

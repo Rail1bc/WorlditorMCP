@@ -27,8 +27,6 @@
           <summary>
             <code class="cname">{{ c.name }}</code>
             <span class="chip" :class="c.badgeClass" :title="c.badgeTitle">{{ c.badge }}</span>
-            <span v-if="c.fields.length" class="dim">{{ c.fields.length }} 个声明字段</span>
-            <span v-if="c.extraCount" class="bad">其余键 {{ c.extraCount }}</span>
             <span v-if="c.locked" class="lock" title="core 组件由内核协议管理">锁定</span>
           </summary>
           <div class="comp-body">
@@ -45,14 +43,39 @@
                 />
               </div>
             </div>
-            <p v-else class="tiny">没有声明字段；可在下方编辑组件 JSON。</p>
-            <label class="tiny">未声明字段（其余键）—— JSON，整块替换本组件的数据</label>
-            <textarea
-              v-model="extraText[c.name]"
-              rows="3"
-              placeholder="{}"
-              @change="commit"
-            ></textarea>
+            <!-- 数据按**键值对**逐行编辑：左键右值。
+                 原来是一整块 JSON 文本框——一处写坏就整袋数据发不出去，还看不出是哪一行；
+                 拆行后错误只落在那一行上（行内红字），其余键照常保存。 -->
+            <div class="kv">
+              <div
+                v-for="(row, i) in kvRows(c.name)"
+                :key="`${c.name}-${i}`"
+                class="kv-row"
+                :class="{ bad: row.error }"
+              >
+                <input
+                  v-model="row.key"
+                  class="mini k"
+                  placeholder="键"
+                  @change="commit"
+                />
+                <input
+                  v-model="row.text"
+                  class="mini v"
+                  placeholder="值（JSON：字符串要加引号）"
+                  @change="commit"
+                />
+                <button
+                  class="mini-btn danger"
+                  title="删除这个键"
+                  @click="dropKey(c.name, i)"
+                >
+                  ×
+                </button>
+                <span v-if="row.error" class="bad kv-err">{{ row.error }}</span>
+              </div>
+              <button class="mini-btn" @click="addKey(c.name)">＋ 键值对</button>
+            </div>
             <button v-if="!c.locked" class="mini-btn danger" @click="dropComponent(c.name)">
               删除组件
             </button>
@@ -79,10 +102,8 @@
       <p class="tiny">
         组件键 = <code>来源:名字</code>：<code>core:</code> 内核保留、玩法包用自己的 id、
         编辑器手写用 <code>local:</code>。只允许字母/数字/下划线/点/连字符，且必须含一个冒号
-        （不含冒号时自动补 <code>local:</code>）。
+        （不含冒号时自动补 <code>local:</code>）。新组件从空数据开始，加完在它那块里逐行填键值。
       </p>
-      <label class="tiny">数据 JSON</label>
-      <textarea v-model="newJson" rows="2" placeholder='{"gold": 120}'></textarea>
       <p v-if="newError" class="error-text">{{ newError }}</p>
     </details>
   </div>
@@ -107,10 +128,9 @@ const CORE = "core";
 
 const values = reactive({}); // 组件键 → {声明字段名: 值}（非 json）
 const complex = reactive({}); // 组件键 → {声明字段名: JSON 文本}（json 类型）
-const extraText = reactive({}); // 组件键 → 该组件「未声明键」的 JSON 文本
+const kv = reactive({}); // 组件键 → [{key, text, error}]（数据逐行编辑：左键右值）
 const jsonError = ref("");
 const newName = ref("");
-const newJson = ref("{}");
 const newError = ref("");
 const justAdded = ref(""); // 刚新增的组件默认展开（其余折叠）
 
@@ -170,18 +190,12 @@ function setControl(name, f, value) {
 }
 
 const componentList = computed(() =>
-  ordered.value.map((name) => {
-    const data = props.components[name] || {};
-    const declared = new Set(declaredFieldsOf(name).map((f) => f.name));
-    const extraCount = Object.keys(data).filter((key) => !declared.has(key)).length;
-    return {
-      name,
-      fields: declaredFieldsOf(name),
-      extraCount,
-      locked: name.startsWith(`${CORE}:`),
-      ...badgeOf(name),
-    };
-  })
+  ordered.value.map((name) => ({
+    name,
+    fields: declaredFieldsOf(name),
+    locked: name.startsWith(`${CORE}:`),
+    ...badgeOf(name),
+  }))
 );
 
 const componentGroups = computed(() => {
@@ -232,22 +246,6 @@ function badgeOf(name) {
   };
 }
 
-/** 文本 → JSON 对象；失败返回错误文案（调用方决定露在哪）。 */
-function parseObjectText(text, where) {
-  const raw = String(text ?? "").trim();
-  if (!raw) return { ok: true, value: {} };
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    return { ok: false, error: `${where}的 JSON 解析失败：${e.message}` };
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { ok: false, error: `${where}必须是一个 JSON 对象` };
-  }
-  return { ok: true, value: parsed };
-}
-
 /** 文本 → 任意 JSON 值（json 声明字段用；空文本 = null）。 */
 function parseJsonValue(text, where) {
   const raw = String(text ?? "").trim();
@@ -257,6 +255,68 @@ function parseJsonValue(text, where) {
   } catch (e) {
     return { ok: false, error: `${where}不是合法 JSON：${e.message}` };
   }
+}
+
+// ---------- 数据键值对（逐行：左键右值） ----------
+
+/** 某个组件的数据行（响应式对象数组，直接 v-model 绑到输入框）。 */
+function kvRows(name) {
+  return kv[name] || [];
+}
+
+function addKey(name) {
+  if (!kv[name]) kv[name] = [];
+  kv[name].push({ key: "", text: "", error: "" });
+}
+
+function dropKey(name, index) {
+  const rows = kv[name];
+  if (!rows) return;
+  rows.splice(index, 1);
+  commit();
+}
+
+/**
+ * 数据行 → 对象；校验失败**写回该行自己的 `error`**（行内红字），返回 null。
+ *
+ * 值按 **JSON 字面量**解析（字符串要带引号）——这样数字 / 布尔 / 对象 / 数组的类型
+ * 原样往返，不会把 `"120"` 悄悄变成 `120`。空文本是**错误**而不是"清空"：
+ * 要空值请显式写 `null`（"没填"与"填了 null"必须分得开，D23 口径）。
+ */
+function rowsToObject(name) {
+  const out = {};
+  let ok = true;
+  const seen = new Set();
+  for (const row of kvRows(name)) {
+    row.error = "";
+    const key = String(row.key ?? "").trim();
+    if (!key) {
+      // 完全空行 = 用户点了"＋ 键值对"还没填：跳过，不算错误
+      if (!String(row.text ?? "").trim()) continue;
+      row.error = "键不能为空";
+      ok = false;
+      continue;
+    }
+    if (seen.has(key)) {
+      row.error = `键重复：${key}`;
+      ok = false;
+      continue;
+    }
+    const raw = String(row.text ?? "").trim();
+    if (!raw) {
+      row.error = "值不能为空（空值请写 null）";
+      ok = false;
+      continue;
+    }
+    try {
+      out[key] = JSON.parse(raw);
+      seen.add(key);
+    } catch (e) {
+      row.error = `不是合法 JSON：${e.message}`;
+      ok = false;
+    }
+  }
+  return ok ? out : null;
 }
 
 /** 某组件声明字段的当前值；json 字段写坏 → 写 jsonError 并返回 null。 */
@@ -279,27 +339,24 @@ function declaredValues(name) {
 }
 
 /**
- * 组装新的组件字典：每个组件 = `{...它的其余键 JSON, ...它自己声明字段的当前值}`。
- * 任何一处 JSON 写坏 → 返回 null 并写好 jsonError：**不发**（宁可这次修改不生效，
- * 也不能把整袋数据清空，D23 口径）。
+ * 组装新的组件字典：每个组件 = `{...它的数据行, ...它自己声明字段的当前值}`。
+ * 任何一行写坏 → 返回 null：**不发**（宁可这次修改不生效，也不能把整袋数据清空，
+ * D23 口径）。区别在于错误现在落在**那一行**上，不用在整块 JSON 里找。
  */
 function buildComponents(skip = "") {
   const out = {};
   for (const name of compNames.value) {
     if (name === skip) continue; // 正在被删的组件不参与校验（它的数据本来就要丢掉）
-    const raw = extraText[name];
+    const rows = kv[name];
     let extra;
-    if (raw === undefined) {
-      // 兜底：这块的文本还没初始化（正常路径下 syncFromProps 已经填好了）——
-      // 原样带回，绝不能因为缺文本就把组件写成 {}；声明字段随后覆盖自己的键
+    if (rows === undefined) {
+      // 兜底：这块的行还没初始化（正常路径下 syncFromProps 已经填好了）——
+      // 原样带回，绝不能因为缺行就把组件写成 {}；声明字段随后覆盖自己的键
       extra = { ...(props.components[name] || {}) };
     } else {
-      const parsed = parseObjectText(raw, `组件「${name}」`);
-      if (!parsed.ok) {
-        jsonError.value = parsed.error;
-        return null;
-      }
-      extra = parsed.value;
+      const parsed = rowsToObject(name);
+      if (parsed === null) return null;
+      extra = parsed;
     }
     const declared = declaredValues(name);
     if (declared === null) return null;
@@ -337,20 +394,14 @@ function addComponent() {
     return;
   }
   if (compNames.value.includes(named.name)) {
-    newError.value = `组件已存在：${named.name}（要改数据请在下面那块里编辑）`;
-    return;
-  }
-  const body = parseObjectText(newJson.value, `组件「${named.name}」`);
-  if (!body.ok) {
-    newError.value = body.error;
+    newError.value = `组件已存在：${named.name}（要改数据请在它那块里编辑）`;
     return;
   }
   const next = buildComponents();
-  if (next === null) return; // 已有组件里 JSON 写坏了：先修好再加
-  next[named.name] = body.value;
+  if (next === null) return; // 已有行/字段写坏了：先修好再加
+  next[named.name] = {}; // 纯能力组件的数据就是 {}；要带数据就加完在它那块里逐行填
   justAdded.value = named.name;
   newName.value = "";
-  newJson.value = "{}";
   jsonError.value = "";
   emit("update", { components: next });
 }
@@ -385,8 +436,8 @@ function syncFromProps() {
   for (const key of Object.keys(complex)) {
     if (!names.includes(key)) delete complex[key];
   }
-  for (const key of Object.keys(extraText)) {
-    if (!names.includes(key)) delete extraText[key];
+  for (const key of Object.keys(kv)) {
+    if (!names.includes(key)) delete kv[key];
   }
   for (const name of names) {
     const data = props.components[name] || {};
@@ -404,11 +455,11 @@ function syncFromProps() {
     }
     values[name] = plain;
     complex[name] = json;
-    const extra = {};
-    for (const [key, value] of Object.entries(data)) {
-      if (!declaredNames.has(key)) extra[key] = value;
-    }
-    extraText[name] = JSON.stringify(extra, null, 2);
+    // 数据行 = 该组件里**没有声明字段覆盖**的键；值以 JSON 字面量显示
+    //（字符串带引号 → 编辑后类型不漂移）
+    kv[name] = Object.entries(data)
+      .filter(([key]) => !declaredNames.has(key))
+      .map(([key, value]) => ({ key, text: JSON.stringify(value), error: "" }));
   }
   jsonError.value = "";
 }
@@ -499,6 +550,36 @@ watch(() => props.components, syncFromProps, { immediate: true });
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+/* 数据键值对：左键右值各一行，写坏的行只标它自己 */
+.kv {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kv-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.kv-row .k {
+  flex: 0 0 34%;
+  min-width: 90px;
+  font-family: ui-monospace, monospace;
+}
+.kv-row .v {
+  flex: 1 1 40%;
+  min-width: 110px;
+  font-family: ui-monospace, monospace;
+}
+.kv-row.bad .k,
+.kv-row.bad .v {
+  border-color: var(--danger);
+}
+.kv-err {
+  flex: 1 0 100%;
+  font-size: 11px;
 }
 .comp textarea,
 .new-comp textarea {
