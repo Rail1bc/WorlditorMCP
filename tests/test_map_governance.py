@@ -383,6 +383,33 @@ def test_copy_map_duplicate_id_rejected_and_name_default(tmp_path):
     _run(fn())
 
 
+def test_copy_map_transaction_rolls_back_on_commit_failure(tmp_path, monkeypatch):
+    """复制事务失败时不留下地图、地块或实体半成品。"""
+
+    async def fn():
+        engine = await _engine(tmp_path)
+        try:
+            await _world_with_two_maps(engine)
+            original_commit = engine.store._commit
+
+            async def fail_commit():
+                raise RuntimeError("commit failed")
+
+            monkeypatch.setattr(engine.store, "_commit", fail_commit)
+            with pytest.raises(RuntimeError, match="commit failed"):
+                await engine.copy_map("m1", "broken_copy", with_entities=True)
+            assert "broken_copy" not in engine.store.maps
+            assert not any(
+                loc.map_id == "broken_copy" for loc in engine.list_locations()
+            )
+            assert not any(e.map_id == "broken_copy" for e in engine.list_entities())
+            monkeypatch.setattr(engine.store, "_commit", original_commit)
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
 # ---------- 地图体检 ----------
 
 

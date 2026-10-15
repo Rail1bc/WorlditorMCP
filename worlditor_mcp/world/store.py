@@ -656,6 +656,70 @@ class WorldStore:
         """写回 / 新建一个地块（整体替换对象）。"""
         await self.save_locations([loc])
 
+    async def save_map_bundle(
+        self,
+        world_map: WorldMap,
+        locations: list[Location],
+        entities: list[Entity],
+        *,
+        world_id: str | None = None,
+        folder_id: str | None = None,
+    ) -> None:
+        """一次事务写入地图、副本地块、实体和可选世界归属。"""
+        assert self._conn is not None
+        await self._conn.execute(
+            "INSERT INTO maps(id, name, description_json, timezone, spawn_row, spawn_col, visible) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (
+                world_map.id,
+                world_map.name,
+                json.dumps(world_map.description.to_dict())
+                if world_map.description
+                else None,
+                world_map.timezone,
+                world_map.spawn_row,
+                world_map.spawn_col,
+                world_map.visible,
+            ),
+        )
+        if locations:
+            await self._conn.executemany(
+                "INSERT INTO locations(map_id, row, col, name, description_json, conns_json) "
+                "VALUES(?, ?, ?, ?, ?, ?)",
+                [self._location_row(loc) for loc in locations],
+            )
+        entity_snapshots = []
+        if entities:
+            revision = self.revision + 1
+            rows = []
+            for entity in entities:
+                snapshot = copy.deepcopy(entity)
+                snapshot.revision = revision
+                snapshot.changed_tick = self.tick
+                entity_snapshots.append(snapshot)
+                rows.append(entity_db_row(snapshot))
+            await self._conn.executemany(
+                "INSERT INTO entities(id, components_json, revision, changed_tick) VALUES(?, ?, ?, ?)",
+                rows,
+            )
+        if world_id is not None:
+            await self._conn.execute(
+                "INSERT INTO world_maps(map_id, world_id, folder_id, sort) VALUES(?, ?, ?, ?)",
+                (world_map.id, world_id, folder_id, 0),
+            )
+        await self._commit()
+        self.maps[world_map.id] = world_map
+        for loc in locations:
+            self.loc_by_pos[(loc.map_id, loc.row, loc.col)] = loc
+        for entity, snapshot in zip(entities, entity_snapshots):
+            entity.revision = snapshot.revision
+            entity.changed_tick = snapshot.changed_tick
+            self.entities[entity.id] = entity
+        if world_id is not None:
+            self.map_world[world_map.id] = world_id
+            self.map_folder[world_map.id] = folder_id
+            self.map_sort[world_map.id] = 0
+
     def _location_row(self, loc: Location) -> tuple:
         data = location_to_dict(loc)
         return (
@@ -686,6 +750,49 @@ class WorldStore:
         for loc in locs:
             self.loc_by_pos[(loc.map_id, loc.row, loc.col)] = loc
 
+    async def move_location_bundle(
+        self,
+        map_id: str,
+        src: tuple[str, int, int],
+        dst: tuple[str, int, int],
+        locations: list[Location],
+        entities: list[Entity],
+    ) -> None:
+        """一次事务提交地块坐标、连接引用和实体位置迁移。"""
+        assert self._conn is not None
+        await self._conn.execute(
+            "DELETE FROM locations WHERE map_id = ? AND row = ? AND col = ?",
+            src,
+        )
+        if locations:
+            await self._conn.executemany(
+                "INSERT OR REPLACE INTO locations(map_id, row, col, name, description_json, conns_json) "
+                "VALUES(?, ?, ?, ?, ?, ?)",
+                [self._location_row(loc) for loc in locations],
+            )
+        snapshots = []
+        if entities:
+            revision = self.revision + 1
+            rows = []
+            for entity in entities:
+                snapshot = copy.deepcopy(entity)
+                snapshot.revision = revision
+                snapshot.changed_tick = self.tick
+                snapshots.append(snapshot)
+                rows.append(entity_db_row(snapshot))
+            await self._conn.executemany(
+                "INSERT OR REPLACE INTO entities(id, components_json, revision, changed_tick) VALUES(?, ?, ?, ?)",
+                rows,
+            )
+        await self._commit()
+        self.loc_by_pos.pop(src, None)
+        for loc in locations:
+            self.loc_by_pos[(loc.map_id, loc.row, loc.col)] = loc
+        for entity, snapshot in zip(entities, snapshots):
+            entity.revision = snapshot.revision
+            entity.changed_tick = snapshot.changed_tick
+            self.entities[entity.id] = entity
+
     async def delete_location(self, map_id: str, row: int, col: int) -> None:
         """删除地块（引用清理由引擎负责）。"""
         assert self._conn is not None
@@ -697,16 +804,22 @@ class WorldStore:
         self.loc_by_pos.pop((map_id, row, col), None)
 
     async def delete_map(self, map_id: str) -> None:
-        """删除地图（级联地块/实体/世界归属；调用方负责"绑账户实体在场"校验）。"""
+        """删除地图及其内容，全部 SQL 在一个事务中提交。"""
         assert self._conn is not None
         if map_id not in self.maps:
             raise KeyError(f"地图不存在：{map_id}")
-        for entity in [e for e in self.entities.values() if e.map_id == map_id]:
-            await self.delete_entity(entity.id)  # 级联清理实体（在场校验由引擎负责）
+        entity_ids = [e.id for e in self.entities.values() if e.map_id == map_id]
+        if entity_ids:
+            placeholders = ",".join("?" for _ in entity_ids)
+            await self._conn.execute(
+                f"DELETE FROM entities WHERE id IN ({placeholders})", entity_ids
+            )
         await self._conn.execute("DELETE FROM locations WHERE map_id = ?", (map_id,))
         await self._conn.execute("DELETE FROM maps WHERE id = ?", (map_id,))
         await self._conn.execute("DELETE FROM world_maps WHERE map_id = ?", (map_id,))
         await self._commit()
+        for entity_id in entity_ids:
+            self.entities.pop(entity_id, None)
         self.maps.pop(map_id, None)
         self.loc_by_pos = {k: v for k, v in self.loc_by_pos.items() if k[0] != map_id}
         self.map_world.pop(map_id, None)

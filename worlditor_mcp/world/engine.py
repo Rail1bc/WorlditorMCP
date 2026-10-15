@@ -40,7 +40,7 @@ import logging
 import random
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -3550,38 +3550,52 @@ class WorldEngine:
                 raise WorldError(f"地块不存在：({row}, {col})")
             if dst in self.store.loc_by_pos:
                 raise WorldError(f"目标格 ({to_row}, {to_col}) 已被占用")
-            # 1. 全图引用重写（含自身自环）：指向旧坐标 → 新坐标
-            for other in list(self.store.loc_by_pos.values()):
+            # 1. 先在内存副本中重写全部引用，事务失败时不污染现有对象。
+            updated_locations = []
+            for original in list(self.store.loc_by_pos.values()):
+                other = copy.deepcopy(original)
                 changed = False
                 for slot in other.connections.values():
-                    for p in slot.paths:
+                    for path in slot.paths:
                         new_targets = []
-                        for t in p.targets:
-                            if self._target_key(t, other.map_id) == src:
+                        for target in path.targets:
+                            if self._target_key(target, original.map_id) == src:
                                 new_targets.append(
                                     Target(
-                                        map_id=t.map_id,
+                                        map_id=target.map_id,
                                         row=to_row,
                                         col=to_col,
-                                        weight=t.weight,
+                                        weight=target.weight,
                                     )
                                 )
                                 changed = True
                             else:
-                                new_targets.append(t)
-                        p.targets = new_targets
+                                new_targets.append(target)
+                        path.targets = new_targets
                 if changed:
-                    await self.store.save_location(other)
-            # 2. 自身坐标迁移
-            loc = self.store.loc_by_pos.pop(src)
-            loc = replace(loc, row=to_row, col=to_col)
-            self.store.loc_by_pos[dst] = loc
-            await self.store.save_location(loc)
-            # 3. 地块上的实体位置
-            for e in self.store.entities.values():
-                if e.pos_key() == src:
-                    e.set_position(map_id, to_row, to_col)
-                    await self.store.save_entity(e)
+                    updated_locations.append(other)
+            original = self.store.loc_by_pos[src]
+            moved = copy.deepcopy(original)
+            moved.row = to_row
+            moved.col = to_col
+            updated_locations.append(moved)
+            updated_entities = []
+            entity_pairs = []
+            for original_entity in self.store.entities.values():
+                if original_entity.pos_key() == src:
+                    moved_entity = copy.deepcopy(original_entity)
+                    moved_entity.set_position(map_id, to_row, to_col)
+                    updated_entities.append(moved_entity)
+                    entity_pairs.append((original_entity, moved_entity))
+            await self.store.move_location_bundle(
+                map_id, src, dst, updated_locations, updated_entities
+            )
+            for original_entity, moved_entity in entity_pairs:
+                original_entity.components = moved_entity.components
+                original_entity.revision = moved_entity.revision
+                original_entity.changed_tick = moved_entity.changed_tick
+                self.store.entities[original_entity.id] = original_entity
+            loc = moved
             await self._emit(
                 "on_world_edited",
                 {"op": "move_location", "from": list(src), "to": list(dst)},
@@ -3771,7 +3785,6 @@ class WorldEngine:
                     "visible": src.visible,
                 }
             )
-            await self.store.save_map(dup)
             cloned_locs = []
             for loc in [
                 x for x in self.store.loc_by_pos.values() if x.map_id == map_id
@@ -3784,8 +3797,6 @@ class WorldEngine:
                             if t.map_id in ("", map_id):
                                 t.map_id = ""  # 同图目标 → 落到副本自己
                 cloned_locs.append(cloned)
-            # 批量单事务写：复制是引擎锁内的大批量路径，逐行提交会卡住整个世界
-            await self.store.save_locations(cloned_locs)
             if with_entities:
                 cloned_entities = []
                 for e in list(self.store.entities.values()):
@@ -3804,23 +3815,33 @@ class WorldEngine:
                     # D41：**能力就是组件**——深拷贝已把组件（含能力组件与数据）整份带走，
                     # 不再有"实例标签"这一项要单独补（原 `cloned.tags = list(e.tags)` 已删）
                     cloned_entities.append(cloned)
-                await self.store.save_entities(cloned_entities)
+            else:
+                cloned_entities = []
             # 归属：默认与源地图同世界同节点
             target_world = (
                 self.store.map_world.get(map_id) if world_id is _UNSET else world_id
             )
+            target_folder = None
             if target_world is not None:
                 target_folder = (
                     self.store.map_folder.get(map_id)
                     if folder_id is _UNSET
                     else folder_id
                 )
-                try:
-                    await self.store.assign_map(
-                        new_map_id, str(target_world), folder_id=target_folder
-                    )
-                except (KeyError, ValueError) as e:
-                    raise WorldError(str(e)) from None
+                if str(target_world) not in self.store.worlds:
+                    raise WorldError(f"世界不存在：{target_world}")
+                if (
+                    target_folder is not None
+                    and target_folder not in self.store.folders
+                ):
+                    raise WorldError(f"文件夹不存在：{target_folder}")
+            await self.store.save_map_bundle(
+                dup,
+                cloned_locs,
+                cloned_entities,
+                world_id=str(target_world) if target_world is not None else None,
+                folder_id=target_folder,
+            )
             await self._emit(
                 "on_world_edited",
                 {"op": "copy_map", "map_id": new_map_id, "from": map_id},
