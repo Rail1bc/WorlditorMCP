@@ -16,7 +16,6 @@ from .model import (
     EVENT_PHASES,
     OPPOSITE_DIR,
     Entity,
-    EntityKindSpec,
     InteractionRequest,
     InteractionResult,
     Location,
@@ -34,7 +33,7 @@ from .model import (
     WorldTemplate,
     entity_db_row,
     entity_from_row,
-    parse_tags,
+    parse_names,
 )
 from .store import DEFAULT_MAP_ID, WorldStore
 
@@ -45,7 +44,6 @@ __all__ = [
     "DIRECTIONS",
     "EVENT_PHASES",
     "Entity",
-    "EntityKindSpec",
     "InteractionRequest",
     "InteractionResult",
     "Location",
@@ -67,5 +65,5 @@ __all__ = [
     "WorldTemplate",
     "entity_db_row",
     "entity_from_row",
-    "parse_tags",
+    "parse_names",
 ]

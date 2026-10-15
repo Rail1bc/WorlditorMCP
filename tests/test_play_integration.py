@@ -57,18 +57,21 @@ def _write_play(root: Path, name: str, main_code: str, yaml_extra: str = "") -> 
 
 
 def test_demo_play_loaded(tmp_path):
-    """演示玩法包加载：注册表（kind/interaction/event）就位。"""
+    """演示玩法包加载：注册表（组件/交互/事件）就位。"""
     install_demo_play(tmp_path / "plays")
 
     async def fn(engine: WorldEngine, loader: PlayLoader):
         plays = await loader.load_all()
         assert [p.play_id for p in plays] == [PLAY_ID]
         # v2 / D37：苹果与喇叭不再是"内核物品定义"，而是夹具包的**组件声明**
-        # （标签即类型：名字 + 字段 schema + 归属），所以它们和 kind 同处一个注册表
+        # （D41：组件即能力/类型——名字 + 字段 schema + 归属都写在组件键上），
+        # 所以它们和 merchant/sign/door 同处一个注册表
         assert set(engine._tag_specs) == {
-            f"{PLAY_ID}:merchant",
-            f"{PLAY_ID}:sign",
-            f"{PLAY_ID}:door",
+            # merchant/sign/door = 与演示世界内容（world.json）共享的 local: 键
+            "local:merchant",
+            "local:sign",
+            "local:door",
+            # 货品标识是包自己的（apple/megaphone），落包命名空间
             f"{PLAY_ID}:apple",
             f"{PLAY_ID}:megaphone",
         }
@@ -85,9 +88,14 @@ def test_demo_play_loaded(tmp_path):
         assert len(tick_bindings) == 1 and tick_bindings[0].interval == 5
         # v2 / D37：内核不再有物品定义与 items 表（那部分断言移入 test_v2_components）。
         # 这里改验证"**组件声明**随包加载进入注册表、且带归属"——它就是物品类型的落点。
-        kinds = {k["tag"]: k for k in engine.list_kinds()}
-        assert kinds[f"{PLAY_ID}:apple"]["play_id"] == PLAY_ID  # 夹具包用标签声明了苹果
+        # D41：清单每条 = 一个组件（key/source/name/…，不再有 tag/kind/play_id）。
+        kinds = {k["key"]: k for k in engine.list_kinds()}
+        assert kinds[f"{PLAY_ID}:apple"]["source"] == PLAY_ID  # 夹具包声明了苹果组件
+        assert kinds[f"{PLAY_ID}:apple"]["name"] == "apple"
         assert kinds[f"{PLAY_ID}:apple"]["label"] == "苹果"
+        # 共享键：source 就是字面的 local（内容与行为在同一个组件上对接）
+        assert kinds["local:merchant"]["source"] == "local"
+        assert kinds["local:merchant"]["interactions"] == ["talk", "trade"]
 
     db_path = tmp_path / "world.db"
     loader = make_loader(db_path, tmp_path / "plays")
@@ -109,7 +117,10 @@ def test_demo_full_interaction_chain(tmp_path):
 
     async def fn(engine: WorldEngine, loader: PlayLoader):
         await loader.load_all()
-        merchant = [e for e in engine.list_entities() if e.kind == "local:merchant"][0]
+        # D41：没有 kind 可读——"是不是商贩" = 带不带 local:merchant 组件
+        merchant = [
+            e for e in engine.list_entities() if e.has_component("local:merchant")
+        ][0]
         player = await engine.place_entity(
             "player",
             "default",
@@ -154,12 +165,12 @@ def test_demo_full_interaction_chain(tmp_path):
         }
         assert await engine.get_data(player.id, "energy", component=_STAT) == 1
         # read：kv 读写（namespace 隔离）
-        sign = [e for e in engine.list_entities() if e.kind == "local:sign"][0]
+        sign = [e for e in engine.list_entities() if e.has_component("local:sign")][0]
         result = await engine.interact(player.id, sign.id, "read")
         assert "小镇公告" in result.text
         assert engine.kv_get("worlditor_play_demo", "bulletin_reads") == 1
         # open：门状态变更（v2：组件写；D34：开门不再解除阻挡——全都不阻挡了）
-        door = [e for e in engine.list_entities() if e.kind == "local:door"][0]
+        door = [e for e in engine.list_entities() if e.has_component("local:door")][0]
         result = await engine.interact(player.id, door.id, "open")
         assert "吱呀" in result.text
         assert door.component("local:door") == {"open": True}
@@ -192,7 +203,7 @@ def test_demo_door_does_not_block_and_enter_forest(tmp_path):
     async def fn(engine: WorldEngine, loader: PlayLoader):
         await loader.load_all()
         player = await engine.place_entity("player", "default", 2, 0, name="小明")
-        door = [e for e in engine.list_entities() if e.kind == "local:door"][0]
+        door = [e for e in engine.list_entities() if e.has_component("local:door")][0]
         assert door.pos_key() == ("default", 3, 0)
         assert door.component("local:door") == {"open": False}
         # v2（D34）：所有实体都不阻挡——**没开门也能**直接走到门所在的地块

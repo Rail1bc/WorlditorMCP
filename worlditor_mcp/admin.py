@@ -522,26 +522,20 @@ async def _template_apply(request: Request) -> Response:
     return _ok({"map_id": loc.map_id, "row": loc.row, "col": loc.col, "name": loc.name})
 
 
-# ---------- 实体类型 / 标签清单（D18 / D25：管理端名词表） ----------
+# ---------- 组件清单（D41：管理端名词表） ----------
 
 
 async def _kinds(request: Request) -> Response:
-    """类型 + 标签清单（编辑器下拉与标签勾选的数据源）。
+    """**组件清单**（编辑器组件选择器的数据源）。
 
-    含 label / 字段 schema / 分类 / **来源包** / **是否隐式**（来自 kind 注册）/
-    预设标签。``?category=`` 过滤（D10 精准选取）。
+    D41：只有一套声明，所以不再分"类型 / 标签"两区——每条含 key / 来源 / 文案 /
+    动作 / 字段 schema / 选取分组。``?category=`` 过滤（D10 精准选取）。
     """
     _require_admin(request)
     category = request.query_params.get("category")
     engine = _engine(request)
     kinds = engine.list_kinds(category)
-    return JSONResponse(
-        {
-            "kinds": kinds,
-            "types": [k for k in kinds if k["implicit"]],
-            "tags": [k for k in kinds if not k["implicit"]],
-        }
-    )
+    return JSONResponse({"kinds": kinds})
 
 
 # ---------- 玩法包管理页（v0.1.12：注册协议代理） ----------
@@ -844,7 +838,8 @@ async def _entity_create(request: Request) -> Response:
         }
     try:
         entity = await _engine(request).place_entity(
-            str(data.get("kind") or ""),
+            # 不填 kind = 不带能力组件（合法）；填了空串则由引擎报错（别静默造裸实体）
+            data.get("kind") or None,
             **pos,
             name=data.get("name"),
             desc=str(data.get("desc") or ""),
@@ -853,15 +848,19 @@ async def _entity_create(request: Request) -> Response:
         )
     except WorldError as e:
         return _err(e)
-    return _ok({"id": entity.id, "tags": list(entity.tags)})
+    return _ok({"id": entity.id, "components": list(entity.components)})
 
 
 async def _entity_update(request: Request) -> Response:
-    """实体编辑（PATCH；未提供的字段不变；components/tags 整体替换）。"""
+    """实体编辑（PATCH；未提供的字段不变；components **整体替换**）。
+
+    D41：能力就是组件，所以没有"改类型 / 改标签"——加/摘能力就是加/删组件键
+    （整体替换 ``components`` 时小心别把别的组件冲掉；单点增删用组件原语）。
+    """
     _require_admin(request)
     data = await _json_body(request)
     want: dict[str, Any] = {}
-    for key in ("name", "desc", "components", "tags", "kind"):
+    for key in ("name", "desc", "components"):
         if key in data:
             want[key] = data[key]
     try:
@@ -870,7 +869,7 @@ async def _entity_update(request: Request) -> Response:
         )
     except WorldError as e:
         return _err(e)
-    return _ok({"id": entity.id, "tags": list(entity.tags)})
+    return _ok({"id": entity.id, "components": list(entity.components)})
 
 
 async def _entity_delete(request: Request) -> Response:

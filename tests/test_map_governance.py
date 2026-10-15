@@ -329,7 +329,12 @@ def test_copy_map_entities_optional_and_players_excluded(tmp_path):
 
 
 def test_copy_map_preserves_entity_tags(tmp_path):
-    """G30：复制地图时实例标签一起复制（v0.5.2 修——原先副本标签全丢）。"""
+    """G30：复制地图时实例能力（组件）一起复制（v0.5.2 修——原先副本标签全丢）。
+
+    D41-b：实体没有 ``tags`` 字段了——``place_entity(tags=[...])`` 只是输入便利，
+    写入时解析成组件键（能力 = 组件的存在），所以这里守的是"副本带着源实体的
+    全部能力组件"，丢组件 = 悄悄摘能力。
+    """
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -341,8 +346,15 @@ def test_copy_map_preserves_entity_tags(tmp_path):
             await engine.copy_map("m1", "m1_copy", with_entities=True)
             copied = engine.list_entities(map_id="m1_copy")
             assert len(copied) == 1
-            assert copied[0].tags == ["local:spawner", "local:strong"]
-            assert copied[0].tags == source.tags
+            # D41-b：tags 输入落成组件键（local:spawner / local:strong）
+            assert copied[0].has_component("local:spawner")
+            assert copied[0].has_component("local:strong")
+            # 能力组件整份复制（core:position 除外——副本的位置要指向新地图）
+            src = {k: v for k, v in source.components.items() if k != "core:position"}
+            dst = {
+                k: v for k, v in copied[0].components.items() if k != "core:position"
+            }
+            assert dst == src
             assert copied[0].id != source.id  # 是新实体，不是同一个
         finally:
             await engine.terminate()
@@ -432,12 +444,13 @@ def test_lint_reports_spawn_missing_and_dangling_entity(tmp_path):
             await engine.create_location("broken", 0, 0, "孤岛")
             await engine.assign_map("broken", "default")
             # 手工塞一个坐标上没有地块的实体（模拟数据损坏）
-            # v2 / D36：位置与名字都在组件里（core:position / core:info）
+            # v2 / D36：位置与名字都在组件里（core:position / core:info）；
+            # D41-b：能力也是组件——Entity 没有 kind 字段，要带能力就给组件键
             await engine.store.save_entity(
                 Entity(
                     id="ghost",
-                    kind="sign",
                     components={
+                        "local:sign": {},
                         "core:position": {"map_id": "broken", "row": 3, "col": 3},
                         "core:info": {"name": "幽灵"},
                     },
@@ -738,8 +751,8 @@ def test_legacy_db_is_refused_on_startup(tmp_path):
         msg = str(ei.value)
         assert "world.db" in msg  # 指明该删哪个文件（而不是打一屏栈）
         assert (
-            "v7" in msg and "v10" in msg
-        )  # 说清版本落差（SCHEMA_VERSION=10，升版要跟着改）
+            "v7" in msg and "v11" in msg
+        )  # 说清版本落差（SCHEMA_VERSION=11，升版要跟着改）
         assert "删除" in msg and "重新启动" in msg
         await engine.terminate()
 
@@ -880,12 +893,15 @@ def test_admin_location_move_endpoint(tmp_path):
 
 
 def test_identity_entity_kind_is_locked(tmp_path):
-    """（D42 改判：**这条锁已删除**）基底类型只是标签，谁都能改，包括玩家实体。
+    """（D41-b 改判：**"改类型"这个动作已不存在**）能力 = 组件的存在，增删组件谁都能做。
 
     原规则（D20）：身份化实体的类型由身份服务管，编辑器改不动。
-    D42 删掉身份概念后它没有依据了——而且原检查**只锁了一半**：
-    拦得住"玩家改成别的"，拦不住"别的改成 player"，后者会让实体立刻变成
-    `remove_entity` 删不掉的东西（编辑器里点一下类型就锁死）。这条一并修掉。
+    D42 删掉身份概念、D41-b 把 kind/tags 折成组件之后它没有依据了——实体没有
+    ``kind`` 字段，"换类型"就是 ``remove_component`` 旧能力 + ``add_component``
+    新能力，绑账户实体照样能改（原检查只锁了一半：拦得住"玩家改成别的"，拦不住
+    "别的改成 player"）。
+
+    **红线仍在**：绑定了账户的实体不能被 ``remove_entity`` 删（判据 ``core:account``）。
     """
 
     async def fn():
@@ -893,20 +909,24 @@ def test_identity_entity_kind_is_locked(tmp_path):
         try:
             await _world_with_two_maps(engine)
             npc = await engine.place_entity("merchant", "m1", 0, 0, name="NPC")
-            await engine.update_entity(npc.id, kind="sign")
-            assert npc.kind == "local:sign"
-            # 绑了账户的实体也能改 kind（D42 前会拒绝）——kind 不再是判据
+            # 换能力：摘掉 local:merchant、挂上 local:sign（等价于旧用例的"改 kind"）
+            assert await engine.remove_component(npc.id, "local:merchant") is True
+            await engine.add_component(npc.id, "local:sign")
+            assert npc.has_component("local:sign")
+            assert not npc.has_component("local:merchant")
+            # 绑了账户的实体也能换能力（D42 前会拒绝）——账户绑定不是能力锁
             player = await engine.place_entity(
                 "player", "m1", 0, 1, name="小明", user_id="acct_1"
             )
-            await engine.update_entity(player.id, kind="statue")
-            assert player.kind == "local:statue"
+            assert await engine.remove_component(player.id, "local:player") is True
+            await engine.add_component(player.id, "local:statue")
+            assert player.has_component("local:statue")
             # **但红线仍在**：绑账户的实体依然不能被 remove（判据是 core:account）
             with pytest.raises(WorldError, match="绑定了账户"):
                 await engine.remove_entity(player.id)
             # 反向升格不再是"锁死"（D42 前：普通实体改成 player 就删不掉了）
             wolf = await engine.place_entity("wolf", "m1", 1, 0, name="狼")
-            await engine.update_entity(wolf.id, kind="player")
+            await engine.add_component(wolf.id, "local:player")
             await engine.remove_entity(wolf.id)  # 没绑账户 → 照常能删
             assert engine.get_entity(wolf.id) is None
         finally:

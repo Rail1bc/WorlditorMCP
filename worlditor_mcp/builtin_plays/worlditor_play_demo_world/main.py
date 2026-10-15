@@ -72,8 +72,11 @@ async def setup(api: WorlditorPlayAPI, context) -> None:
                 map_id, row, col, direction, enabled=True, paths=slot["paths"]
             )
     for entity in data.get("entities") or []:
+        # D41：实体 = 组件字典——内容里的 `components` **就是**实体带的全部能力/数据。
+        # 这里用共享的 `local:` 命名空间（内容方不占任何玩法包的命名空间），
+        # 于是"给商贩加行为"的玩法包只要声明 `local:merchant` 即可对接（§12.6）。
         await api.place_entity(
-            str(entity["kind"]),
+            None,
             map_id,
             int(entity["row"]),
             int(entity["col"]),

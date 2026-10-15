@@ -75,8 +75,8 @@ from .model import (
     location_to_dict,
     parse_location,
     parse_map,
+    parse_names,
     parse_path,
-    parse_tags,
     parse_text_schedule,
     split_component_key,
 )
@@ -357,10 +357,16 @@ def _clean_components(value: object) -> dict[str, dict]:
 
 
 def _validate_fields(fields: list) -> list[dict]:
-    """字段 schema 校验：{name,label,type,default?}；type ∈ str/int/float/bool/json。"""
+    """字段 schema 校验：{name,label,type,default?}；type ∈ str/int/float/bool/json。
+
+    **同一组件内同名字段只能声明一次**（D41：同一地址只能有一个声明）——所以这里
+    顺带拒绝"一份声明里写了两遍同一个名字"；跨多次声明（声明 + ``add_tag_fields``
+    追加）的重名由调用点按同一把尺子检查。
+    """
     if not isinstance(fields, list):
         raise WorldError("fields 必须是列表")
     out: list[dict] = []
+    seen: set[str] = set()
     for f in fields:
         if (
             not isinstance(f, dict)
@@ -368,6 +374,9 @@ def _validate_fields(fields: list) -> list[dict]:
             or not f["name"]
         ):
             raise WorldError("字段 schema 需要 name")
+        if f["name"] in seen:
+            raise WorldError(f"同一组件内字段名重复声明：{f['name']}")
+        seen.add(f["name"])
         ftype = f.get("type", "str")
         if ftype not in _FIELD_TYPES:
             raise WorldError(f"字段类型必须是 {'/'.join(_FIELD_TYPES)} 之一")
@@ -408,9 +417,9 @@ def _clean_component_name(value: object, what: str = "组件名") -> str:
 
 
 def _clean_tag_list(value: object, what: str) -> tuple[str, ...]:
-    """标签筛选参数校验（D26：**不静默丢弃**——非字符串/空串直接报错）。
+    """组件筛选参数校验（D26：**不静默丢弃**——非字符串/空串直接报错）。
 
-    与 ``parse_tags``（实体标签的容错解析）刻意不同：实体身上的标签是**已有数据**，
+    与 ``parse_names``（写入边界的容错解析）刻意不同：实体身上的组件是**已有数据**，
     解析要宽容；查询条件是人/包现写的意图，拼错了必须报错而不是"查不到东西"。
     """
     if value is None:
@@ -572,15 +581,15 @@ def _location_from_template(data: dict, map_id: str, row: int, col: int) -> Any:
 
 
 def _entity_template_payload(data: Any) -> dict[str, Any]:
-    """实体模板负载校验 + 规范化（D22 / v2：``{kind, tags[], name, desc, components}``）。"""
+    """实体模板负载校验 + 规范化（D22 / D41：``{name, desc, components}``）。
+
+    **"类型 = 一组组件的预设"就落在这里**（D41）：模板是"照这个建一个实体"的预设，
+    建出来的实体只带组件——所以模板里也**没有** ``kind`` / ``tags``，要带能力就在
+    ``components`` 里给组件键。
+    """
     if not isinstance(data, dict):
         raise WorldError("实体模板 data 必须是对象")
-    kind = data.get("kind")
-    if not isinstance(kind, str) or not kind.strip():
-        raise WorldError("实体模板需要 kind（基底类型）")
     return {
-        "kind": kind.strip(),
-        "tags": parse_tags(data.get("tags")),
         "name": str(data.get("name") or "").strip(),
         "desc": str(data.get("desc") or ""),
         "components": _clean_components(data.get("components")),
@@ -603,27 +612,25 @@ class WorldEngine:
         self._clock = clock or (lambda: datetime.now().astimezone())
         self._rand = rand
         # 注册表（玩法包扩展点）
-        # D18：类型与标签**共用一个命名空间**（_tag_specs）——register_entity_kind
-        # 写入的是"隐式同名标签"，能力解析只有一条路径
+        # D41：**只有一套组件声明**（_tag_specs，键 = 组件键 source:name）——
+        # 带某组件即具备该能力，能力解析只有一条路径
         self._tag_specs: dict[str, TagSpec] = {}
-        # 类型预设标签：register_entity_kind/type(kind, tags=[...]) → kind 自带的额外标签
-        self._type_tags: dict[str, tuple[str, ...]] = {}
-        # D21/D26 标签归属：tag -> 最近声明它的玩法包。**停用不清、卸载才清**——
-        # query 要能回答"这条标签的能力在当前世界存不存在"：停用的包声明过的
-        # 标签若被当成"未注册 → 纯数据"就会在 query 里诈尸（D26）。
+        # D21/D26 组件归属：key -> 最近声明它的玩法包。**停用不清、卸载才清**——
+        # query 要能回答"这个组件的能力在当前世界存不存在"：停用的包声明过的
+        # 组件若被当成"未注册 → 纯数据"就会在 query 里诈尸（D26）。
+        # （D44 会把它删掉：归属已经写在键里）
         self._tag_owner: dict[str, str] = {}
-        # D21 规格级能力缓存：(kind, tags...) → 有序 TagSpec 列表（不含世界过滤）
-        self._spec_cache: dict[tuple[str, tuple[str, ...]], tuple[TagSpec, ...]] = {}
+        # D21 规格级能力缓存：组件的键集合 → 有序 TagSpec 列表（不含世界过滤）
+        self._spec_cache: dict[tuple[str, ...], tuple[TagSpec, ...]] = {}
         self._interactions: dict[str, _InteractionBinding] = {}
         self._event_bindings: dict[str, list[_EventBinding]] = {
             e: [] for e in WORLD_EVENTS
         }
         self._ui_components: dict[str, str] = {}
         self._ui_hooks: dict[tuple[str, str], list[_UiHookBinding]] = {}
-        # D9/D10 字段设施：标签/分类的追加字段声明（标签自身字段在 spec.fields）
-        # （v2 / D37：原 `_item_fields` 已随物品移除）
+        # D9/D41 字段设施：**按组件分组**的追加字段声明（组件自身字段在 spec.fields）
+        # （v2 / D37：原 `_item_fields` 已随物品移除；D41：`_category_fields` 已删）
         self._tag_fields: dict[str, list[_FieldAppend]] = {}
-        self._category_fields: dict[str, list[_FieldAppend]] = {}
         # D11/A3 原语分派表：name -> 覆盖登记（无登记 = 内核默认实现）
         self._primitive_overrides: dict[str, _PrimitiveOverride] = {}
         # G14 原语过滤器链：name -> 按注册序的过滤器列表（链尾 = 默认实现）
@@ -719,28 +726,41 @@ class WorldEngine:
         play_id: str = "",
         fields: list[dict] | None = None,
         categories: tuple[str, ...] = (),
-        implicit: bool = False,
     ) -> str:
-        """声明一个组件；来源进入键，注册不再覆盖其它来源的同名组件。"""
+        """**声明一个组件**（D41：唯一的一套声明 API）。
+
+        - 组件名 = ``source:name``：来源进名字，所以两个包各声明 ``merchant`` 是
+          **两个组件共存**，不存在"后注册覆盖"；
+        - 裸名声明时 source 自动取调用者的 ``play_id``（内核/测试直接调 engine 且
+          ``play_id=""`` → ``local``）：``register_entity_kind("merchant", …)`` 注册出的
+          是 ``<play_id>:merchant``；
+        - 显式写全名也行：**自己的包名**与**共享的 ``local:``** 都可以（后者是"内容 +
+          行为"对接的公共命名空间——世界内容用 ``local:`` 写实体，行为包声明 ``local:``
+          给它行为，见 §12.6），别的包名报错、``core:`` 报错；
+        - ``categories`` 只是**选取分组**（D10），不再承载字段（D41 删了分类字段）。
+        """
         name = _clean_component_name(name)
         if ":" in name:
             source, bare = name.split(":", 1)
-            if play_id and source != play_id:
-                raise WorldError("组件声明的 source 必须是调用玩法包自身")
             if source == "core":
                 raise WorldError("玩法包不能声明 core: 组件")
+            if source not in ("local", play_id or "local"):
+                raise WorldError(
+                    f"组件声明的 source 必须是调用玩法包自身或共享的 local:（收到 {source}）"
+                )
             key = name
         else:
             key = f"{play_id or 'local'}:{name}"
+        source = key.split(":", 1)[0]
         self._register_tag(
             key,
             interactions=interactions,
             label=label,
-            play_id=play_id
-            or (key.split(":", 1)[0] if key.split(":", 1)[0] != "local" else ""),
+            # 归属跟着**键里的 source** 走（D44 的方向：归属的唯一事实来源就是键）；
+            # `local:` 是共享命名空间，没有"内容方 owner"——只有行为包声明它时才有
+            play_id=play_id if source == "local" else source,
             fields=fields,
             categories=categories,
-            implicit=implicit,
         )
         return key
 
@@ -765,22 +785,25 @@ class WorldEngine:
         categories: tuple[str, ...] = (),
         tags: tuple[str, ...] | list[str] = (),
     ) -> str:
-        """旧名别名：声明组件，并保留旧调用点的预设组件参数。"""
-        key = self.declare_component(
+        """旧名别名（D41：旧调用点零改动）：声明一个组件。
+
+        ``tags`` 参数**只接受空值**——"类型 = 一组组件的预设"这个角色已归**实体模板**
+        （D41 / §12.6）：模板本身就是"照这个建一个实体"，预设组件写在它的
+        ``components`` 里。包想在实体上多带组件，就在放置/编辑时给组件键。
+        """
+        if parse_names(tags):
+            raise WorldError(
+                "类型预设已归实体模板（D41）：请用 register_entity_template 声明"
+                "一组组件，或直接在实体上给组件键"
+            )
+        return self.declare_component(
             kind,
             interactions=interactions,
             label=label,
             play_id=play_id,
             fields=fields,
             categories=categories,
-            implicit=True,
         )
-        if tags:
-            self._type_tags[key] = tuple(
-                self._resolve_component_key(t) for t in parse_tags(tags)
-            )
-            self._invalidate_spec_cache()
-        return key
 
     def register_entity_type(
         self,
@@ -792,12 +815,9 @@ class WorldEngine:
         play_id: str = "",
         fields: list[dict] | None = None,
         categories: tuple[str, ...] = (),
-    ) -> None:
-        """注册"类型 = 标签预设"（D18：``register_entity_type("A", tags=["c"])``
-        → 类型 A 的实体自带标签 ``A`` 与 ``c``）。等价于 ``register_entity_kind``，
-        只是名字更贴合"类型只是预设"的模型。
-        """
-        self.register_entity_kind(
+    ) -> str:
+        """``register_entity_kind`` 的同义名（更好读）；``tags`` 同上只接受空值。"""
+        return self.register_entity_kind(
             kind,
             interactions=interactions,
             label=label,
@@ -816,9 +836,9 @@ class WorldEngine:
         play_id: str = "",
         fields: list[dict] | None = None,
         categories: tuple[str, ...] = (),
-    ) -> None:
-        """注册一条标签（D18：能力由标签承载；与类型共用一个命名空间）。"""
-        self.declare_component(
+    ) -> str:
+        """旧名别名（D41）：``declare_component`` 的另一个叫法。"""
+        return self.declare_component(
             tag,
             interactions=interactions,
             label=label,
@@ -836,7 +856,6 @@ class WorldEngine:
         play_id: str,
         fields: list[dict] | None,
         categories: tuple[str, ...] | list[str],
-        implicit: bool,
     ) -> None:
         if not isinstance(interactions, (tuple, list)) or not all(
             isinstance(a, str) and a for a in interactions
@@ -851,79 +870,82 @@ class WorldEngine:
             categories=tuple(
                 str(c) for c in categories if isinstance(c, str) and c.strip()
             ),
-            implicit=implicit,
         )
         if play_id:
-            # D26：记住声明者（"最后声明者胜"与 _tag_specs 的单条语义一致）
+            # D26：记住声明者（键自带 source，但"D44 之前"仍用它区分"有主但不活跃"）
             self._tag_owner[tag] = play_id
         self._invalidate_spec_cache()
 
-    # ---------- 字段设施（D9 / D10） ----------
+    # ---------- 字段设施（D9 / D41：**按组件分组**，不跨组件摊平） ----------
+
+    def _field_names(self, key: str) -> set[str]:
+        """某组件**已经**声明过的字段名（自身声明 + 别人追加的）。"""
+        spec = self._tag_specs.get(key)
+        names = {f["name"] for f in spec.fields} if spec else set()
+        names.update(a.field["name"] for a in self._tag_fields.get(key, ()))
+        return names
 
     def add_tag_fields(
         self, tag: str, fields: list[dict], *, play_id: str = ""
     ) -> None:
-        """向已有标签追加字段（D18：B 包给**任何带该标签的实体**加字段）。
+        """给**一个组件**追加字段（D41：这就是跨包扩展的正当路径）。
 
-        这就是 v0.4 之前的 ``add_kind_fields``——语义随 D18 扩张：以前只影响
-        ``kind`` 恰好等于该名字的实体，现在影响所有带该标签的实体（含实例标签）。
+        追加只影响这个组件自己的字段清单；**同名字段重复声明 → 报错**——同一个地址
+        只能有一个声明（D41 唯一保留的字段规则）。
         """
         tag = self._resolve_component_key(tag)
         if tag not in self._tag_specs:
-            raise WorldError(f"标签（类型）未注册：{tag}")
+            raise WorldError(f"组件未声明：{tag}")
+        new = _validate_fields(fields)
+        taken = self._field_names(tag) & {f["name"] for f in new}
+        if taken:
+            raise WorldError(f"组件 {tag} 内字段名重复声明：{'、'.join(sorted(taken))}")
         self._tag_fields.setdefault(tag, []).extend(
-            _FieldAppend(play_id=play_id, field=f) for f in _validate_fields(fields)
+            _FieldAppend(play_id=play_id, field=f) for f in new
         )
 
     def add_kind_fields(
         self, kind: str, fields: list[dict], *, play_id: str = ""
     ) -> None:
-        """``add_tag_fields`` 的旧名（v0.2–v0.4 的调用点无需改动）。"""
+        """``add_tag_fields`` 的旧名（D41：旧调用点零改动）。"""
         self.add_tag_fields(kind, fields, play_id=play_id)
 
-    def add_category_fields(
-        self, category: str, fields: list[dict], *, play_id: str = ""
-    ) -> None:
-        """向分类追加字段（该分类全部标签生效；宽松，无需预注册分类）。"""
-        category = _clean_required(category, "分类名")
-        self._category_fields.setdefault(category, []).extend(
-            _FieldAppend(play_id=play_id, field=f) for f in _validate_fields(fields)
-        )
+    def effective_fields(self, key: str) -> list[dict]:
+        """单个组件的有效字段 = 自身声明 + 别人追加的（**按组件分组**，D41）。
 
-    def effective_fields(self, tag: str) -> list[dict]:
-        """单个标签的有效字段 = 声明 ∪ 追加声明 ∪ 所属分类声明（D10 运行时合并）。"""
-        return self._merge_fields([tag])
+        没有"跨组件覆盖顺序"这回事：字段属于声明它的组件；未声明的字段名不存在。
+        """
+        key = self._resolve_component_key(key)
+        spec = self._tag_specs.get(key)
+        if spec is None:
+            return []  # 未声明组件：无字段、无能力贡献（D19/R6）
+        return [*spec.fields, *(a.field for a in self._tag_fields.get(key, ()))]
 
-    def effective_fields_for(self, tags: list[str] | tuple[str, ...]) -> list[dict]:
-        """多标签的有效字段（D19 覆盖顺序：列表靠后者优先）。"""
-        return self._merge_fields(list(tags))
+    def effective_fields_for(self, keys: list[str] | tuple[str, ...]) -> list[dict]:
+        """多个组件的字段清单（D41：**不摊平**，每个字段保留自己的组件归属）。"""
+        out: list[dict] = []
+        for key in keys:
+            resolved = self._resolve_component_key(key)
+            out.extend(
+                {**f, "component": resolved} for f in self.effective_fields(resolved)
+            )
+        return out
 
-    def _merge_fields(self, tags: list[str]) -> list[dict]:
-        """字段合并（D19 顺序）：标签字段（按列表顺序，靠后覆盖）→ 分类字段（最后）。"""
-        merged: dict[str, dict] = {}
-        categories: list[str] = []
-        for tag in tags:
-            tag = self._resolve_component_key(tag)
-            spec = self._tag_specs.get(tag)
-            if spec is None:
-                continue  # 未注册标签：无行为贡献（D19/R6）
-            for f in spec.fields + [a.field for a in self._tag_fields.get(tag, [])]:
-                merged[f["name"]] = f
-            for category in spec.categories:
-                if category not in categories:
-                    categories.append(category)
-        for category in categories:
-            for a in self._category_fields.get(category, []):
-                merged[a.field["name"]] = a.field
-        return list(merged.values())
+    def fields_by_component(
+        self, keys: list[str] | tuple[str, ...]
+    ) -> dict[str, list[dict]]:
+        """``{组件键: [字段]}``——能力面报告的字段形态（D41：按组件分组）。"""
+        return {
+            resolved: self.effective_fields(resolved)
+            for resolved in (self._resolve_component_key(k) for k in keys)
+            if resolved in self._tag_specs
+        }
 
     def list_kinds(self, category: str | None = None) -> list[dict]:
-        """类型 + 标签清单（D25：含字段 schema、来源包、是否隐式、预设标签）。
+        """**组件清单**（D41：只有一套声明，所以这是一张清单，不再分"类型 / 标签"）。
 
-        类型与标签共用一个命名空间，所以这是一张**合并清单**：``implicit=True``
-        的条目来自 ``register_entity_kind``（即"类型"），False 来自
-        ``register_entity_tag``（显式标签）。任何一条都可以当实体基底 kind 用。
-        category 过滤（D10 精准选取）。
+        每条 = 一个组件：``key`` / ``source`` / ``name`` / 文案 / 动作 / 字段 schema /
+        ``categories``（选取分组，D10 的 ``category`` 过滤仍按它精准选取）。
         """
         out = []
         for tag, spec in self._tag_specs.items():
@@ -931,55 +953,51 @@ class WorldEngine:
                 continue
             out.append(
                 {
-                    "kind": tag,  # 兼容旧字段名（现在是完整组件键）
-                    "tag": tag,
                     "key": spec.key,
                     "source": spec.source,
                     "name": spec.name,
                     "label": spec.label or spec.name,
                     "interactions": list(spec.interactions),
-                    "fields": self.effective_fields(tag),
+                    "fields": self.effective_fields(spec.key),
                     "categories": list(spec.categories),
-                    "play_id": spec.play_id,
-                    "implicit": spec.implicit,
-                    "preset_tags": list(self._type_tags.get(tag, ())),
                 }
             )
-        return sorted(out, key=lambda k: k["tag"])
+        return sorted(out, key=lambda k: k["key"])
 
-    # ---------- 标签能力解析（D18 / D19 / D21） ----------
+    # ---------- 组件能力解析（D19 / D21 / D41） ----------
 
     def _invalidate_spec_cache(self) -> None:
-        """注册表变动即清空规格缓存（D21：缓存以 (kind, tags) 为键，不含世界）。"""
+        """注册表变动即清空规格缓存（D21：缓存以**实体的组件键集合**为键，不含世界）。"""
         self._spec_cache.clear()
 
-    def entity_tags(self, entity: Entity) -> list[str]:
-        """实体有效组件键 = 基底键 + 预设键 + 实例键（去重保序）。"""
-        kind = self._resolve_component_key(entity.kind)
-        preset = self._type_tags.get(kind, ())
-        return parse_tags(
-            [kind, *preset, *[self._resolve_component_key(t) for t in entity.tags]]
-        )
+    def entity_components(self, entity: Entity) -> list[str]:
+        """实体带的组件键（**这就是它的能力清单**，D41）。
+
+        含 ``core:`` 组件（位置 / 名字 / 账户绑定是内核协议数据，不是能力）——调用方
+        要"能力"就用 ``_entity_specs()`` / ``capabilities()``，它们只看有声明的组件。
+        """
+        return list(entity.components)
 
     def _entity_specs(self, entity: Entity) -> tuple[TagSpec, ...]:
-        """有效标签对应的规格（**不含世界过滤**；规格级缓存，D21/C1）。
+        """实体带的组件里**有声明**的那些规格（不含世界过滤；规格级缓存，D21/C1）。
 
-        未注册的标签没有规格 → 不贡献任何能力（实体照常存在，D19/R6）。
+        未声明的组件没有规格 → 不贡献任何能力（实体照常存在，D19/R6）——
+        这就是**虚构组件**（D41：允许存在、界面标注、不贡献能力）。
         """
-        key = (entity.kind, tuple(entity.tags))
+        key = tuple(entity.components)
         cached = self._spec_cache.get(key)
         if cached is not None:
             return cached
         specs = tuple(
             spec
-            for tag in self.entity_tags(entity)
+            for tag in self.entity_components(entity)
             if (spec := self._tag_specs.get(tag)) is not None
         )
         self._spec_cache[key] = specs
         return specs
 
     def _active_specs(self, entity: Entity) -> tuple[TagSpec, ...]:
-        """按实体**所在世界**过滤后的规格（D21：标签所属包未激活 → 不参与并集）。"""
+        """按实体**所在世界**过滤后的规格（D21：组件所属包未激活 → 不参与并集）。"""
         world_id = self.store.map_world.get(entity.map_id)
         return tuple(
             spec
@@ -988,20 +1006,23 @@ class WorldEngine:
         )
 
     def capabilities(self, entity: Entity) -> dict:
-        """实体合并后的能力（D19；管理端/编辑器诊断 + 玩法包自查用）。
+        """实体合并后的能力（D19 / D41；管理端、编辑器诊断 + 玩法包自查用）。
 
-        interactions = 并集；fields = 按
-        隐式 kind 标签 → 实例 tags（数组序）→ 分类字段 的顺序合并。
+        ``interactions`` = 各**生效组件**声明的动作并集；``fields`` = **按组件分组**
+        （``{组件键: [字段]}``，不跨组件摊平）。
 
-        同时把标签**分三类**报出来，便于编辑器解释"为什么没效果"：
-        ``inactive_tags``（注册了但该世界未激活）、``unknown_tags``（没注册）。
+        同时把组件**分类**报出来，便于编辑器解释"为什么没效果"：
+        ``inactive_components``（声明在，但该世界未激活）、``unknown_components``
+        （没有任何声明 = **虚构组件**）。``core:`` 组件是内核协议数据，不进这三类。
         （诊断路径不做缓存，热路径走 `_active_specs`。）
         """
         world_id = self.store.map_world.get(entity.map_id)
         active: list[str] = []
         inactive: list[str] = []
         unknown: list[str] = []
-        for tag in self.entity_tags(entity):
+        for tag in self.entity_components(entity):
+            if is_core_component(tag):
+                continue  # 内核协议数据（core:position / core:info / …）：不是能力
             spec = self._tag_specs.get(tag)
             if spec is None:
                 unknown.append(tag)
@@ -1011,12 +1032,12 @@ class WorldEngine:
                 inactive.append(tag)
         specs = [self._tag_specs[t] for t in active]
         return {
-            "tags": self.entity_tags(entity),
-            "active_tags": active,
-            "inactive_tags": inactive,
-            "unknown_tags": unknown,
+            "components": self.entity_components(entity),
+            "active_components": active,
+            "inactive_components": inactive,
+            "unknown_components": unknown,
             "interactions": sorted({a for s in specs for a in s.interactions}),
-            "fields": self.effective_fields_for(active),
+            "fields": self.fields_by_component(active),
         }
 
     # ---------- MCP 工具注册（D2 / G2） ----------
@@ -1611,10 +1632,12 @@ class WorldEngine:
 
         原语分派登记随生命周期清除 → 自动恢复内核默认实现（§2.4 恢复语义）。
 
-        ``purge=True``（真卸载）：连**标签归属记忆**（D26）一起清——包目录都没了，
-        "这个标签曾由它声明"就不该继续让 query 认为该标签"在本世界不存在"。
-        停用（purge=False）**保留**归属：停用的包声明过的标签仍然算"有主且不活跃"，
-        否则 query 会把它当纯数据标签匹配到（能力已经没了，数据还在）。
+        ``purge=True``（真卸载）：连**组件归属记忆**（D26）一起清——包目录都没了，
+        "这个组件曾由它声明"就不该继续让 query 认为该组件"在本世界不存在"。
+        停用（purge=False）**保留**归属：停用的包声明过的组件仍然算"有主且不活跃"，
+        否则 query 会把它当纯数据组件匹配到（能力已经没了，数据还在）。
+        规格（`_tag_specs`）**停用也不清**：清了会让 `capabilities()` 把"停用"
+        误报成"未声明"（C8）。
 
         v2 / D37：原 ``keep_user_items`` 参数已随物品移除——"用户数据 vs 包声明"
         的区分现在由**存储位置**天然承担（本地实体模板落 `templates` 表、
@@ -1625,9 +1648,6 @@ class WorldEngine:
                 k: v for k, v in self._tag_specs.items() if v.source != play_id
             }
             self._tag_owner = {k: v for k, v in self._tag_owner.items() if v != play_id}
-        self._type_tags = {
-            k: v for k, v in self._type_tags.items() if k in self._tag_specs
-        }
         self._interactions = {
             k: v for k, v in self._interactions.items() if v.play_id != play_id
         }
@@ -1648,11 +1668,6 @@ class WorldEngine:
         self._tag_fields = {
             k: [a for a in v if a.play_id != play_id]
             for k, v in self._tag_fields.items()
-            if any(a.play_id != play_id for a in v)
-        }
-        self._category_fields = {
-            k: [a for a in v if a.play_id != play_id]
-            for k, v in self._category_fields.items()
             if any(a.play_id != play_id for a in v)
         }
         self._primitive_overrides = {
@@ -2043,17 +2058,18 @@ class WorldEngine:
         limit: int | None = None,
         include_absent: bool = False,
     ) -> list[Entity]:
-        """实体查询原语（D26）：**按标签/世界/坐标/变更窗口筛一批实体**。
+        """实体查询原语（D26）：**按组件/世界/坐标/变更窗口筛一批实体**。
 
-        玩法包不再需要"全量 list_entities + 自己筛"——"所有带中毒标签的实体"
+        玩法包不再需要"全量 list_entities + 自己筛"——"所有带中毒组件的实体"
         就是 ``query_entities(tags=["poison"])``。
 
         Args:
-            tags: 必须**全部**具备的有效标签（= kind + 类型预设 + 实例 tags，
-                D18）。匹配按 D21 语义：标签由某玩法包声明、而该包在**实体所在
-                世界**未激活时，视为"该能力在本世界不存在"→ 不匹配；没有声明者
-                的标签（实例自带的纯数据标签，如 ``set_tags(["poisoned"])``）
-                照常匹配。要跳过激活语义，用 ``where=lambda e: "x" in e.tags``。
+            tags: 必须**全部**具备的组件（D41：能力 = 组件的存在）。裸名按 D41
+                解析（唯一声明者 → 用它；无人声明 → ``local:``；多个 → 报错）。
+                匹配按 D21 语义：组件由某玩法包声明、而该包在**实体所在世界**
+                未激活时，视为"该能力在本世界不存在"→ 不匹配；**没有声明者**的
+                组件（实体自带的纯数据组件，或声明包已被真卸载）照常匹配。
+                要跳过激活语义，用 ``where=lambda e: e.has_component("x")``。
             exclude_tags: 任一具备即排除（同一套激活语义）。
             map_id: 限定地图（空串 = 默认地图；不存在报错）。
             world_id: 限定世界（**未归属地图按默认世界算**，与激活判定同源）。
@@ -2140,7 +2156,7 @@ class WorldEngine:
             ):
                 continue
             if required or excluded:
-                live = self._live_tags(entity)
+                live = self._live_components(entity)
                 if not set(required) <= live:
                     continue
                 if excluded and (set(excluded) & live):
@@ -2177,22 +2193,22 @@ class WorldEngine:
             if e.id == viewer_id or not e.component(CORE_PERCEPTION).get(ATTR_INVISIBLE)
         ]
 
-    def _live_tags(self, entity: Entity) -> set[str]:
-        """实体身上"活着"的有效标签集（D26：激活语义的**唯一**落地点）。
+    def _live_components(self, entity: Entity) -> set[str]:
+        """实体身上"活着"的组件键集（D26：激活语义的**唯一**落地点）。
 
-        "活着" = 该标签的**声明者当前已加载** 且 **实体所在世界启用了它**；
-        没有声明者的标签（实例自带的纯数据标签，或声明包已被真卸载）算活着。
+        "活着" = 该组件的**声明者当前已加载** 且 **实体所在世界启用了它**；
+        没有声明者的组件（实体自带的纯数据组件，或声明包已被真卸载）算活着。
 
-        为什么比"世界激活"多一条"已加载"：标签是**留在实体数据上的**，包停用后
-        标签还在（不像过滤器/覆盖登记那样随停用消失）。只看世界激活集合时，
-        空 ``play_ids``（= 全部激活）会让停用包声明的标签"诈尸"成纯数据标签——
+        为什么比"世界激活"多一条"已加载"：组件是**留在实体数据上的**，包停用后
+        组件还在（不像过滤器/覆盖登记那样随停用消失）。只看世界激活集合时，
+        空 ``play_ids``（= 全部激活）会让停用包声明的组件"诈尸"成纯数据组件——
         于是 query 说"这是商贩"，available_actions 却说"它没有任何动作"。
 
         包含与排除用同一份集合判定，所以语义天然对称。
         """
         world_id = self.store.map_world.get(entity.map_id)
         live: set[str] = set()
-        for tag in self.entity_tags(entity):
+        for tag in self.entity_components(entity):
             owner = self._tag_owner.get(tag)
             if owner and (
                 owner not in self._play_apis
@@ -2551,7 +2567,7 @@ class WorldEngine:
 
     async def place_entity(
         self,
-        kind: str,
+        kind: str | None = None,
         map_id: str | None = None,
         row: int | None = None,
         col: int | None = None,
@@ -2562,11 +2578,16 @@ class WorldEngine:
         user_id: str | None = None,
         tags: list[str] | tuple[str, ...] | None = None,
     ) -> Entity:
-        """放置实体（地图编辑内容，admin；B8）。
+        """放置实体（新实体 = **一个组件字典**，D41）。
 
-        kind 未注册也可放置（宽松：行为缺失而已）；name 缺省取 kind label。
-        实体 id 自动生成 uuid4 hex（B5）；``tags`` 为实例级标签（D18，可组合出
-        "玩家 + 刷怪笼"这类实体，能力见 D19）。
+        **能力就是组件**：``kind`` / ``tags`` 是**输入便利**（D41 的裸名解析，写入时解析）
+        ——``kind="wolf"`` 等于给实体带上 ``bestiary:wolf`` 组件（数据 ``{}``，纯能力标记），
+        ``tags=["potion"]`` 等于再带上几个组件。要带数据的组件走 ``components``
+        （键必须是自己写的完整 ``source:name``，D33）。
+
+        两者都可以不给：**没有能力组件的实体也合法**（一块石头、一个纯位置标记）。
+        ``kind`` 未声明也可放置（裸名解析落 ``local:``——虚构组件，见 D41）。
+        name 缺省取该组件的 label（声明过的话）。
 
         v2 / D32（§12.4）：``name`` / ``desc`` / ``user_id`` 是**输入便利**——它们会被
         折进 ``core:info`` / ``core:account`` 组件，实体本身没有这三样特权字段。
@@ -2577,16 +2598,27 @@ class WorldEngine:
         静默出现在 (0,0) 的实体；"全有或全无"这条规则与 ``Entity.from_dict`` 一致。
 
         Raises:
-            WorldError: 位置参数只给了一部分 / 目标地块不存在 / 参数非法。
+            WorldError: 位置参数只给了一部分 / 目标地块不存在 / 参数非法 / 裸名有多个声明者。
         """
         async with self._lock:
             has_pos = self._resolve_new_position(map_id, row, col)
-            kind = self._resolve_component_key(kind)
-            resolved_tags = [self._resolve_component_key(t) for t in parse_tags(tags)]
-            spec = self._tag_specs.get(kind)
-            if name is None or not str(name).strip():
-                name = (spec.label if spec and spec.label else kind) if spec else kind
             payload = _clean_components(components)
+            ability: list[str] = []
+            if kind is not None:
+                # None = 不带能力组件；空串是**写错了**（`_resolve_component_key` 报"不能为空"），
+                # 不静默当成"没有"——"忘了填"该吵，不该悄悄造出一个裸实体
+                ability.append(self._resolve_component_key(kind))
+            ability.extend(self._resolve_component_key(t) for t in parse_names(tags))
+            spec = self._tag_specs.get(ability[0]) if ability else None
+            if name is None or not str(name).strip():
+                name = (
+                    (spec.label if spec and spec.label else ability[0])
+                    if ability
+                    else ""
+                )
+            # 能力组件进实体（数据 {} 是"纯能力标记"；components 里已给数据就保留）
+            for key in ability:
+                payload.setdefault(key, {})
             # D36：位置进 core:position（不再是列）——给了坐标才叫"放进世界"
             if has_pos is not None:
                 payload = {**payload, CORE_POSITION: has_pos}
@@ -2601,15 +2633,17 @@ class WorldEngine:
                 payload = {**payload, CORE_ACCOUNT: {"user_id": str(user_id)}}
             entity = Entity(
                 id=uuid.uuid4().hex,
-                kind=kind,
                 components=payload,
                 last_active_ts=self._now_ts(),
-                tags=resolved_tags,
             )
             await self.store.save_entity(entity)
             await self._emit(
                 "on_world_edited",
-                {"op": "place_entity", "entity_id": entity.id, "kind": kind},
+                {
+                    "op": "place_entity",
+                    "entity_id": entity.id,
+                    "components": ability,
+                },
             )
             return entity
 
@@ -3379,13 +3413,13 @@ class WorldEngine:
         name: object = _UNSET,
         desc: object = _UNSET,
         components: object = _UNSET,
-        tags: object = _UNSET,
-        kind: object = _UNSET,
     ) -> Entity:
-        """更新实体字段（admin 编辑；components/tags 整体替换）。
+        """更新实体（admin 编辑；``components`` **整体替换**）。
 
-        类型（基底 `kind`）可改——**D42 起它只是个标签**，没有任何身份含义
-        （原"身份化实体的类型由身份服务管理"整条删除，连带修掉反向升格洞）。
+        D41：**能力就是组件**，所以"改类型 / 改标签"这两个动作不存在——要加能力就
+        往 ``components`` 里加一个组件键，要摘能力就把它删掉（空组件是纯能力标记，
+        "顺手删空组件"等于静默摘掉能力，所以删除必须显式）。加/删单个组件请用
+        ``add_component`` / ``remove_component`` 原语，免得整块替换时丢数据。
 
         v2 / D32（§12.4）：``name`` / ``desc`` 写在 ``core:info`` 里（★只动这两个键，
         不碰同一组件下的其它数据）；传空串等于把该键删掉（``name`` 随即回落到
@@ -3393,12 +3427,6 @@ class WorldEngine:
         """
         async with self._lock:
             entity = self._require_entity(entity_id)
-            if kind is not _UNSET:
-                # D42：原来的"身份化实体类型锁定"已删除——身份概念没了，
-                # `kind` 只是个标签。**连带修掉一个实测到的洞**：原检查只拦
-                # "身份实体改走"，不拦"普通实体改成 player"，而后者会让实体
-                # 立刻变成 `remove_entity` 删不掉的东西（编辑器里点一下类型就锁死）。
-                entity.kind = self._resolve_component_key(_clean_required(kind, "类型"))
             if components is not _UNSET:
                 entity.components = _clean_components(components)
             if name is not _UNSET or desc is not _UNSET:
@@ -3418,10 +3446,6 @@ class WorldEngine:
                     entity.components = {
                         k: v for k, v in entity.components.items() if k != CORE_INFO
                     }
-            if tags is not _UNSET:
-                if tags is not None and not isinstance(tags, (list, tuple)):
-                    raise WorldError("tags 必须是标签数组")
-                entity.tags = [self._resolve_component_key(t) for t in parse_tags(tags)]
             await self.store.save_entity(entity)
             await self._emit("on_entity_changed", entity, {"edited": True})
             return entity
@@ -3557,9 +3581,8 @@ class WorldEngine:
                         new_map_id, e.require_position()[1], e.require_position()[2]
                     )
                     cloned.last_active_ts = 0.0
-                    # D18：实例标签必须一起复制——否则副本悄悄变成"裸实体"
-                    # （原先漏了这行：带 spawner 标签的实体复制后标签全丢）
-                    cloned.tags = list(e.tags)
+                    # D41：**能力就是组件**——深拷贝已把组件（含能力组件与数据）整份带走，
+                    # 不再有"实例标签"这一项要单独补（原 `cloned.tags = list(e.tags)` 已删）
                     cloned_entities.append(cloned)
                 await self.store.save_entities(cloned_entities)
             # 归属：默认与源地图同世界同节点
@@ -3706,7 +3729,7 @@ class WorldEngine:
                 add(
                     "error",
                     "dangling_entity",
-                    f"实体「{e.name}」（{e.kind}）在 ({e.row}, {e.col}) 但那里没有地块",
+                    f"实体「{e.name}」（{e.id[:8]}）在 ({e.row}, {e.col}) 但那里没有地块",
                     map_id=map_id,
                     row=e.row,
                     col=e.col,
@@ -3812,8 +3835,9 @@ class WorldEngine:
     ) -> None:
         """注册玩法包自带的**实体模板**（D22：内存注册表，随包卸载消失）。
 
-        data 形如 ``{kind, tags[], name, desc, components}``（v2/D32：原 attrs/state
-        两容器已取消）——套用即"照这个建一个实体"，建完仍可改。
+        data 形如 ``{name, desc, components}``（D41：**"类型 = 一组组件的预设"就落在这里**
+        ——所以没有 ``kind`` / ``tags``，要带能力就在 ``components`` 里给组件键）——
+        套用即"照这个建一个实体"，建完仍可改。
         管理端本地模板落库、与这里合并成一个选择列表（D37：这条"包声明 vs 本地数据"
         的区分顶替了原"管理员手工物品定义"的位置）。
         """

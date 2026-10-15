@@ -64,14 +64,14 @@ class WorlditorPlayAPI:
         categories: tuple[str, ...] = (),
         tags: tuple[str, ...] = (),
     ) -> None:
-        """注册实体类型（D18：等价于注册一条**隐式同名标签** + 预设标签）。
+        """声明一个组件（D41；旧名，等价的 `declare_component` 更好读）。
 
         Args:
             label: 文案（B1），也是放置实体时未给名字的默认名。
             fields: 字段 schema（{name,label,type,default?}，D9）。
-            categories: 分类标签（D10，宽松无需预注册）。
-            tags: 该类型**预设**的额外标签——"类型 A = {A, C}" 就写
-                ``register_entity_kind("A", tags=("C",))``。
+            categories: 选取分组（D10，宽松无需预注册；**不再承载字段**，D41）。
+            tags: **已作废**（D41）："类型 = 一组组件的预设"归实体模板
+                （`register_entity_template`），传非空值会报错。
         """
         self._engine.register_entity_kind(
             kind,
@@ -93,7 +93,7 @@ class WorlditorPlayAPI:
         fields: list[dict] | None = None,
         categories: tuple[str, ...] = (),
     ) -> None:
-        """注册"类型 = 标签预设"（D18；``register_entity_kind`` 的同义名，更好读）。"""
+        """``register_entity_kind`` 的同义名（D41；``tags`` 同上已作废）。"""
         self.register_entity_kind(
             kind,
             interactions=interactions,
@@ -112,10 +112,10 @@ class WorlditorPlayAPI:
         fields: list[dict] | None = None,
         categories: tuple[str, ...] = (),
     ) -> None:
-        """注册一条标签（D18：能力由标签承载；与类型共用一个命名空间）。
+        """声明一个组件（D41；旧名，等价的 `declare_component` 更好读）。
 
-        实体挂上这条标签即可获得这里声明的一切（能力 = 各标签并集，D19）——
-        "给玩家再组合一个刷怪笼标签"就是这么来的。
+        实体带上这个组件就获得这里声明的一切（interactions 并集，D19）——
+        "给玩家再组合一个刷怪笼组件"就是这么来的。
         """
         self._engine.register_entity_tag(
             tag,
@@ -127,23 +127,22 @@ class WorlditorPlayAPI:
         )
 
     def add_tag_fields(self, tag: str, fields: list[dict]) -> None:
-        """向已有标签追加字段（D18：**所有带该标签的实体**都获得这些字段）。"""
+        """给**一个组件**追加字段（D41：跨包扩展的正当路径，也是唯一的）。
+
+        同名字段在同一组件内重复声明 → 报错（D41：同一地址只能有一个声明）。
+        """
         self._engine.add_tag_fields(tag, fields, play_id=self.play_id)
 
     def add_kind_fields(self, kind: str, fields: list[dict]) -> None:
-        """``add_tag_fields`` 的旧名（语义随 D18 扩张为"按标签"，见其文档）。"""
+        """``add_tag_fields`` 的旧名（D41：旧调用点零改动）。"""
         self._engine.add_kind_fields(kind, fields, play_id=self.play_id)
 
-    def add_category_fields(self, category: str, fields: list[dict]) -> None:
-        """向分类追加字段（该分类全部标签生效，D10）。"""
-        self._engine.add_category_fields(category, fields, play_id=self.play_id)
-
     def list_kinds(self, category: str | None = None) -> list[dict]:
-        """类型 + 标签清单（含字段 schema、来源包、是否隐式、预设标签）。"""
+        """**组件清单**（D41：只有一套声明，不再是"类型 + 标签"两张表）。"""
         return self._engine.list_kinds(category)
 
     def capabilities(self, entity) -> dict:
-        """某实体合并后的能力（D19）：标签 / 挡路 / 动作并集 / 字段并集。"""
+        """某实体的能力（D41）：生效组件 / 动作并集 / **按组件分组**的字段。"""
         return self._engine.capabilities(entity)
 
     def register_interaction(
@@ -226,7 +225,7 @@ class WorlditorPlayAPI:
         where=None,
         limit: int | None = None,
     ) -> list:
-        """实体查询（D26）：「所有带某标签的实体」不再需要全量扫 + 自己筛。
+        """实体查询（D26）：「所有带某组件的实体」不再需要全量扫 + 自己筛。
 
         ```python
         for e in api.query_entities(tags=["poison"], world_id=world_id):
@@ -237,12 +236,14 @@ class WorlditorPlayAPI:
         ```
 
         语义要点（详见 ``WorldEngine.query_entities``）：
-        - 标签匹配按 D21 生效：声明该标签的包在实体所在世界未激活 → 不匹配；
-          实例自带的纯数据标签（无声明者）照常匹配。
+        - ``tags`` / ``exclude_tags`` 筛的是**组件的存在**（D41），裸名会按 D41
+          解析成完整组件键（唯一声明者 → 加前缀；无人声明 → ``local:``；多个 → 报错）。
+        - 组件匹配按 D21 生效：声明该组件的包在实体所在世界未激活 → 不匹配；
+          实体自带的纯数据组件（无声明者）照常匹配。
         - ``viewer_id`` 走感知过滤（G12 隐身），与 list_entities 同源。
         - 增量遍历（D28）：``changed_since_revision``（精确游标，配
           ``api.world_revision()``）或 ``changed_since_tick``（窗口粒度，宁可多报）。
-        - 严格校验：拼错的地图/世界、非法标签会报错，而不是"查到空"。
+        - 严格校验：拼错的地图/世界、非法组件名会报错，而不是"查到空"。
         """
         return self._engine.query_entities(
             tags=tags,
@@ -580,7 +581,7 @@ class WorlditorPlayAPI:
 
     async def place_entity(
         self,
-        kind: str,
+        kind: str | None = None,
         map_id: str | None = None,
         row: int | None = None,
         col: int | None = None,
@@ -592,8 +593,10 @@ class WorlditorPlayAPI:
     ):
         """放置实体（spawn；绑定了账户的实体不可被 remove，D14 / D42）。
 
-        ``tags`` 为实例级标签（D18）——刷怪笼包要"生成一个带刷怪能力的实体"
-        就是 ``place_entity("slime", ..., tags=["spawner"])``。
+        D41：**能力就是组件**——``kind`` / ``tags`` 是输入便利（裸名解析），
+        ``kind="slime"`` 等于带上 ``bestiary:slime`` 组件；刷怪笼包要"生成一个带刷怪
+        能力的实体"就是 ``place_entity("slime", ..., tags=["spawner"])``。两者都可省
+        （没有能力组件的实体也合法）；要带数据的组件走 ``components``。
         ``components`` 为初始组件（v2；``core:`` 一律拒绝，见 ``_guard_component``）。
         **位置三参数可选（D36）**：全不给 = 造一个**不在世界上**的实体
         （物品放进容器、待投放的 NPC）——它们不出现在 ``list_entities`` /
@@ -616,13 +619,6 @@ class WorlditorPlayAPI:
     async def remove_entity(self, entity_id: str) -> None:
         """移除实体（despawn；**绑定了账户的实体被拒绝**，D14 / D42）。"""
         await self._engine.remove_entity(entity_id)
-
-    async def set_tags(self, entity_id: str, tags: list[str]) -> None:
-        """整体替换实体的实例标签（D18；"给玩家加一个刷怪笼标签"就走这里）。
-
-        注意：基底 ``kind`` 不在此列——身份/类型是治理域（D20），换 kind 走身份服务。
-        """
-        await self._engine.update_entity(entity_id, tags=list(tags))
 
     # ---------- 地图编辑（D14：地块/连接/地图/模板） ----------
 

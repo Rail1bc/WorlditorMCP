@@ -30,6 +30,7 @@ async def _engine(tmp_path: Path) -> WorldEngine:
 
 async def _player(engine: WorldEngine):
     # v2（D32）：没有扁平 attrs 了，玩法数据归 local: 组件。
+    # D41：kind="player" 是输入便利——实体实际带的是 local:player 组件（数据 {}）。
     return await engine.place_entity(
         "player", "default", 0, 0, name="小明", components={"local:stat": {"gold": 5}}
     )
@@ -208,10 +209,12 @@ def test_component_primitives_and_events(tmp_path):
             assert await engine.remove_component(player.id, "local:bag") is False
             assert seen[-1] == {"components_removed": ["local:bag"]}
             # 只读接口（不进分派表）：稳定排序的组件名列表
-            # （v2：位置在 core:position、名字在 core:info，所以它们也在清单中）
+            # （v2：位置在 core:position、名字在 core:info，所以它们也在清单中；
+            #  D41：kind="player" 落成 local:player 组件——能力也在清单里）
             assert engine.list_components(player.id) == [
                 "core:info",
                 "core:position",
+                "local:player",
                 "local:quest",
                 _STAT,
             ]
@@ -269,7 +272,13 @@ def test_override_handler_exception_isolated(tmp_path):
 
 
 def test_kind_fields_and_merge(tmp_path):
-    """字段三层次：kind 声明 ∪ 追加 ∪ 分类（运行时合并）。"""
+    """字段设施（D41）：声明 ∪ 同一组件内追加；**按组件分组、不跨组件摊平**。
+
+    原用例守的是"kind 声明 ∪ 追加 ∪ 分类字段"三层合并（分类也承载字段）。D41 把
+    ``add_category_fields`` 删掉后，字段只有一个归属：**声明它的那个组件**——分类
+    退回纯选取分组（D10），另一个组件拿不到别人的字段。这条用例改成守同一件事：
+    字段设施仍然"声明 + 追加"可用，但**绝不跨组件摊平**。
+    """
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -283,24 +292,24 @@ def test_kind_fields_and_merge(tmp_path):
                 categories=("生物",),
             )
             api.add_kind_fields("monster", [{"name": "poison", "type": "bool"}])
-            api.add_category_fields("生物", [{"name": "aggro", "type": "bool"}])
             fields = engine.effective_fields("pkg_a:monster")
-            assert {f["name"] for f in fields} == {"hp", "poison", "aggro"}
+            assert {f["name"] for f in fields} == {"hp", "poison"}
             assert next(f for f in fields if f["name"] == "hp")["default"] == 10
-            # 分类字段对同分类其他 kind 生效
+            # **不摊平**：另一个组件（同分类）一个字段都拿不到
             api.register_entity_kind("slime", label="史莱姆", categories=("生物",))
-            assert {f["name"] for f in engine.effective_fields("pkg_a:slime")} == {
-                "aggro"
-            }
-            # list_kinds 过滤
+            assert engine.effective_fields("pkg_a:slime") == []
+            # 分类只用于 list_kinds 的精准选取（D10），不承载字段
             kinds = engine.list_kinds(category="生物")
-            assert {k["kind"] for k in kinds} == {"pkg_a:monster", "pkg_a:slime"}
-            assert "pkg_a:monster" in [k["kind"] for k in engine.list_kinds()]
+            assert {k["key"] for k in kinds} == {"pkg_a:monster", "pkg_a:slime"}
+            assert "pkg_a:monster" in [k["key"] for k in engine.list_kinds()]
+            # 同一组件内同名字段重复声明 → 报错（D41：一个地址只能有一个声明）
+            with pytest.raises(WorldError, match="重复声明"):
+                api.add_kind_fields("monster", [{"name": "hp", "type": "int"}])
             # 非法字段类型报错
             with pytest.raises(WorldError, match="字段类型"):
                 api.register_entity_kind("bad", fields=[{"name": "x", "type": "weird"}])
-            # 未注册 kind 追加报错
-            with pytest.raises(WorldError, match="未注册"):
+            # 未声明组件追加报错
+            with pytest.raises(WorldError, match="未声明"):
                 api.add_kind_fields("ghost", [{"name": "x", "type": "int"}])
         finally:
             await engine.terminate()
@@ -328,7 +337,7 @@ def test_component_declaration_fields_replaces_item_fields(tmp_path):
             )
             api.register_entity_tag("megaphone", label="喇叭")
             api.add_tag_fields("megaphone", [{"name": "price", "type": "int"}])
-            row = next(k for k in api.list_kinds() if k["tag"] == "pkg_a:sword")
+            row = next(k for k in api.list_kinds() if k["key"] == "pkg_a:sword")
             assert row["fields"][0]["name"] == "atk"
             # add_tag_fields 落内存注册表，且记了归属（卸载可清）
             assert "price" in {

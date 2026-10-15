@@ -1,16 +1,21 @@
-"""实体标签体系（v0.5 / D18–D21 / D25）：能力由标签承载，类型退化为预设标志位。
+"""实体组件与能力（D41：**能力 = 组件的存在**）。
 
 回归背景：v0.4 之前 `entities.kind` 是**单值**且身兼三职——身份（IDENTITY_KINDS）、
-行为声明（block_move/interactions）、字段 schema 归属——"组合"在库层面存不下。
-本模块守住 D18–D21 的语义：
+行为声明（interactions）、字段 schema 归属；D18 把它拆成"类型 + 标签"两套声明，
+但**能力仍存在两张表列里**（`kind` / `tags_json`），与 `components` 是两个平行世界。
+D41 把两者折起来：**实体带了哪个组件，就具备哪条能力**。
 
-1. `register_entity_kind` = 语法糖，注册一条**隐式同名标签**（旧包/旧测试零改动）
-2. 实例 `tags[]` 与类型预设标签一起参与能力**并集**（"玩家 + 刷怪笼"成立）
-3. `interactions` 多标签取**并集**；字段顺序 = 标签序 → 分类最后
-   （v2 第 1 期移除了 `block_move` 阻挡机制，D34：这里改观测 `interactions`）
-4. 身份判定**只看基底 kind**（标签里写 player 不算数）
-5. 能力面**逐标签**按世界激活过滤；未注册标签无能力贡献但实体照常存在
-6. 规格级缓存随注册表变动失效
+本模块守住 D41 的语义：
+
+1. 声明只有**一套**（`declare_component`；`register_entity_kind` / `register_entity_tag`
+   是保留的旧名），组件名 = `source:name`——两个包各声明 `merchant` 是**两个组件共存**
+2. 能力 = 实体的组件键；纯能力组件的数据是 `{}`（"空组件"与"没有这个组件"必须分得开）
+3. `interactions` 多组件取**并集**；字段清单**按组件分组**，不跨组件摊平
+4. **同一组件内同名字段重复声明 → 报错**；分类字段已删除（`categories` 只作选取分组）
+5. "类型 = 一组组件的预设"归**实体模板**，声明 API 的 `tags=` 已作废
+6. 能力面**逐个组件**按世界激活过滤；没有声明的组件 = **虚构组件**（允许、不贡献能力）
+7. 规格级缓存随注册表变动失效
+8. 实体落库只有组件（表 v11 / 4 列）
 """
 
 from __future__ import annotations
@@ -23,7 +28,7 @@ import pytest
 from world_fixtures import schedule, seed_test_world
 
 from worlditor_mcp.world.engine import WorldEngine, WorldError
-from worlditor_mcp.world.model import TagSpec, WorldTemplate, parse_tags
+from worlditor_mcp.world.model import TagSpec, WorldTemplate, parse_names
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
 from worlditor_mcp.world.store import WorldStore
 
@@ -39,29 +44,53 @@ async def _engine(tmp_path: Path) -> WorldEngine:
     return engine
 
 
-# ---------- D18：kind = 隐式同名标签 ----------
+async def _noop_handler(api, req):  # pragma: no cover - 仅用于注册动作
+    from worlditor_mcp.world.model import InteractionResult
+
+    return InteractionResult(text="ok")
 
 
-def test_kind_registration_is_implicit_tag(tmp_path):
-    """register_entity_kind 写出来的是 implicit=True 的标签；能力照旧生效。"""
+# ---------- D41：一套声明 API ----------
+
+
+def test_declare_component_and_old_names_are_equivalent(tmp_path):
+    """`declare_component` 是唯一入口；`register_entity_kind` / `register_entity_tag` 等价。"""
 
     async def fn():
         engine = await _engine(tmp_path)
         try:
-            engine.register_entity_kind("door", interactions=("open",), label="木门")
+            key = engine.declare_component("door", interactions=("open",), label="木门")
+            assert key == "local:door"
             spec = engine._tag_specs["local:door"]
-            assert isinstance(spec, TagSpec) and spec.implicit is True
-            listing = engine.list_kinds()
-            door = next(k for k in listing if k["tag"] == "local:door")
-            assert door["implicit"] is True
-            assert door["interactions"] == ["open"]
+            assert isinstance(spec, TagSpec)
+            assert (
+                spec.key == "local:door"
+                and spec.source == "local"
+                and spec.name == "door"
+            )
+
+            listing = {k["key"]: k for k in engine.list_kinds()}
+            door = listing["local:door"]
             assert door["label"] == "木门"
+            assert door["interactions"] == ["open"]
+            assert door["source"] == "local" and door["name"] == "door"
+            # D41：声明只有一套 → 清单里没有"是否隐式 / 预设标签"这类旧概念
+            assert "implicit" not in door and "preset_tags" not in door
             # D34：阻挡机制整体移除，能力面不再有 block_move
             assert "block_move" not in door
 
-            # 老写法：只给 kind，能力与 v0.4 完全一致
+            # 旧名等价：同一个键、同样的规格
+            engine.register_entity_kind("door", interactions=("open",), label="木门")
+            engine.register_entity_tag("door", interactions=("open",), label="木门")
+            again = engine.declare_component(
+                "door", interactions=("open",), label="木门"
+            )
+            assert again == "local:door"
+
             door_entity = await engine.place_entity("door", "default", 0, 0)
             assert door_entity.name == "木门"  # 默认名仍取 label
+            assert door_entity.has_component("local:door")
+            assert door_entity.component("local:door") == {}  # 纯能力组件：无数据
             caps = engine.capabilities(door_entity)
             assert caps["interactions"] == ["open"]
             assert "block_move" not in caps
@@ -71,27 +100,8 @@ def test_kind_registration_is_implicit_tag(tmp_path):
     _run(fn())
 
 
-def test_explicit_tag_registration_marks_non_implicit(tmp_path):
-    """register_entity_tag 注册的标签 implicit=False，可与类型区分展示。"""
-
-    async def fn():
-        engine = await _engine(tmp_path)
-        try:
-            engine.register_entity_tag(
-                "spawner", label="刷怪笼", interactions=("tune",)
-            )
-            listing = {k["tag"]: k for k in engine.list_kinds()}
-            assert listing["local:spawner"]["implicit"] is False
-            assert listing["local:spawner"]["label"] == "刷怪笼"
-            assert listing["local:spawner"]["interactions"] == ["tune"]
-        finally:
-            await engine.terminate()
-
-    _run(fn())
-
-
 def test_composition_player_plus_spawner(tmp_path):
-    """组合：玩家基底 + 刷怪笼标签 → 两边能力同时生效（用户的核心设想）。"""
+    """组合：玩家组件 + 刷怪笼组件 → 两边能力同时生效（用户的核心设想）。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -107,15 +117,20 @@ def test_composition_player_plus_spawner(tmp_path):
                 "player", "default", 0, 0, name="小明", tags=["spawner"]
             )
             caps = engine.capabilities(player)
-            assert caps["tags"] == ["local:player", "local:spawner"]
-            # player 没有注册过规格（v2/D42：身份概念已删，player 只是个未声明的标签名）
+            assert set(caps["components"]) == {
+                "local:player",
+                "local:spawner",
+                "core:position",
+                "core:info",
+            }
+            # player 没有注册过规格（D42：身份概念已删，player 只是个未声明的组件名）
             # → 只有 spawner 在贡献
-            assert caps["active_tags"] == ["local:spawner"]
-            assert caps["unknown_tags"] == ["local:player"]
+            assert caps["active_components"] == ["local:spawner"]
+            assert caps["unknown_components"] == ["local:player"]
             assert "tune" in caps["interactions"]
             assert "tune" in engine.available_actions(player.id)
-            assert {f["name"] for f in caps["fields"]} == {"mob"}
-            # D42：**没有"身份"这回事**——kind=player 不带任何特权，
+            assert {f["name"] for f in caps["fields"]["local:spawner"]} == {"mob"}
+            # D42：**没有"身份"这回事**——带 player 组件不带任何特权，
             # 判据是账户绑定（这个实体没绑账户 → 普通实体，可以被 remove）
             assert player.is_account_bound() is False
         finally:
@@ -124,8 +139,8 @@ def test_composition_player_plus_spawner(tmp_path):
     _run(fn())
 
 
-def test_type_preset_tags(tmp_path):
-    """类型 = 标签预设："类型 A = {A, C}"、"类型 B = {B, C}"（用户原话）。"""
+def test_type_presets_moved_to_templates(tmp_path):
+    """D41：声明 API 不再收 `tags=`；"类型 = 一组组件的预设"归实体模板。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -134,37 +149,38 @@ def test_type_preset_tags(tmp_path):
             engine.register_entity_tag("b", label="能力乙")
             engine.register_entity_tag("c", label="公共能力", interactions=("ping",))
             engine.register_interaction("ping", _noop_handler, label="ping")
-            # 类型 A 自带 A、C；类型 B 自带 B、C（用户原话："A 有 A 和 C，B 有 B 和 C"）
-            engine.register_entity_type("A", tags=["c"], label="甲型")
-            engine.register_entity_type("B", tags=["c"], label="乙型")
 
-            a = await engine.place_entity("A", "default", 0, 0)
-            b = await engine.place_entity("B", "default", 0, 1)
-            assert engine.entity_tags(a) == ["local:A", "local:c"]
-            assert engine.entity_tags(b) == ["local:B", "local:c"]
-            # 公共能力 c 同时作用于两种类型
+            with pytest.raises(WorldError, match="实体模板"):
+                engine.register_entity_kind("A", tags=["c"], label="甲型")
+            with pytest.raises(WorldError, match="实体模板"):
+                engine.register_entity_type("A", tags=["c"], label="甲型")
+
+            # 预设的正确落点：实体模板 = "照这个建一个实体"（一组组件）
+            engine.register_entity_template(
+                "type_a",
+                "甲型",
+                {"components": {"local:A": {}, "local:c": {}}},
+            )
+            tmpl = next(
+                t for t in engine.list_templates("entity") if t["id"] == "type_a"
+            )
+            assert tmpl["data"]["components"] == {"local:A": {}, "local:c": {}}
+            # 套用即得"类型 A = {A, c}"那组能力（c 的 ping 同时生效）
+            a = await engine.place_entity(
+                "A", "default", 0, 0, components=tmpl["data"]["components"]
+            )
             assert engine.capabilities(a)["interactions"] == ["ping"]
-            assert engine.capabilities(b)["interactions"] == ["ping"]
-            # list_kinds 暴露预设标签，编辑器可据此展示"选 A 即得 A+C"
-            listing = {k["tag"]: k for k in engine.list_kinds()}
-            assert listing["local:A"]["preset_tags"] == ["local:c"]
-            assert listing["local:B"]["preset_tags"] == ["local:c"]
         finally:
             await engine.terminate()
 
     _run(fn())
 
 
-# ---------- D19：并集与冲突规则 ----------
+# ---------- D41：并集与"不摊平" ----------
 
 
-def test_interactions_union_across_tags(tmp_path):
-    """多标签的 interactions 取**并集**（原 block_move"任一为真即生效"的同类语义）。
-
-    v2 第 1 期（D34）移除了 ``block_move`` 阻挡机制与其 ``state`` 动态覆盖：
-    ``capabilities()`` 只剩静态声明（标签 → interactions/fields），玩法包想实现
-    "门开才挡路"应 ``override_primitive("move")``（D11），内核不再提供这道口子。
-    """
+def test_interactions_union_across_components(tmp_path):
+    """多组件的 interactions 取**并集**（D19 保留项在新模型下的形态）。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -176,12 +192,11 @@ def test_interactions_union_across_tags(tmp_path):
             both = await engine.place_entity(
                 "rock", "default", 0, 0, tags=["soft", "hard"]
             )
-            # 并集：两个标签各贡献一个动作，互不覆盖
+            # 并集：两个组件各贡献一个动作，互不覆盖
             assert engine.capabilities(both)["interactions"] == ["lean", "smash"]
             assert "lean" in engine.available_actions(both.id)
             assert "smash" in engine.available_actions(both.id)
 
-            # 单个标签同样生效（"任一为真"的旧直觉在新观测面下的对应物）
             engine.register_entity_tag(
                 "only_soft", interactions=("lean",), label="只软"
             )
@@ -193,8 +208,8 @@ def test_interactions_union_across_tags(tmp_path):
     _run(fn())
 
 
-def test_fields_merge_order_tags_then_category(tmp_path):
-    """字段覆盖顺序：隐式 kind 标签 → 实例 tags（数组序）→ 分类字段（最后）。"""
+def test_fields_are_grouped_by_component(tmp_path):
+    """D41：字段清单**按组件分组**——每个字段属于声明它的组件，不跨组件覆盖。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -203,41 +218,39 @@ def test_fields_merge_order_tags_then_category(tmp_path):
             engine.attach_play_api("pkg", api)
             api.register_entity_kind(
                 "base",
-                fields=[{"name": "x", "type": "str", "default": "kind"}],
+                fields=[{"name": "x", "type": "str", "default": "base"}],
                 categories=("生物",),
             )
             api.register_entity_tag(
                 "t1", fields=[{"name": "x", "type": "str", "default": "t1"}]
             )
-            api.register_entity_tag(
-                "t2", fields=[{"name": "x", "type": "str", "default": "t2"}]
-            )
-            api.add_category_fields(
-                "生物", [{"name": "x", "type": "str", "default": "cat"}]
-            )
-            api.add_category_fields("生物", [{"name": "aggro", "type": "bool"}])
+            api.register_entity_tag("t2", fields=[{"name": "y", "type": "int"}])
 
             e = await engine.place_entity("base", "default", 0, 0, tags=["t1", "t2"])
-            fields = {f["name"]: f for f in engine.capabilities(e)["fields"]}
-            assert fields["aggro"]["type"] == "bool"  # 分类字段仍在
-            # 分类字段最后应用 → 覆盖标签字段
-            assert fields["x"]["default"] == "cat"
-            # 换顺序：实例标签在分类之后无法覆盖（顺序语义稳定可复现）
-            assert (
-                engine.effective_fields_for(["base", "t1", "t2"])[0]["default"] == "cat"
-            )
+            fields = engine.capabilities(e)["fields"]
+            assert set(fields) == {"pkg:base", "pkg:t1", "pkg:t2"}
+            # 同名不同组件互不覆盖（各报各的；旧模型里 t1 会覆盖 base）
+            assert fields["pkg:base"][0]["default"] == "base"
+            assert fields["pkg:t1"][0]["default"] == "t1"
+            assert {f["name"] for f in fields["pkg:t2"]} == {"y"}
 
-            # 单个标签查询（老 API）行为不变
-            assert engine.effective_fields("base")[0]["default"] == "cat"
-            assert engine.effective_fields("t1")[0]["default"] == "t1"
+            # 单组件查询：只看该组件自己的声明
+            assert engine.effective_fields("pkg:base")[0]["default"] == "base"
+            assert engine.effective_fields("pkg:t1")[0]["default"] == "t1"
+            # 多组件清单带组件归属（不摊平成一个 list 丢失来源）
+            merged = engine.effective_fields_for(["pkg:base", "pkg:t1"])
+            assert {f["component"] for f in merged} == {"pkg:base", "pkg:t1"}
+            # 分类只是**选取分组**（D10），不再承载字段（D41 删了分类字段）
+            assert engine.list_kinds(category="生物")[0]["key"] == "pkg:base"
+            assert not hasattr(engine, "add_category_fields")
         finally:
             await engine.terminate()
 
     _run(fn())
 
 
-def test_add_tag_fields_applies_to_entities_carrying_the_tag(tmp_path):
-    """D18 语义扩张：add_tag_fields 影响**所有带该标签的实体**，不再只看 kind 相等。"""
+def test_add_tag_fields_extends_one_component_only(tmp_path):
+    """`add_tag_fields` = 给**一个组件**追加字段（跨包扩展的正当路径）。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -246,28 +259,40 @@ def test_add_tag_fields_applies_to_entities_carrying_the_tag(tmp_path):
             engine.attach_play_api("pkg", api)
             api.register_entity_kind("monster", fields=[{"name": "hp", "type": "int"}])
             api.register_entity_kind("slime", fields=[{"name": "goo", "type": "int"}])
-            # 老写法：给 monster 追加字段
+            # 老写法：给 monster 追加字段（旧名 add_kind_fields 等价）
             api.add_kind_fields("monster", [{"name": "poison", "type": "bool"}])
 
             tagged = await engine.place_entity(
                 "slime", "default", 0, 0, tags=["monster"]
             )
             plain = await engine.place_entity("slime", "default", 0, 1)
-            # 挂上 monster 标签 = 同时获得 monster 自身的声明字段与追加字段（并集）
-            assert {f["name"] for f in engine.capabilities(tagged)["fields"]} == {
-                "goo",
+            # 带上 monster 组件 = 同时获得它自身的声明字段与追加字段
+            assert {
+                f["name"] for f in engine.capabilities(tagged)["fields"]["pkg:monster"]
+            } == {
                 "hp",
                 "poison",
             }
-            assert {f["name"] for f in engine.capabilities(plain)["fields"]} == {"goo"}
+            # 追加只影响那个组件：slime 自己的字段清单没被摊平进来
+            assert {
+                f["name"] for f in engine.capabilities(plain)["fields"]["pkg:slime"]
+            } == {"goo"}
+
+            # D41 唯一保留的字段规则：同一组件内同名字段声明两次 → 报错
+            with pytest.raises(WorldError, match="重复声明"):
+                api.add_tag_fields("monster", [{"name": "hp", "type": "int"}])
+            with pytest.raises(WorldError, match="重复声明"):
+                api.add_tag_fields("monster", [{"name": "poison", "type": "bool"}])
+            with pytest.raises(WorldError, match="重复声明"):
+                api.register_entity_tag("dup", fields=[{"name": "z"}, {"name": "z"}])
         finally:
             await engine.terminate()
 
     _run(fn())
 
 
-def test_unregistered_tag_is_harmless(tmp_path):
-    """允许未注册标签：实体照常存在，标签不贡献能力（编辑器可手输）。"""
+def test_unregistered_component_is_fictional_and_harmless(tmp_path):
+    """允许未声明组件（**虚构组件**，D41）：实体照常存在，不贡献任何能力。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -276,9 +301,15 @@ def test_unregistered_tag_is_harmless(tmp_path):
                 "rock", "default", 0, 0, tags=["nobody_knows"]
             )
             caps = engine.capabilities(e)
-            assert caps["tags"] == ["local:rock", "local:nobody_knows"]
-            assert caps["active_tags"] == []  # 两个 local: 组件均未注册
-            assert caps["fields"] == []
+            assert "local:rock" in caps["components"]
+            assert "local:nobody_knows" in caps["components"]
+            # 两个 local: 组件都没有声明 → 都算虚构，不贡献能力
+            assert caps["active_components"] == []
+            assert set(caps["unknown_components"]) == {
+                "local:rock",
+                "local:nobody_knows",
+            }
+            assert caps["fields"] == {}
             assert caps["interactions"] == []
             assert "block_move" not in caps  # D34：阻挡机制已移除
         finally:
@@ -290,14 +321,8 @@ def test_unregistered_tag_is_harmless(tmp_path):
 # ---------- D42：身份概念已删，红线判据 = 账户绑定 ----------
 
 
-def test_account_bound_is_the_red_line_not_kind_and_not_tags(tmp_path):
-    """D42：`kind` 与 `tags` **都不**决定保护——只有 `core:account` 决定。
-
-    取代原 `test_identity_ignores_tags`（D20）：
-    - `kind=player` 但没绑账户 → **普通实体**，可以被 `remove_entity`；
-    - `kind=npc` 但**绑了账户** → 受保护，玩法包删不掉；
-    - 标签里写 `player` 一如既往地什么都不影响（它不是判据）。
-    """
+def test_account_bound_is_the_red_line_not_components(tmp_path):
+    """D42：**组件名**不决定保护——只有 `core:account` 决定。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -306,12 +331,12 @@ def test_account_bound_is_the_red_line_not_kind_and_not_tags(tmp_path):
             assert npc.is_account_bound() is False
             player = await engine.place_entity("player", "default", 0, 1)
             assert player.is_account_bound() is False
-            # 身份保护不看标签、也不看 kind：没绑账户就是普通实体
+            # 身份保护不看组件：没绑账户就是普通实体，可以被移除
             await engine.remove_entity(npc.id)
             assert engine.store.entities.get(npc.id) is None
             await engine.remove_entity(player.id)
             assert engine.store.entities.get(player.id) is None
-            # 反过来：kind 是 npc、但绑了账户 → 拒绝移除
+            # 反过来：带 npc 组件、但绑了账户 → 拒绝移除
             bound = await engine.place_entity(
                 "npc", "default", 1, 0, name="挂了账户的 NPC", user_id="acct_1"
             )
@@ -324,11 +349,11 @@ def test_account_bound_is_the_red_line_not_kind_and_not_tags(tmp_path):
     _run(fn())
 
 
-# ---------- D21：逐标签世界激活过滤 + 缓存 ----------
+# ---------- D21：逐组件世界激活过滤 + 缓存 ----------
 
 
-def test_tag_capability_filtered_by_world_activation(tmp_path):
-    """标签所属包在实体所在世界未激活 → 该标签不参与并集。"""
+def test_component_capability_filtered_by_world_activation(tmp_path):
+    """组件所属包在实体所在世界未激活 → 该组件不参与并集。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -344,14 +369,14 @@ def test_tag_capability_filtered_by_world_activation(tmp_path):
             e = await engine.place_entity("slime", "m_a", 0, 0, tags=["spawner"])
 
             caps = engine.capabilities(e)
-            assert caps["tags"] == ["local:slime", "pkg_b:spawner"]
-            assert caps["active_tags"] == []  # pkg_b 不在 w_a
+            assert "pkg_b:spawner" in caps["components"]
+            assert caps["active_components"] == []  # pkg_b 不在 w_a
             assert caps["interactions"] == []
-            assert caps["inactive_tags"] == ["pkg_b:spawner"]
+            assert caps["inactive_components"] == ["pkg_b:spawner"]
 
             await engine.assign_map("m_a", "w_b")
             caps = engine.capabilities(e)
-            assert caps["active_tags"] == ["pkg_b:spawner"]
+            assert caps["active_components"] == ["pkg_b:spawner"]
             assert caps["interactions"] == ["tune"]
         finally:
             await engine.terminate()
@@ -359,22 +384,32 @@ def test_tag_capability_filtered_by_world_activation(tmp_path):
     _run(fn())
 
 
-def test_spec_cache_invalidated_when_tag_registered_later(tmp_path):
-    """规格级缓存：注册表变动后，先前算过的 (kind, tags) 必须重算。"""
+def test_spec_cache_invalidated_when_component_declared_later(tmp_path):
+    """规格级缓存：注册表变动后，先前算过的组件键集合必须重算。
+
+    ⚠ D41 的**修正**：先手输 `late` 再装包声明 `late`，不再是"白捡"——`local:late`
+    与 `pkg_x:late` 是两个不同的组件（同 `fps:hp` / `moba:hp`）。所以半个场景改成
+    "声明**同一个键**"（`local:late` 由本包声明时就是它）。
+    """
 
     async def fn():
         engine = await _engine(tmp_path)
         try:
             e = await engine.place_entity("slime", "default", 0, 0, tags=["late"])
-            assert engine.capabilities(e)["interactions"] == []  # local:late 还没注册
+            assert engine.capabilities(e)["interactions"] == []  # local:late 还没声明
             engine.register_entity_tag("late", interactions=("poke",))
             assert engine.capabilities(e)["interactions"] == ["poke"]  # 缓存已失效
-            # 卸载包后回到未注册状态，能力随之消失
-            engine.register_entity_tag("late2", interactions=("poke",), play_id="pkg_x")
-            e2 = await engine.place_entity("slime", "default", 0, 1, tags=["late2"])
+
+            # 另一个来源的同名组件是**另一个组件**：不会把能力"接"到已有实体上
+            engine.register_entity_tag("late", interactions=("poke",), play_id="pkg_x")
+            assert engine.capabilities(e)["interactions"] == [
+                "poke"
+            ]  # 仍只有 local:late
+            e2 = await engine.place_entity(
+                "slime", "default", 0, 1, components={"pkg_x:late": {}}
+            )
             assert engine.capabilities(e2)["interactions"] == ["poke"]
-            engine.clear_play_registrations("pkg_x")
-            assert engine.capabilities(e2)["interactions"] == ["poke"]
+            assert engine.capabilities(e2)["active_components"] == ["pkg_x:late"]
         finally:
             await engine.terminate()
 
@@ -384,8 +419,8 @@ def test_spec_cache_invalidated_when_tag_registered_later(tmp_path):
 # ---------- 持久化与解析 ----------
 
 
-def test_tags_persist_and_parse_rules(tmp_path):
-    """标签落库并跨引擎重开保留；解析去重保序、丢弃非字符串。"""
+def test_components_persist_and_parse_rules(tmp_path):
+    """组件落库并跨引擎重开保留；名字解析去重保序、丢弃非字符串。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -393,41 +428,62 @@ def test_tags_persist_and_parse_rules(tmp_path):
             e = await engine.place_entity(
                 "player", "default", 0, 0, name="小明", tags=["b", "a", "b", "", 7]
             )
-            assert e.tags == ["local:b", "local:a"]
+            assert "local:b" in e.components and "local:a" in e.components
+            assert e.to_dict()["components"] == e.components
+            assert set(e.to_dict()) == {
+                "id",
+                "components",
+                "last_active_ts",
+                "revision",
+                "changed_tick",
+            }
         finally:
             await engine.terminate()
         again = WorldEngine(WorldStore(tmp_path / "world.db"))
         await again.initialize()
         try:
             stored = next(iter(again.store.entities.values()))
-            assert stored.tags == ["local:b", "local:a"]
-            assert stored.to_dict()["tags"] == ["local:b", "local:a"]
+            assert "local:b" in stored.components and "local:a" in stored.components
+            assert stored.to_dict()["components"] == stored.components
+            # 顺序按输入（去重保序）：b 在前、a 在后
+            order = list(stored.components)
+            assert order.index("local:b") < order.index("local:a")
+            # D41：在线状态只在内存，不落库
+            assert stored.last_active_ts == 0.0
         finally:
             await again.terminate()
 
     _run(fn())
 
 
-def test_parse_tags_helper():
-    assert parse_tags("solo") == ["solo"]
-    assert parse_tags([" a ", "a", "", None, 3, "b"]) == ["a", "b"]
-    assert parse_tags(None) == []
-    assert parse_tags({"a": 1}) == []
+def test_parse_names_helper():
+    assert parse_names("solo") == ["solo"]
+    assert parse_names([" a ", "a", "", None, 3, "b"]) == ["a", "b"]
+    assert parse_names(None) == []
+    assert parse_names({"a": 1}) == []
 
 
-def test_update_entity_replaces_tags(tmp_path):
-    """PATCH 语义：tags 整体替换（与 name/desc/components 同一套整体替换语义）。"""
+def test_update_entity_replaces_components(tmp_path):
+    """PATCH 语义：`components` 整体替换；加/摘单个能力走组件原语。"""
 
     async def fn():
         engine = await _engine(tmp_path)
         try:
             e = await engine.place_entity("rock", "default", 0, 0, tags=["x"])
-            await engine.update_entity(e.id, tags=["y", "z"])
-            assert e.tags == ["local:y", "local:z"]
-            await engine.update_entity(e.id, tags=None)
-            assert e.tags == []
-            with pytest.raises(WorldError, match="tags 必须是标签数组"):
-                await engine.update_entity(e.id, tags="not-a-list")
+            assert e.has_component("local:x")
+            await engine.update_entity(
+                e.id, components={"local:y": {}, "local:z": {"n": 1}}
+            )
+            assert "local:x" not in e.components
+            assert e.components["local:z"] == {"n": 1}
+            with pytest.raises(WorldError, match="components 必须是对象"):
+                await engine.update_entity(e.id, components="not-a-dict")
+
+            # 单点增删：add_component 已存在报错，remove_component 是显式摘能力的唯一途径
+            await engine.add_component(e.id, "local:x", {})
+            assert e.has_component("local:x")
+            assert await engine.remove_component(e.id, "local:x") is True
+            assert not e.has_component("local:x")
         finally:
             await engine.terminate()
 
@@ -555,7 +611,10 @@ def test_location_template_refuses_occupied_cell(tmp_path):
 
 
 def test_entity_template_play_and_local_sources(tmp_path):
-    """实体模板：玩法包注册（内存）+ 管理端本地（落库）合并；同名本地优先。"""
+    """实体模板：玩法包注册（内存）+ 管理端本地（落库）合并；同名本地优先。
+
+    D41：模板负载是 `{name, desc, components}`——**"类型 = 一组组件的预设"就落在这里**。
+    """
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -564,9 +623,11 @@ def test_entity_template_play_and_local_sources(tmp_path):
                 "spawner_tmpl",
                 "刷怪笼",
                 {
-                    "kind": "spawner",
-                    "tags": ["strong"],
-                    "components": {"local:spawn": {"mob": "slime"}},
+                    "name": "刷怪笼",
+                    "components": {
+                        "local:spawner": {},
+                        "local:spawn": {"mob": "slime"},
+                    },
                 },
                 play_id="pkg_spawn",
             )
@@ -575,15 +636,18 @@ def test_entity_template_play_and_local_sources(tmp_path):
                     id="local_tmpl",
                     name="本地商贩",
                     scope="entity",
-                    data={"kind": "merchant", "name": "商贩"},
+                    data={"name": "商贩", "components": {"local:merchant": {}}},
                 )
             )
             listing = engine.list_templates("entity")
             sources = {t["id"]: t["source"] for t in listing}
             assert sources == {"spawner_tmpl": "play", "local_tmpl": "local"}
             play_tmpl = next(t for t in listing if t["id"] == "spawner_tmpl")
-            assert play_tmpl["data"]["tags"] == ["strong"]
-            assert play_tmpl["data"]["components"] == {"local:spawn": {"mob": "slime"}}
+            assert play_tmpl["data"]["components"] == {
+                "local:spawner": {},
+                "local:spawn": {"mob": "slime"},
+            }
+            assert "kind" not in play_tmpl["data"] and "tags" not in play_tmpl["data"]
             # 地块模板不会被 scope 过滤漏出来
             assert engine.list_templates("location") == []
 
@@ -593,7 +657,7 @@ def test_entity_template_play_and_local_sources(tmp_path):
                     id="spawner_tmpl",
                     name="本地刷怪笼",
                     scope="entity",
-                    data={"kind": "spawner"},
+                    data={"name": "本地刷怪笼"},
                 )
             )
             merged = {t["id"]: t for t in engine.list_templates("entity")}
@@ -601,8 +665,10 @@ def test_entity_template_play_and_local_sources(tmp_path):
 
             # 卸载玩法包 → 注册的模板消失，本地模板留下
             engine.clear_play_registrations("pkg_spawn")
-            left = [t["id"] for t in engine.list_templates("entity")]
-            assert left == ["spawner_tmpl", "local_tmpl"]
+            assert {t["id"] for t in engine.list_templates("entity")} == {
+                "spawner_tmpl",
+                "local_tmpl",
+            }
             assert {t["source"] for t in engine.list_templates("entity")} == {"local"}
         finally:
             await engine.terminate()
@@ -611,16 +677,16 @@ def test_entity_template_play_and_local_sources(tmp_path):
 
 
 def test_entity_template_payload_validated(tmp_path):
-    """实体模板必须给 kind；components 必须是对象；scope 必须合法。"""
+    """实体模板：data 必须是对象、components 必须是对象、scope 必须合法。"""
 
     async def fn():
         engine = await _engine(tmp_path)
         try:
-            with pytest.raises(WorldError, match="kind"):
-                engine.register_entity_template("bad", "无类型", {"tags": ["x"]})
+            with pytest.raises(WorldError, match="对象"):
+                engine.register_entity_template("bad", "坏负载", ["x"])
             with pytest.raises(WorldError, match="components"):
                 engine.register_entity_template(
-                    "bad", "坏数据", {"kind": "x", "components": []}
+                    "bad", "坏数据", {"name": "x", "components": []}
                 )
             with pytest.raises(WorldError, match="scope"):
                 await engine.save_template(
@@ -632,13 +698,7 @@ def test_entity_template_payload_validated(tmp_path):
     _run(fn())
 
 
-async def _noop_handler(api, req):  # pragma: no cover - 仅用于注册动作
-    from worlditor_mcp.world.model import InteractionResult
-
-    return InteractionResult(text="ok")
-
-
-# ---------- 管理端接线（编辑器下拉/标签勾选/模板的数据源） ----------
+# ---------- 管理端接线（组件选择器 / 实体组件编辑 / 模板） ----------
 
 
 async def _admin_scenario(tmp_path: Path, fn):
@@ -663,8 +723,8 @@ async def _admin_scenario(tmp_path: Path, fn):
         await engine.terminate()
 
 
-def test_admin_kinds_lists_types_and_tags(tmp_path):
-    """GET /admin/kinds：类型与标签分列，带来源包、是否隐式、预设标签。"""
+def test_admin_kinds_lists_components(tmp_path):
+    """GET /admin/kinds：**一张组件清单**（D41：不再分"类型 / 标签"两区）。"""
 
     async def fn(client, h, engine):
         engine.register_entity_kind(
@@ -673,33 +733,32 @@ def test_admin_kinds_lists_types_and_tags(tmp_path):
         engine.register_entity_tag(
             "spawner", label="刷怪笼", interactions=("tune",), play_id="pkg_b"
         )
-        engine.register_entity_type(
-            "A", tags=["spawner"], label="甲型", play_id="pkg_a"
-        )
+        engine.declare_component("A", label="甲型", play_id="pkg_a")
 
         data = (await client.get("/admin/kinds", headers=h)).json()
-        assert {k["tag"] for k in data["types"]} == {"pkg_a:door", "pkg_a:A"}
-        assert {k["tag"] for k in data["tags"]} == {"pkg_b:spawner"}
-        spawner = next(k for k in data["tags"] if k["tag"] == "pkg_b:spawner")
-        assert spawner["play_id"] == "pkg_b"
-        assert spawner["implicit"] is False
+        assert "types" not in data and "tags" not in data  # 旧两区已删
+        assert {k["key"] for k in data["kinds"]} == {
+            "pkg_a:door",
+            "pkg_a:A",
+            "pkg_b:spawner",
+        }
+        spawner = next(k for k in data["kinds"] if k["key"] == "pkg_b:spawner")
+        assert spawner["source"] == "pkg_b" and spawner["name"] == "spawner"
         assert spawner["label"] == "刷怪笼"
-        a_type = next(k for k in data["types"] if k["tag"] == "pkg_a:A")
-        assert a_type["preset_tags"] == ["pkg_b:spawner"]
-        door = next(k for k in data["types"] if k["tag"] == "pkg_a:door")
+        door = next(k for k in data["kinds"] if k["key"] == "pkg_a:door")
         assert door["interactions"] == ["open"]
         # D34：能力面不再透出 block_move（阻挡机制整体移除）
         assert all("block_move" not in k for k in data["kinds"])
-        # 分类过滤（D10）
+        # 分类过滤（D10：categories 只作选取分组）
         engine.register_entity_kind("slime", label="史莱姆", categories=("生物",))
         filtered = (await client.get("/admin/kinds?category=生物", headers=h)).json()
-        assert {k["tag"] for k in filtered["kinds"]} == {"local:slime"}
+        assert {k["key"] for k in filtered["kinds"]} == {"local:slime"}
 
     _run(_admin_scenario(tmp_path, fn))
 
 
-def test_admin_entity_tags_create_and_patch(tmp_path):
-    """实体增改带 tags（编辑器标签勾选的落点）。"""
+def test_admin_entity_components_create_and_patch(tmp_path):
+    """实体增改带 components（编辑器的组件编辑落点，D41）。"""
 
     async def fn(client, h, engine):
         r = await client.post(
@@ -716,19 +775,40 @@ def test_admin_entity_tags_create_and_patch(tmp_path):
         )
         assert r.status_code == 200, r.text
         entity_id = r.json()["data"]["id"]
-        assert r.json()["data"]["tags"] == ["local:spawner"]  # 去重去空并规范组件键
+        assert "local:spawner" in r.json()["data"]["components"]
+        assert "tags" not in r.json()["data"]  # D41：投影里没有 tags
+        assert engine.store.entities[entity_id].has_component("local:spawner")
 
+        # 编辑器的写回是**读改写**：整块替换时要把 core:* 一起带上，否则实体
+        # 会被搬出世界（`core:position` 没了 = 不在任何地块，D36 的合法状态）
+        entity = engine.store.entities[entity_id]
+        comps = {**entity.components, "local:a": {}, "local:b": {"n": 1}}
+        comps.pop("local:spawner", None)
         r = await client.patch(
-            f"/admin/entities/{entity_id}", json={"tags": ["a", "b"]}, headers=h
+            f"/admin/entities/{entity_id}",
+            json={"components": comps},
+            headers=h,
         )
         assert r.status_code == 200, r.text
-        assert r.json()["data"]["tags"] == ["local:a", "local:b"]
-        assert engine.store.entities[entity_id].tags == ["local:a", "local:b"]
+        assert "local:a" in r.json()["data"]["components"]
+        stored = engine.store.entities[entity_id]
+        assert stored.components["local:b"] == {"n": 1}
+        assert not stored.has_component("local:spawner")  # 显式摘掉的能力组件
 
-        # 详情里带上标签与合并能力（编辑器展示用）
+        # 详情里带上组件与合并能力（编辑器展示用）
         detail = (await client.get("/admin/maps/default", headers=h)).json()
         row = next(e for e in detail["entities"] if e["id"] == entity_id)
-        assert row["tags"] == ["local:a", "local:b"]
+        assert "local:a" in row["components"]
+        assert set(row["capabilities"]) == {
+            "components",
+            "active_components",
+            "inactive_components",
+            "unknown_components",
+            "interactions",
+            "fields",
+        }
+        assert set(row["capabilities"]["components"]) == set(row["components"])
+        assert "local:a" in row["capabilities"]["unknown_components"]  # 未声明 = 虚构
 
     _run(_admin_scenario(tmp_path, fn))
 
@@ -784,7 +864,10 @@ def test_admin_template_scope_apply_and_entity_sources(tmp_path):
 
         # 实体模板：包注册（内存）+ 本地（落库）合并，scope 过滤生效
         engine.register_entity_template(
-            "spawner_tmpl", "刷怪笼", {"kind": "spawner"}, play_id="pkg_spawn"
+            "spawner_tmpl",
+            "刷怪笼",
+            {"components": {"local:spawner": {}}},
+            play_id="pkg_spawn",
         )
         r = await client.post(
             "/admin/templates",
@@ -792,7 +875,7 @@ def test_admin_template_scope_apply_and_entity_sources(tmp_path):
                 "id": "local",
                 "name": "本地商贩",
                 "scope": "entity",
-                "data": {"kind": "merchant"},
+                "data": {"name": "商贩", "components": {"local:merchant": {}}},
             },
             headers=h,
         )

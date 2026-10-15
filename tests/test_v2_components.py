@@ -127,7 +127,7 @@ def test_component_write_primitives_are_dispatchable():
         assert name not in OVERRIDABLE_PRIMITIVES
 
 
-# ---------- D41-a：组件声明与裸名解析 ----------
+# ---------- D41：组件声明、裸名解析、能力即组件 ----------
 
 
 def test_d41_component_keys_resolve_and_coexist(tmp_path):
@@ -138,18 +138,34 @@ def test_d41_component_keys_resolve_and_coexist(tmp_path):
         try:
             engine.register_entity_tag("merchant", play_id="pkg_a")
             merchant = await engine.place_entity("merchant", "default", 0, 0)
-            assert merchant.kind == "pkg_a:merchant"
-            assert engine.entity_tags(merchant) == ["pkg_a:merchant"]
+            assert merchant.has_component("pkg_a:merchant")
+            assert "pkg_a:merchant" in engine.entity_components(merchant)
 
             engine.register_entity_tag("merchant", play_id="pkg_b")
             with pytest.raises(WorldError, match="多个声明者"):
                 await engine.place_entity("merchant", "default", 0, 1)
             qualified = await engine.place_entity("pkg_b:merchant", "default", 0, 1)
-            assert qualified.kind == "pkg_b:merchant"
+            assert "pkg_b:merchant" in qualified.components
         finally:
             await engine.terminate()
 
     _run(fn())
+
+
+def test_kind_and_tags_are_not_entity_fields():
+    """D41-b：``kind`` / ``tags`` **不是实体字段**——能力 = 组件的存在。
+
+    守两面：① 模型上没有这两个字段（投影 5 键，见 ``test_info_and_account_are_components``）；
+    ② ``update_entity`` 不接受它们（"改类型 / 改标签"这两个动作不存在，加/摘能力 = 加/删组件）；
+    而 ``place_entity`` 仍收它们当**写入便利**（裸名 → 组件键）。
+    """
+    for gone in ("kind", "tags"):
+        assert gone not in Entity.__dataclass_fields__, f"Entity 不该再有 {gone} 字段"
+        assert gone not in inspect.signature(WorldEngine.update_entity).parameters, (
+            f"update_entity 不该再有 {gone} 参数"
+        )
+    place = inspect.signature(WorldEngine.place_entity).parameters
+    assert "kind" in place and "tags" in place, "place_entity 的写入便利应保留"
 
 
 # ---------- 已移除面（D34 / D37 / D42）：防止静默回归 ----------
@@ -306,11 +322,12 @@ def test_item_type_is_now_a_component_declaration(tmp_path):
                 fields=[{"name": "heal", "label": "回复", "type": "int", "default": 3}],
             )
             row = next(
-                k for k in api.list_kinds() if k["tag"] == "worlditor_play_food:apple"
+                k for k in api.list_kinds() if k["key"] == "worlditor_play_food:apple"
             )
             assert row["label"] == "苹果"
             assert [f["name"] for f in row["fields"]] == ["heal"]
-            assert row["play_id"] == "worlditor_play_food"  # 归属仍在（卸载可清）
+            # D41：来源进组件键（`source` 从键里读），卸载清理仍按它归属
+            assert row["source"] == "worlditor_play_food"
         finally:
             await engine.terminate()
 
@@ -345,6 +362,14 @@ def test_info_and_account_are_components(tmp_path):
             top = e.to_dict()
             for gone in ("name", "desc", "user_id", "map_id", "row", "col"):
                 assert gone not in top, f"to_dict 顶层不该再有 {gone}（它在组件里）"
+            # D41-b：投影就是模型实况——5 键，没有 kind / tags（能力看组件）
+            assert set(top) == {
+                "id",
+                "components",
+                "last_active_ts",
+                "revision",
+                "changed_tick",
+            }
             assert engine.get_component(e.id, CORE_POSITION) == {
                 "map_id": "default",
                 "row": 0,
@@ -352,7 +377,8 @@ def test_info_and_account_are_components(tmp_path):
             }
 
             # 缺 core:info → name 兜底 id 前 8 位、desc 空
-            bare = Entity(id="0123456789abcdef", kind="npc")
+            # （D41-b：kind 不再是构造参数——能力要作组件给）
+            bare = Entity(id="0123456789abcdef")
             assert bare.name == "01234567"
             assert bare.desc == ""
             assert bare.user_id is None

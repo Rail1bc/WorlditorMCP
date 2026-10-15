@@ -121,12 +121,13 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 | API | 说明 |
 |---|---|
-| `register_entity_kind(kind, interactions, label, fields, categories, tags=())` | 实体类型；`interactions` = 该类型默认可用的动作名。**D18：等价于注册一条隐式同名标签**，`tags` 是该类型**预设**的额外标签（"类型 A = {A, C}" → `tags=("C",)`） |
-| `register_entity_tag(tag, label, interactions, fields, categories)` | 注册一条**标签**（与类型共用一个命名空间）；实体挂上它即获得这里声明的一切 |
-| `register_entity_type(kind, tags=(), ...)` | `register_entity_kind` 的同义名（"类型只是预设"读起来更顺） |
-| `add_tag_fields(tag, fields)` / `add_kind_fields(kind, fields)` / `add_category_fields(category, fields)` | 向标签 / 分类追加字段（D9/D10）。**D18 起语义是"所有带该标签的实体"**（旧名保留） |
-| `list_kinds(category=None)` | 类型 + 标签清单（字段 schema / 来源包 / 是否隐式 / 预设标签），分类过滤 |
-| `capabilities(entity)` | 某实体合并后的能力：`tags / active_tags / inactive_tags / unknown_tags / interactions / fields`（**不再有阻挡键**——阻挡机制已移除，见 §10） |
+| `declare_component(name, interactions, label, fields, categories)` | **声明一个组件**（D41：唯一入口）。组件名 = `source:name`：裸名自动带上你包的 id（`declare_component("merchant")` → `<你的 play_id>:merchant`）；也可以显式写**自己的包名**或共享的 **`local:`**（内容/行为对接用，见下）。带某组件 = 具备该能力（纯能力组件数据是 `{}`） |
+| `register_entity_kind(kind, interactions, label, fields, categories)` | `declare_component` 的旧名（等价）；⚠ `tags=` 参数**已作废**（"类型 = 一组组件的预设"归**实体模板**，传非空值报错） |
+| `register_entity_tag(tag, label, interactions, fields, categories)` | `declare_component` 的另一个旧名（等价） |
+| `register_entity_type(kind, ...)` | 同上（"类型只是预设"这个读法已过时——预设归实体模板） |
+| `add_tag_fields(component, fields)` / `add_kind_fields(...)` | 给**一个组件**追加字段（D41：跨包扩展的正当路径）。**同一组件内同名字段重复声明 → 报错**；字段清单**按组件分组**，不跨组件摊平。⚠ `add_category_fields` **已删除** |
+| `list_kinds(category=None)` | **组件清单**：`key` / `source` / `name` / `label` / `interactions` / `fields` / `categories`（没有"是否隐式""预设标签"了），`category` 只是选取分组 |
+| `capabilities(entity)` | 某实体的能力：`components / active_components / inactive_components / unknown_components / interactions / fields`——`fields` 是 **`{组件键: [字段]}`**（按组件分组）；没有声明的组件是**虚构组件**（在 `unknown_components` 里）。**不再有阻挡键**（阻挡机制已移除，见 §10） |
 | `register_interaction(action, handler, label)` | 全局交互动作；`async (api, req) -> InteractionResult` |
 | `register_world_event(event, handler, interval=0, phase="simulate", order=0)` | 事件订阅；on_tick 必须给 interval（秒）；**phase/order 声明跨包执行顺序**（D27，见 §5.3） |
 | `register_ui_hook(block_kind, position, provider)` | UiBlock 注入（before/after/replace，**可用**；服务端展开，见 §11） |
@@ -184,8 +185,8 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `clear_position(entity_id)` | 让实体**离开世界**（下线 / 收进容器 / 传送中间态）——**写 `core:position` 的受控入口**（与 `set_perception` 同性质，不受分派表影响）。组件 / 标签 / 账户绑定全保留，只去掉位置；幂等。放回世界用 `move_entity`。见 §10 / D36 |
 | `interact(entity_id, target_id, action, args)` | 交互（**可被覆盖/禁用**）。**没有 `item_id` 槽位**（D37）：物品标识放 `args`，如 `args={"item": "apple"}`——内核不解释其内容 |
 | `emit(event, data, log=False)` | 自定义事件（SSE 推送；`log=True` 写 world_log） |
-| `place_entity(kind, map_id=None, row=None, col=None, *, name=None, desc="", components=None, tags=[...])` / `remove_entity(id)` | 实体生命周期（D14；**绑定了账户的实体不可 remove**，D42）。**位置三参数可选（D36）**：全给 = 放进世界；**全不给 = 造一个不在世界上的实体**（物品放进容器、待投放的 NPC）；只给一部分 → 报错。不在世界上的实体**不出现在** `list_entities` / `query_entities` 的默认结果里（要它们传 `include_absent=True`），移动会被拒绝。`components` = 初始组件（dict，`core:` 一律拒绝）；`tags` = 实例级标签（D18），如 `place_entity("slime", ..., tags=["spawner"])`。**`name` / `desc` 是输入便利**：折进 `core:info` 组件（实体没有顶层名字字段；读回用 `entity.name` / `entity.desc`，§10） |
-| `set_tags(entity_id, tags)` | 整体替换实例标签（"给玩家加一个刷怪笼标签"）——**基底 kind 不在其中**（身份/类型是治理域，D20） |
+| `place_entity(kind=None, map_id=None, row=None, col=None, *, name=None, desc="", components=None, tags=[...])` / `remove_entity(id)` | 实体生命周期（D14；**绑定了账户的实体不可 remove**，D42）。**能力 = 组件**（D41）：`kind` / `tags` 是**输入便利**（裸名解析），`place_entity("slime", ..., tags=["spawner"])` = 带上 `bestiary:slime` + `xxx:spawner` 两个组件（数据 `{}`）；两者都可省（没有能力组件的实体也合法）。**位置三参数可选（D36）**：全给 = 放进世界；**全不给 = 造一个不在世界上的实体**（物品放进容器、待投放的 NPC）；只给一部分 → 报错。不在世界上的实体**不出现在** `list_entities` / `query_entities` 的默认结果里（要它们传 `include_absent=True`），移动会被拒绝。`components` = 初始组件（dict，键写全名 `source:name`，`core:` 一律拒绝）。**`name` / `desc` 是输入便利**：折进 `core:info` 组件（实体没有顶层名字字段；读回用 `entity.name` / `entity.desc`，§10） |
+| `add_component(id, key, data)` / `set_component(id, key, data)` / `remove_component(id, key)` | 加 / 换 / **摘**能力组件（D41：加能力就是加组件，摘能力要显式删——空组件是纯能力标记，不会自己消失）。`add` 对已存在的键报错；`set` 是整块替换 |
 | `call_service(play_id, name, **params)` | 跨包服务调用（§6） |
 | `call_default_primitive(name, *args, **kwargs)` | super 通道：显式调内核默认实现（覆盖者前置/后置用） |
 
@@ -200,9 +201,11 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 **模板（D22：地块与实体共用一个"模板"概念）**：
 - `register_entity_template(template_id, name, data, label="")` —— 注册本包自带的**实体模板**
-  （内存注册表，随包卸载消失）；`data = {kind, tags[], name, desc, components}`
-  ——`components` = `{"组件名": {字段: 值}}` 组件字典（§10）；顶层 `name` / `desc` 是
+  （内存注册表，随包卸载消失）；`data = {name, desc, components}`
+  ——`components` = `{"组件键": {字段: 值}}` 组件字典（§10）；顶层 `name` / `desc` 是
   **输入便利**，套用时折进 `core:info`（实体本身没有这两列，v9）。
+  **D41：模板就是"类型"的落点**——"类型 A = 一组组件 {A, C}"就写
+  `data={"components": {"local:A": {}, "local:C": {}}}`（声明 API 不再收 `tags=`）。
   管理端本地模板落库，两边合并成一个选择列表（`list_templates("entity")`，同 id 本地优先）。
 - `list_templates(scope=None)` —— 模板清单（`source` 标明 `play` / `local`）。
 - `apply_location_template(template_id, map_id, row, col)` —— 套用地块模板：
@@ -237,8 +240,8 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 > **内核没有"身份"这个概念**（v2 / D42，已删除 `IDENTITY_KINDS` / `is_identity()`）。
 > 唯一相关的判据是一个**数据事实**：实体**带 `core:account`** = 绑着账户 →
 > `remove_entity` 拒绝、`delete_map` / `copy_map` / `delete_location` 一起护着它。
-> 所以**别再造"player 实体"**：`kind="player"` 现在只是**一个没人注册的标签名**，
-> 不带任何特权；玩家实体就是"身份服务创建、带 `core:account` 的那个普通实体"。
+> 所以**别再造"player 实体"**：带 `local:player` 组件现在只是**一个能力标记**（没人声明它
+> 就什么都不贡献），不带任何特权；玩家实体就是"身份服务创建、带 `core:account` 的那个普通实体"。
 
 ## 5. 原语、查询、顺序与变更（D11 / G14 / D26–D28）
 
@@ -285,7 +288,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 ### 5.2 实体查询（D26）
 
-"所有带某标签的实体"不要写成"全量 `list_entities` + 自己筛"：
+"所有带某组件的实体"不要写成"全量 `list_entities` + 自己筛"：
 
 ```python
 # 所有中毒的生物（每 tick 扣血那种）——字段归属某个组件（这里用本包自己的组件名）
@@ -301,14 +304,15 @@ targets = api.query_entities(tags=["monster"], exclude_tags=["dead"], limit=10)
 seen = api.query_entities(map_id=me.map_id, viewer_id=me.id)
 ```
 
-**标签匹配语义（重要）**：标签的有效集 = 基底 `kind` + 类型预设 + 实例 `tags`（D18），
-但要**"活着"**才算数——**声明该标签的包没加载，或该包在实体所在世界没启用 → 不匹配**
-（D21：这个世界没有这个能力）。所以"停用中毒包"之后 `tags=["poisoned"]` 查不到东西，
-和 `available_actions` 说"它没动作"是一致的。两面例外：
+**组件匹配语义（重要）**：`tags` / `exclude_tags` 筛的是**组件的存在**（D41），
+裸名会按 D41 解析：唯一声明者 → 用它；没人声明 → `local:<名>`；**多个声明者 → 报错**
+（那就写全名）。**活着的组件**才算数——**声明该组件的包没加载，或该包在实体所在世界
+没启用 → 不匹配**（D21：这个世界没有这个能力）。所以"停用中毒包"之后
+`tags=["poisoned"]` 查不到东西，和 `available_actions` 说"它没动作"是一致的。例外：
 
-- **实例自带的纯数据标签**（`set_tags(["my_marker"])`，没有任何包声明过它）照常匹配
-  ——"标签即数据"的用法不受影响。
-- 要完全跳过这套语义，用 `where=lambda e: "x" in e.tags`（只认字面标签）。
+- **没有任何声明的组件**（没人声明过的 `local:xxx`，或声明包已被真卸载）照常匹配
+  ——"组件即数据"的用法不受影响。
+- 要完全跳过这套语义，用 `where=lambda e: e.has_component("x")`。
 
 **严格校验**：拼错的地图 / 世界、非法标签（空串、非字符串）**直接报错**，不会"悄悄
 查到空"——查询条件是人现写的意图，静默返回空会让人以为"世界里没有"。
@@ -586,12 +590,14 @@ await api.remove_data(entity_id, "gold", component="local:stat")    # 删字段�
 - **走分派表**：`set_data` / `get_data` / `remove_data` / `add_component` /
   `set_component` / `remove_component` 都可被其他包 override / disable / 挂过滤器
   （§5.1）；`core:` 组件例外（写入绕过分派表）
-- **字段 schema 仍可声明**（D9/D10）：kind / 标签注册的 `fields` 项 =
-  `{name, label, type, default?}`（type: str/int/float/bool/json），分类字段用
-  `add_category_fields`；有效字段 = kind 声明 ∪ 分类声明（运行时合并）。
-  **声明只影响 UI 渲染**，实例照旧可写任意未声明字段
+- **字段 schema 仍可声明**（D9/D41）：组件声明的 `fields` 项 =
+  `{name, label, type, default?}`（type: str/int/float/bool/json）；别人用
+  `add_tag_fields(组件键, [...])` 追加。**字段清单按组件分组**（不跨组件摊平），
+  **同一组件内同名字段重复声明 → 报错**；分类字段（`add_category_fields`）已删除，
+  `categories` 只剩"选取分组"这一件事。**声明只影响 UI 渲染**，实例照旧可写任意未声明字段
 - **新增实体**：`await api.place_entity(kind, map_id, row, col, name=…, desc=…,
-  components={...}, tags=[...])`——原 `attrs=` / `state=` 参数**已删除**；实体模板
+  components={...}, tags=[...])`——原 `attrs=` / `state=` 参数**已删除**；`kind` / `tags`
+  是**能力输入便利**（落成组件键，D41），`components` 是显式组件字典；实体模板
   的 `data` 里同样是 `components`（§4）；`name` / `desc` 会被**折进 `core:info`**
   （实体没有顶层名字字段，v9——见本节顶部「实体形态」）
 - **"不在世界上"是合法状态**（v2 / D36）：`place_entity` 的坐标**可以整组不给**——
@@ -605,7 +611,7 @@ await api.remove_data(entity_id, "gold", component="local:stat")    # 删字段�
   > 传送"本来就是玩法包的正当能力，所以内核给**窄口受控入口**（§12.2：规则不放宽，
   > 能力不丢失）。若没有 `clear_position`，"位置可缺失"就成了单向门——造得出、送不回去。
 - **物品不在内核**（v2 / D37）：原"物品定义同构（`ItemDef` + 字段）"作废——
-  **类型 = 组件声明**（`register_entity_tag` 的 `fields`，字段 schema 完全同构），
+  **类型 = 组件声明**（`declare_component` 的 `fields`，字段 schema 完全同构），
   **实例 = 实体 + 组件**（在地上 = 一个实体带该组件，在背包里 = 本包自己的 kv）；
   `stackable` / `icon` 这类属性就是组件声明里的字段与你的 UI 约定。替换关系表见 §4
 

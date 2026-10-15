@@ -2,9 +2,44 @@
 
 ## 未发布
 
-**实体模型 v2（第 1 / 1b / 1c / 1d / 3 期）：实体数据按组件分组，阻挡机制整体移除，名字/描述/账户绑定/位置进组件，内核移除物品**（BREAKING，DESIGN §12 / D32–D34 / D36 / D37）
+**实体模型 v2（第 2 期 D41 / D42 / D43）：能力 = 组件的存在，删 `kind` / `tags` 两列（表 v11）**（BREAKING，DESIGN §12.6 / D41–D43）
 
-### 破坏性变更
+### 破坏性变更（D41 能力面折叠）
+
+- **实体没有"基底类型"了**：`Entity.kind` / `Entity.tags` **两个字段删除**，
+  `entities` 表 **4 列**（`id` / `components_json` / `revision` / `changed_tick`，表结构 **v11**），
+  `to_dict()` 只剩 **5 键**（`id` / `components` / `last_active_ts` / `revision` / `changed_tick`）。
+  `kind` / `tags_json` 进**禁列名单**（旧库启动即拒绝）——**升级方式同前：删掉数据目录下的
+  `world.db` 并重新启动**。`last_active_ts` 改为**只在内存**（在线状态，重启从 0 起）。
+- **能力 = 带没带那个组件**：判断用 `entity.has_component("pkg:duel")`——**别**用
+  `component(key) == {}`（纯能力组件的数据本来就是 `{}`，"空组件"与"没有这个组件"必须分得开）。
+  要摘能力必须显式 `remove_component`（`remove_data` 删掉最后一个字段不会顺手删组件）。
+- **声明只有一套**：`api.declare_component(name, interactions, label, fields, categories)`
+  （`register_entity_kind` / `register_entity_tag` / `register_entity_type` 保留为**等价旧名**）。
+  组件名 = `source:name`，裸名声明自动带上你包的 id；**两个包各声明 `merchant` 是两个组件共存**
+  （"后注册覆盖"整条作废）。`register_entity_kind(tags=…)` **作废并报错**——
+  "类型 = 一组组件的预设"归**实体模板**（`register_entity_template` 的
+  `data = {name, desc, components}`）。
+- **`local:` = 内容与跨包协作的公共命名空间**：世界内容包用 `local:` 写实体组件
+  （内置演示世界已改为 `local:merchant` / `local:sign` / `local:door`），给这些内容加行为的
+  玩法包**声明 `local:<同键>`** 即可对接——不再依赖包加载顺序。`<别人的 play_id>:` 依旧拒写（D43）。
+- **字段清单按组件分组，不跨组件摊平**：`capabilities(entity)["fields"]` 现在是
+  `{组件键: [字段]}`；`effective_fields(key)` 只看该组件；**同一组件内同名字段声明两次 → 报错**；
+  `add_category_fields` **删除**（`categories` 只作"选取分组"，`list_kinds(category=…)` 保留）。
+- **`capabilities()` 的键改了**：`components` / `active_components` / `inactive_components` /
+  `unknown_components`（= **虚构组件**：没有任何声明，允许存在、不贡献能力）/ `interactions` / `fields`。
+  `list_kinds()` 每条 = `key` / `source` / `name` / `label` / `interactions` / `fields` / `categories`
+  （`implicit` / `preset_tags` / `play_id` 删除）。
+- **实体编辑**：`update_entity` 不再有 `kind` / `tags`（能力就是组件，加/摘用
+  `add_component` / `remove_component`）；`api.set_tags` 删除。`place_entity` 的 `kind` / `tags`
+  降级为**输入便利**（落成组件键，裸名按 D41 解析：唯一声明者 → 用它；无人声明 → `local:`；
+  多个声明者 → 报错），两者都可省（**没有能力组件的实体也合法**；`kind=""` 报错，不静默当"没有"）。
+- **管理端**：`GET /admin/kinds` 只剩一张组件清单（`{"kinds": [...]}`，旧的 `types` / `tags` 两区删除）；
+  实体创建 / 编辑端点返回 `{"id", "components"}`，PATCH 只接受 `name` / `desc` / `components`。
+- **`parse_tags` 改名 `parse_names`**（名字列表的容错解析）；`TagSpec.implicit`、`EntityKindSpec`
+  别名删除。
+
+### 破坏性变更（第 1 / 1b / 1c / 1d / 3 期）
 
 - **`Entity.attrs` / `Entity.state` 两个容器删除** → 统一为 `Entity.components`（组件字典）。
   组件名 = **`source:name` 信封**：`core`（内核保留）／`local`（编辑器手写）／`<play_id>`（包自己）；
@@ -115,26 +150,14 @@
   `save_template` 落 `templates` 表不受影响）；`item_id` 槽位 → `args`（自由 dict）；
   `on_item_used` → 玩法包**自定义事件**（事件总线本就支持任意事件名）。
 
-### 未做（见 `GAPS.md` G40 / G47）
+### 未做（见 `GAPS.md` G40 / G47 / G48）
 
-- **第 2 期已暂缓**（2026-10-14 裁定「先别动能力面，保持现状」）：`kind` / `tags`
-  折叠为组件 + `core:player`（身份进组件）。`core:info` / `core:account` **已随第 1c 期落地**、
-  `core:position` **已随第 1d 期落地**（见上）——**至此"取消字段、全部用组件"在数据面上
-  已经完整**，表上只剩 `id` / `kind` / `tags` / 存储元数据。
-- **第 2 期（能力面折叠）设计已定、待实施**：**D41–D44 + DESIGN §12.6**（GAPS G40 / G47 / G48）。
-  实施后将是又一次**破坏性变更**，预告如下：
-  - `kind` / `tags` 两列**删除**（表 **v11**、4 列）→ **`to_dict()` 只剩 5 键**
-    （`id` / `components` / `last_active_ts` / `revision` / `changed_tick`）；
-    **升级方式同前：删掉数据目录下的 `world.db` 并重新启动**
-  - **能力 = 组件的存在**：`register_entity_kind` / `register_entity_tag` 合并为
-    "**声明一个组件**"（旧名保留为别名）；**同名标签后注册覆盖整条作废**——
-    两个包各声明 `merchant` 是 `pkg_a:merchant` 与 `pkg_b:merchant` **两个组件共存**
-  - **身份概念删除**（不引入 `core:player`）：D14 红线改判为
-    「**绑定了账户的实体（带 `core:account`）玩法包不可删除**」
-  - **写入边界**：`<别人的 play_id>:` 拒写（`local:` 与自己的包名可写）
-  - **删跨组件字段摊平与分类字段**（`add_category_fields`）：字段清单**按组件分组**
-  - **卸载不删数据**（组件留着、行为消失，重装即恢复）；"已卸载包的遗留组件"
-  可在管理端**手动清理**（服务端强制只接受"已卸载"，先 dry-run）
+- **第 2 期能力面折叠的 D41 / D42 / D43 已落地**（见下），**D44（卸载 / 清理语义：四象限诊断 +
+  管理员手动清理"已卸载包的遗留组件" + 删 `_tag_owner`）与前端「按组件分组渲染」待做**。
+  `core:info` / `core:account` / `core:position` 已分别随第 1c / 1d 期落地。
+- **D44 预告**：`active` / `inactive` / `orphan` / `fictional` 四象限诊断；
+  `GET /admin/orphan-components` + `POST /admin/orphan-components/purge`
+  （服务端强制只接受"已卸载"，先 dry-run，按 source 或 keys 清）。
 
 ## v0.7.0（2026-09-25）
 

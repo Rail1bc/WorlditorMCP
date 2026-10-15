@@ -4182,23 +4182,24 @@
  ],
  "entities": [
   {
-   "kind": "merchant",
    "row": 0,
    "col": 0,
    "name": "商贩·阿福",
    "desc": "广场上的老商贩，货担里装着苹果和喇叭，笑眯眯地看着来往的行人。",
-   "components": {}
+   "components": {
+    "local:merchant": {}
+   }
   },
   {
-   "kind": "sign",
    "row": -2,
    "col": 0,
    "name": "告示牌",
    "desc": "步行街边的木质告示牌，上面贴着几张纸。",
-   "components": {}
+   "components": {
+    "local:sign": {}
+   }
   },
   {
-   "kind": "door",
    "row": 3,
    "col": 0,
    "name": "木门",

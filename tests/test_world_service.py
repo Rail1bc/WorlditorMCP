@@ -134,13 +134,18 @@ def test_snapshot_and_auth(tmp_path):
         resp = await client.get("/state", headers=h)
         data = resp.json()
         assert len(data["locations"]) == 41
-        assert any(e["kind"] == "local:merchant" for e in data["entities"])
+        # D41：能力 = 组件的存在——演示世界导入的商贩带 local:merchant 组件，
+        # 实体投影里没有 kind（能力一律从 components 读）
+        assert any("local:merchant" in e["components"] for e in data["entities"])
+        assert all("kind" not in e for e in data["entities"])
         # D28：快照带全局变更号/tick，实体各自带 revision（客户端增量游标）
         assert data["revision"] == engine.revision > 0
         assert data["tick"] == engine.tick
         assert all(e["revision"] > 0 for e in data["entities"])
         # scene（商贩视角；无玩家在场 → peers 为空）
-        merchant = [e for e in data["entities"] if e["kind"] == "local:merchant"][0]
+        merchant = next(
+            e for e in data["entities"] if "local:merchant" in e["components"]
+        )
         resp = await client.get(
             "/scene", params={"entity_id": merchant["id"]}, headers=h
         )
@@ -288,8 +293,9 @@ def test_scene_actions_with_demo(tmp_path):
         read = (await client.get("/auth/read-token")).json()["token"]["token"]
         h = _auth(read)
         state = (await client.get("/state", headers=h)).json()
+        # D41：三个演示实体各带自己的组件（内容里的 kind 已折进 components）
         for kind in ("local:merchant", "local:sign", "local:door"):
-            entity = next(e for e in state["entities"] if e["kind"] == kind)
+            entity = next(e for e in state["entities"] if kind in e["components"])
             resp = await client.get(
                 "/scene", params={"entity_id": entity["id"]}, headers=h
             )
@@ -302,7 +308,7 @@ def test_scene_actions_with_demo(tmp_path):
         resp = await client.get("/scene", headers=_auth(info.token))
         peers = resp.json()["peers"]
         merchant_peer = next(
-            (p for p in peers if p["entity"]["kind"] == "local:merchant"), None
+            (p for p in peers if "local:merchant" in p["entity"]["components"]), None
         )
         assert merchant_peer is not None
         action_names = {a["action"] for a in merchant_peer["actions"]}

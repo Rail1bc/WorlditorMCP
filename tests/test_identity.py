@@ -72,7 +72,7 @@ def test_register_and_login_without_map(tmp_path):
         relogin = await identity.login("管理员", "pass123")
         assert relogin.entity_id != ""
         entity = engine.get_entity(relogin.entity_id)
-        assert entity is not None and entity.kind == "local:player"
+        assert entity is not None and entity.has_component("local:player")
         assert entity.user_id is not None
 
     _run(
@@ -97,7 +97,8 @@ def test_register_human_open(tmp_path):
         assert info.tier == "play" and info.kind == "player"
         assert info.username == "小明"
         entity = identity._engine.get_entity(info.entity_id)
-        assert entity is not None and entity.kind == "local:player"
+        # D41：身份服务仍按 kind="player" 建实体，落成的是 local:player 组件
+        assert entity is not None and entity.has_component("local:player")
         assert entity.user_id is not None
         assert entity.pos_key() == ("default", 0, 0)  # 出生点
         # 重复用户名
@@ -206,13 +207,13 @@ def test_closed_mode(tmp_path):
 
 
 def test_register_agent(tmp_path):
-    """无密码自助注册：实体 kind=player（与人类注册一致）+ play 档凭据。"""
+    """无密码自助注册：实体带 ``local:player`` 组件（与人类注册一致）+ play 档凭据。"""
 
     async def fn(identity: IdentityService):
         info = await identity.register_agent("探索者")
         assert info.tier == "play" and info.kind == "player"
         entity = identity._engine.get_entity(info.entity_id)
-        assert entity is not None and entity.kind == "local:player"
+        assert entity is not None and entity.has_component("local:player")
         assert entity.name == "探索者"  # 不再加 "AI·" 前缀（人类与 agent 不区分）
         # 关闭自助注册
         identity.allow_agent_register = False

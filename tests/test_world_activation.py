@@ -7,8 +7,8 @@
 1. MCP 工具：调用者所在世界未启用该包 → 明确拒绝（端到端走真实 HTTP + MCP 会话）
 2. 玩家视图：`GET /views` 按调用者世界过滤（tab 不出现）
 3. 原语：覆盖/过滤器所属包在该世界未启用 → 视为不存在（回落内核默认实现）
-4. kind/标签：声明的可用动作列表按世界过滤（`block_move` 已随 D34 整体移除，
-   未激活包里声明的东西不生效改用 `interactions` 观测）
+4. 组件：声明的可用动作列表按世界过滤（`block_move` 已随 D34 整体移除，
+   未激活包里声明的东西不生效改用 `interactions` 观测——D41：能力 = 组件的存在）
 """
 
 from __future__ import annotations
@@ -259,12 +259,13 @@ def test_primitive_filter_follows_world(tmp_path):
     asyncio.run(run())
 
 
-def test_kind_actions_follow_world(tmp_path):
-    """kind（标签）声明的动作按世界过滤：未激活该包的世界里，动作不出现也不能用。
+def test_component_actions_follow_world(tmp_path):
+    """组件声明的动作按世界过滤：未激活该包的世界里，动作不出现也不能用。
 
     v2 第 1 期（D34）：阻挡机制**整体移除**，本用例的观测面从"墙挡路"换成
     ``available_actions`` / ``capabilities()["interactions"]``——它们与
     ``interact`` 的拒绝判定同源（D21 的同一条过滤路径）。
+    D41：这里的 "wall" 是一个组件（声明者 = pkg_wall），实体带上它才具备 knock。
     """
 
     async def run():
@@ -291,6 +292,8 @@ def test_kind_actions_follow_world(tmp_path):
                 "wall", interactions=("knock",), play_id="pkg_wall"
             )
             wall = await engine.place_entity("wall", "default", -1, 0, name="北墙")
+            # D41：kind 是输入便利——裸名解析到唯一声明者（pkg_wall）的组件键
+            assert wall.has_component("pkg_wall:wall")
             player = await engine.place_entity("player", "default", 0, 0, name="小明")
 
             # 默认世界全部激活：动作可见且可用
@@ -308,8 +311,9 @@ def test_kind_actions_follow_world(tmp_path):
             assert engine.available_actions(wall.id) == []
             caps = engine.capabilities(wall)
             assert caps["interactions"] == []
-            assert caps["active_tags"] == []
-            assert caps["inactive_tags"] == ["pkg_wall:wall"]
+            assert caps["active_components"] == []
+            assert caps["inactive_components"] == ["pkg_wall:wall"]
+            assert wall.has_component("pkg_wall:wall")  # 组件还在实体上，只是不生效
             with pytest.raises(WorldError, match="没有"):
                 await engine.interact(player.id, wall.id, "knock")
         finally:

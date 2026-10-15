@@ -98,10 +98,10 @@
 | POST | `/admin/templates` | 存模板（`{id, name, data, scope}`） |
 | POST | `/admin/templates/apply` | 套用地块模板（`{template_id, map_id, row, col}`：同图目标按偏移平移、跨图原样） |
 | DELETE | `/admin/templates/{template_id}` | 删模板 |
-| GET | `/admin/kinds[?category=]` | 类型 + 标签名词表（`kinds` / `types`(隐式) / `tags`(显式)，含字段 schema、来源包） |
+| GET | `/admin/kinds[?category=]` | **组件清单**（D41：只有一套声明）——`kinds[]` 每条 = `key` / `source` / `name` / `label` / `interactions` / `fields` / `categories`。旧的两区（`types` / `tags`，按 `implicit` 分）已随"类型 = 一组组件的预设归实体模板"删除 |
 | GET | `/admin/entities[?absent=0\|1][&world_id=]` | **全部实体**（跨地图）——`entities[].capabilities` 同地图详情。**这是唯一能看见"不在世界上的实体"的入口**（D36：位置是可选的 `core:position`，玩家下线 / 物品在容器里 / 尚未投放的 NPC 都属此类；地图详情按坐标裁，一个都看不见）。`absent=1` 只列不在世界上的、`absent=0` 只列在世界的；响应另带 `total` / `absent` 计数 |
-| POST | `/admin/entities` | 新建实体（`{kind, name?, desc?, components?, tags?, map_id?, row?, col?}`）。**位置三参数要么全给、要么全不给**：给了 = 放进世界（写 `core:position`）；**一个都不给 = 造一个不在世界上的实体**；只给一部分 → 400（"半截位置"会被兜底成 `""` / `0`，把"忘了给"变成静默出现在 (0,0) 的实体）。`name` / `desc` 是**输入便利**：折进 `core:info` 组件，实体上没有这两列（v9）。`components` = 组件名 → 数据，组件名须为 `source:name` 信封 |
-| PATCH / DELETE | `/admin/entities/{entity_id}` | 改实体（`name` / `desc` / `components`（整体替换）/ `tags` / `kind`——**kind 只是标签，可自由改**，D42 起没有"身份实体类型锁定"了）/ 删除（**绑定了账户的实体**拒绝，D14 / D42）。`name` / `desc` 折进 `core:info` 组件——**只动这两个键**，不碰同组件其它数据（传空 `desc` = 删该键，`name` 随即回落到 `id` 前 8 位兜底）；`components` 是**整体替换**，**建议不要在同一次 PATCH 里混用**两者（整体替换会盖掉显式键以外的组件数据） |
+| POST | `/admin/entities` | 新建实体（`{kind?, name?, desc?, components?, tags?, map_id?, row?, col?}`）。**位置三参数要么全给、要么全不给**：给了 = 放进世界（写 `core:position`）；**一个都不给 = 造一个不在世界上的实体**；只给一部分 → 400（"半截位置"会被兜底成 `""` / `0`，把"忘了给"变成静默出现在 (0,0) 的实体）。`name` / `desc` 是**输入便利**：折进 `core:info` 组件，实体上没有这两列（v9）。`components` = 组件键 → 数据，键须为 `source:name` 信封；`kind` / `tags` 是**能力输入便利**（D41：落成组件键，裸名按 D41 解析）。响应 `{id, components}` |
+| PATCH / DELETE | `/admin/entities/{entity_id}` | 改实体（`name` / `desc` / `components`（整体替换））/ 删除（**绑定了账户的实体**拒绝，D14 / D42）。**D41：没有 `kind` / `tags` 可改**——能力就是组件，加/摘能力 = 加/删组件键（单点增删请用组件原语，整块替换时记得把 `core:*` 一起带上，否则实体会离开世界）。`name` / `desc` 折进 `core:info` 组件——**只动这两个键**，不碰同组件其它数据（传空 `desc` = 删该键，`name` 随即回落到 `id` 前 8 位兜底）。响应 `{id, components}` |
 
 ### 2.5 账户 / 凭据 / 邀请码
 

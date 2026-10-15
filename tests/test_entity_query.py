@@ -1,7 +1,9 @@
 """D26 实体查询原语（query_entities）测试。
 
-覆盖：标签 AND / exclude、kind 也是标签、无声明者标签、D21 世界激活语义、
+覆盖：组件 AND / exclude、kind 与预设组件都是组件、虚构组件、D21 世界激活语义、
 世界/地图/坐标范围、limit、稳定排序、viewer 感知过滤、where、严格校验。
+（D41：查询参数名仍是 ``tags=`` / ``exclude_tags=``，但筛的是**组件键**——
+裸名按 D41 解析：唯一声明者 → 加前缀；无人声明 → ``local:``；多个声明者 → 报错。）
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ async def _engine(tmp_path: Path) -> WorldEngine:
 
 
 def _attach(engine: WorldEngine, play_id: str) -> WorlditorPlayAPI:
-    """绑定一个"已加载"的玩法包 API（D26 标签活性 = 已加载 + 世界激活）。"""
+    """绑定一个"已加载"的玩法包 API（D26 组件活性 = 已加载 + 世界激活）。"""
     api = WorlditorPlayAPI(engine, play_id)
     engine.attach_play_api(play_id, api)
     return api
@@ -41,8 +43,8 @@ def _ids(entities) -> set[str]:
     return {e.id for e in entities}
 
 
-def test_query_by_tags(tmp_path):
-    """标签查询：AND 语义、exclude_tags、kind 与预设标签都是标签（D18/D26）。"""
+def test_query_by_components(tmp_path):
+    """组件查询：AND 语义、exclude_tags、kind 与预设组件都是组件（D41/D26）。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -55,7 +57,10 @@ def test_query_by_tags(tmp_path):
                 "ghost", "default", 0, 0, tags=["poisoned", "undead"]
             )
             dog = await engine.place_entity("wolf", "default", 1, 0)
-            # 基底 kind 本身就是一条标签（D18：kind = 隐式同名标签）
+            # kind 自己就是一条能力组件（D41：kind 是输入便利，落成同名组件键）
+            assert wolf.has_component("local:wolf")
+            assert wolf.has_component("pkg_a:poisoned")
+            assert ghost.has_component("pkg_a:undead")
             assert _ids(engine.query_entities(tags=["wolf"])) == {wolf.id, dog.id}
             assert _ids(engine.query_entities(tags=["poisoned"])) == {
                 wolf.id,
@@ -70,17 +75,36 @@ def test_query_by_tags(tmp_path):
             assert _ids(
                 engine.query_entities(tags=["poisoned"], exclude_tags=["undead"])
             ) == {wolf.id}
-            # 类型预设标签（D18：类型 A = {A, C}）
-            engine.register_entity_type("zombie", tags=["undead", "poisoned"])
-            zombie = await engine.place_entity("zombie", "default", 0, 0)
+            # 类型预设（D18："类型 A = {A, C}"）→ D41 归**实体模板**：
+            # 模板 = 一组组件的预设，套用即得那组能力组件
+            engine.register_entity_template(
+                "zombie",
+                "僵尸",
+                {
+                    "name": "僵尸",
+                    "components": {"pkg_a:undead": {}, "pkg_a:poisoned": {}},
+                },
+            )
+            tmpl = next(
+                t for t in engine.list_templates("entity") if t["id"] == "zombie"
+            )
+            zombie = await engine.place_entity(
+                "zombie",
+                "default",
+                0,
+                0,
+                components=tmpl["data"]["components"],
+            )
+            assert zombie.has_component("pkg_a:undead")
             assert _ids(engine.query_entities(tags=["undead", "poisoned"])) == {
                 ghost.id,
                 zombie.id,
             }
-            # 无声明者的纯数据标签（实例自带）照常匹配
+            # 无声明者的纯数据组件（**虚构组件**，实例自带）照常匹配
             marked = await engine.place_entity(
                 "thing", "default", 0, 0, tags=["my_marker"]
             )
+            assert marked.has_component("local:my_marker")
             assert _ids(engine.query_entities(tags=["my_marker"])) == {marked.id}
         finally:
             await engine.terminate()
@@ -89,7 +113,7 @@ def test_query_by_tags(tmp_path):
 
 
 def test_query_respects_world_activation(tmp_path):
-    """D21/D26：声明该标签的包在实体所在世界未激活 → 该标签不匹配。"""
+    """D21/D26：声明该组件的包在实体所在世界未激活 → 该组件不匹配。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -101,13 +125,15 @@ def test_query_respects_world_activation(tmp_path):
             entity = await engine.place_entity(
                 "wolf", "default", 0, 0, tags=["poisoned", "marker"]
             )
-            # 能力面：标签在该世界不活跃（D21）
+            # 组件照常落在实体上（数据留下），只是能力在本世界不生效
+            assert entity.has_component("pkg_poison:poisoned")
+            # 能力面：该组件在该世界不活跃（D21）
             caps = engine.capabilities(entity)
-            assert "pkg_poison:poisoned" in caps["inactive_tags"]
+            assert "pkg_poison:poisoned" in caps["inactive_components"]
             # 查询面：能力不存在 → 不匹配（与 available_actions 同源）
             assert engine.query_entities(tags=["poisoned"]) == []
             assert _ids(engine.query_entities(exclude_tags=["poisoned"])) == {entity.id}
-            # 无声明者的纯数据标签不受激活过滤影响
+            # 无声明者的纯数据组件（虚构组件）不受激活过滤影响
             assert _ids(engine.query_entities(tags=["marker"])) == {entity.id}
             # 世界激活后即可匹配
             await engine.update_world("quiet", play_ids=["pkg_poison"])
@@ -118,10 +144,10 @@ def test_query_respects_world_activation(tmp_path):
     _run(fn())
 
 
-def test_query_deactivated_play_tag_does_not_match(tmp_path):
-    """停用/真卸载语义：停用 → 声明的标签不匹配；真卸载 → 归属记忆清除，回到纯数据。
+def test_query_deactivated_play_component_does_not_match(tmp_path):
+    """停用/真卸载语义：停用 → 声明的组件不匹配；真卸载 → 归属记忆清除，回到纯数据。
 
-    走真实 PlayLoader（停用会清注册 + 解绑 API，而标签本身仍留在实体数据上）。
+    走真实 PlayLoader（停用会清注册 + 解绑 API，而组件本身仍留在实体数据上）。
     """
     install_demo_play(tmp_path / "plays")
 
@@ -133,6 +159,8 @@ def test_query_deactivated_play_tag_does_not_match(tmp_path):
         await loader.load_all()
         try:
             merchant = await engine.place_entity("merchant", "default", 0, 0)
+            # 组件键 = 行为包声明的共享键（world.json 的内容与行为包同用 local:）
+            assert merchant.has_component("local:merchant")
             assert _ids(engine.query_entities(tags=["merchant"])) == {merchant.id}
             # 停用：能力没了 → 不匹配（实体数据照旧在）
             await loader.disable("worlditor_play_demo")
@@ -141,11 +169,9 @@ def test_query_deactivated_play_tag_does_not_match(tmp_path):
             # 重新启用：又能匹配
             await loader.enable("worlditor_play_demo")
             assert _ids(engine.query_entities(tags=["merchant"])) == {merchant.id}
-            # 真卸载（purge）：归属记忆清掉 → 标签回到"无声明者的纯数据"
+            # 真卸载（purge）：归属记忆清掉 → 组件回到"无声明者的纯数据"
             await loader.uninstall("worlditor_play_demo")
-            assert _ids(
-                engine.query_entities(tags=["worlditor_play_demo:merchant"])
-            ) == {merchant.id}
+            assert _ids(engine.query_entities(tags=["local:merchant"])) == {merchant.id}
         finally:
             await engine.terminate()
 
@@ -175,7 +201,7 @@ def test_query_scope_and_order(tmp_path):
             # 坐标筛选（与 list_entities 同义）
             assert _ids(engine.query_entities(row=0, col=0)) == {far.id, near.id}
             assert engine.query_entities(map_id="home", row=9) == []
-            # 稳定排序：同 kind 时按 (map_id, row, col, id)
+            # 稳定排序：同组件键时按 (map_id, row, col, id)
             listed = engine.query_entities(tags=["wolf"])
             assert listed == sorted(
                 listed, key=lambda e: (e.map_id, e.row, e.col, e.id)

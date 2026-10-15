@@ -271,17 +271,26 @@ def test_disable_keeps_admin_entity_templates(tmp_path):
         # 注意别改成命令式注册——那样 enable 时包的 setup 重跑也不会恢复它。
         ids = {t["id"] for t in engine.list_templates("entity")}
         assert "pkg_npc" in ids, f"夹具包应在 setup 里声明实体模板：{ids}"
-        # 管理员本地模板：落 templates 表（与"管理页保存"同一条入口）
+        # 管理员本地模板：落 templates 表（与"管理页保存"同一条入口）。
+        # D41：实体模板 data = `{name, desc, components}`——"类型 = 一组组件的预设"，
+        # 没有 kind 输入键（要带能力就在 components 里给组件键）。
         await engine.save_template(
             WorldTemplate(
                 id="admin_ore",
                 name="管理员矿石",
                 scope="entity",
-                data={"kind": "ore", "name": "金矿石"},
+                data={"name": "金矿石", "components": {"local:ore": {}}},
             )
         )
         ids = {t["id"] for t in engine.list_templates("entity")}
         assert {"pkg_npc", "admin_ore"} <= ids
+        # 落库前已按新负载规范化：只留 name / desc / components
+        rows = {t["id"]: t for t in engine.list_templates("entity")}
+        assert rows["admin_ore"]["data"] == {
+            "name": "金矿石",
+            "desc": "",
+            "components": {"local:ore": {}},
+        }
 
         resp = await admin_client.post(f"/admin/plays/{PLAY_ID}/disable", headers=h)
         assert resp.status_code == 200, resp.text
@@ -366,6 +375,9 @@ def test_entity_endpoints_cover_absent_entities(tmp_path):
         )
         assert resp.status_code == 200, resp.text
         box_id = resp.json()["data"]["id"]
+        # D41：创建端点回 `{id, components}`——kind 是输入便利，落成组件键（不再回 tags）
+        assert "local:thing" in resp.json()["data"]["components"]
+        assert "tags" not in resp.json()["data"]
         box = engine.get_entity(box_id)
         assert not box.has_position() and box.pos_key() is None
 
@@ -432,13 +444,17 @@ def test_accounts_search(tmp_path):
             traceback.print_exc()
             raise
 
+    _run(_scenario(tmp_path, fn))
+
 
 async def _accounts_search_body(admin_client, identity):
-    # 造 3 账户：admin1（sekret）、user1、user2（+ user1 二次登录多一份凭据）
+    # 造 3 账户：admin1（sekret）、user1、user2
     admin_token = await _admin_token(identity)
     u1 = await identity.register_human("user1", "pass123")
     await identity.register_human("user2", "pass123")
-    await identity.login("user1", "pass123")  # 第二份未吊销凭据
+    # 再登录一次：login 会**吊销旧凭据**（identity.login 的既定语义），
+    # 所以 user1 名下始终只有一份有效凭据——token_count 反映的是未吊销数。
+    await identity.login("user1", "pass123")
     h = {"Authorization": f"Bearer {admin_token}"}
     # q 过滤
     resp = await admin_client.get("/admin/accounts?q=user", headers=h)
@@ -457,17 +473,24 @@ async def _accounts_search_body(admin_client, identity):
     resp = await admin_client.get(
         "/admin/accounts?q=user&page=2&page_size=1", headers=h
     )
-    assert len(resp.json()["accounts"]) == 1
-    # 凭据明细（user1 两份登录）
-    row = next(a for a in page1["accounts"] if a["username"] == "user1")
-    assert row["token_count"] == 2
-    assert row["entity"] is not None and row["entity"]["kind"] == "player"
+    page2 = resp.json()
+    assert len(page2["accounts"]) == 1
+    # 两页正好覆盖两个账户（谁在第一页按注册时间倒序，别把顺序写死）
+    rows = page1["accounts"] + page2["accounts"]
+    assert {a["username"] for a in rows} == {"user1", "user2"}
+    # 凭据明细（user1 登录一次 → 一份有效凭据）与绑定实体
+    # （D41：实体投影没有 kind / tags——判能力看 `local:player` 组件）
+    row = next(a for a in rows if a["username"] == "user1")
+    assert row["token_count"] == 1
+    assert row["entity"] is not None
+    assert "local:player" in row["entity"]["components"]
+    assert "kind" not in row["entity"] and "tags" not in row["entity"]
     assert row["created_ts"] > 0
-    # tokens 端点
+    # tokens 端点（只列未吊销凭据，完整 token 供吊销）
     resp = await admin_client.get(f"/admin/accounts/{u1.account_id}/tokens", headers=h)
     assert resp.status_code == 200
     token_rows = resp.json()["tokens"]
-    assert len(token_rows) == 2
+    assert len(token_rows) == 1
     assert all(len(t["token"]) == 48 for t in token_rows)  # token_hex(24)
     assert any(t["tier"] == "play" for t in token_rows)
     # 排序：created_desc 默认，created_asc 反序

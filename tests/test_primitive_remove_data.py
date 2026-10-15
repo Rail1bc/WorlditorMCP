@@ -77,12 +77,13 @@ def test_remove_data_survives_restart(tmp_path):
             restarted = engine2.get_entity(wolf.id)
             assert "hp" not in restarted.component(_STAT)
             # 删的是字段，不是组件：空组件仍然在
-            # （v2：place_entity 把位置折进 core:position、名字折进 core:info，
-            #   所以组件清单里还有它们）
+            # （v2：place_entity 把位置折进 core:position、名字折进 core:info；
+            #   D41-b：kind="wolf" 也只是输入便利，落成 local:wolf 组件 = 能力）
             assert engine2.list_components(wolf.id) == [
                 "core:info",
                 "core:position",
                 _STAT,
+                "local:wolf",
             ]
             assert restarted.component(_STAT) == {}
         finally:

@@ -2,9 +2,10 @@
 
 demo_play 已按 D3 删除（领域包即 SDK 模板）；玩法包机制测试需要一个
 行为完整的参考玩法包，此处以字符串常量写入 tmp 目录，覆盖：
-kind（merchant/sign/door）、交互（talk/trade/read/open/eat/bye/buy_*）、
+**组件声明**（merchant/sign/door——D41：能力 = 组件的存在）、
+交互（talk/trade/read/open/eat/bye/buy_*）、
 事件（on_tick / on_entity_enter / on_world_edited + 玩法包自定义 item_used）、
-**组件声明**（apple/megaphone 两条标签，D37：原物品定义）、**视图组件**（view.js）、
+**货品组件声明**（apple/megaphone，D37：原物品定义）、**视图组件**（view.js）、
 **部件聚合**（world_whoami 产出 character 块 + ui_hook 展开）、管理页（shop）、
 kv 读写、出生礼包。
 
@@ -100,9 +101,15 @@ _SHOP = _load_shop()
 
 def setup(api: WorlditorPlayAPI, context) -> None:
     """玩法包入口（由内核 PlayLoader 调用）。"""
-    api.register_entity_kind("merchant", interactions=("talk", "trade"), label="商贩")
-    api.register_entity_kind("sign", interactions=("read",), label="告示牌")
-    api.register_entity_kind("door", interactions=("open",), label="门")
+    # D41：声明一个组件 = 声明一条能力；实体带上该组件即具备它声明的动作。
+    # merchant/sign/door 用**共享的 local: 键**声明——演示世界包（world.json）
+    # 里的内容实体写的也正是这几个键，于是"内容 + 行为"在同一个组件上对接
+    # （内容方不注册行为，行为方不写数据；门的数据与声明同键，正好合一）。
+    api.register_entity_kind(
+        "local:merchant", interactions=("talk", "trade"), label="商贩"
+    )
+    api.register_entity_kind("local:sign", interactions=("read",), label="告示牌")
+    api.register_entity_kind("local:door", interactions=("open",), label="门")
     api.register_interaction("talk", _talk, label="打招呼")
     api.register_interaction("trade", _trade, label="看看货")
     api.register_interaction("buy_apple", _buy_apple, label="买苹果（5金）")
@@ -119,7 +126,7 @@ def setup(api: WorlditorPlayAPI, context) -> None:
         _whoami,
         description="查看你的当前身份",
     )
-    # 物品**类型** → 组件声明（D37）：货单引用的两个货品各登记一条标签——标签名
+    # 物品**类型** → 组件声明（D37）：货单引用的两个货品各登记一个组件——组件名
     # 就是「包自己的物品标识」，字段 schema 承接原 ItemDef 的字段化定义；
     # 原 ItemDef.use_action 由 interaction 名承担（见上面的 eat 交互）。
     api.register_entity_tag(
@@ -136,10 +143,16 @@ def setup(api: WorlditorPlayAPI, context) -> None:
     # 它同时是 D37 的示范——"管理员手工维护的物品定义"原来靠 user_data 标记区分，
     # 现在这条"包声明 vs 本地数据"的区分由**存储位置**承担（本地模板落 templates 表，
     # 见管理端 save_template）。测试用它验"停用只清代码声明、不碰本地数据"。
+    # D41：模板负载 = ``{name, desc, components}``——"类型 = 一组组件的预设"就落在这里
+    # （原来的 ``kind`` 输入键已取消：要带能力就写组件键）。
     api.register_entity_template(
         "pkg_npc",
         "包声明 NPC",
-        {"kind": "npc", "name": "路人", "components": {"local:stat": {"hp": 10}}},
+        {
+            "name": "路人",
+            "desc": "包声明模板建出来的 NPC",
+            "components": {"local:npc": {}, "local:stat": {"hp": 10}},
+        },
     )
     # 视图组件（G3/D7）：参考实现 = tests/fixtures/plays/.../web/view.js
     api.register_view(
@@ -250,7 +263,7 @@ async def _buy_apple(
     api: WorlditorPlayAPI, req: InteractionRequest
 ) -> InteractionResult:
     """买苹果：命令式 API 写法（D12：无 effects，handler 直接调原语）。"""
-    if req.target is None or req.target.kind != "local:merchant":
+    if req.target is None or not req.target.has_component("local:merchant"):
         return InteractionResult(text="这里没有卖苹果的。")
     gold = await api.get_data(req.entity_id, _GOLD, component=_STAT) or 0
     price = _SHOP.get(APPLE_ITEM, {}).get("price", 5)
@@ -269,7 +282,7 @@ async def _buy_megaphone(
     api: WorlditorPlayAPI, req: InteractionRequest
 ) -> InteractionResult:
     """买喇叭：命令式 API 写法（A1：两种写法演示）。"""
-    if req.target is None or req.target.kind != "local:merchant":
+    if req.target is None or not req.target.has_component("local:merchant"):
         return InteractionResult(text="这里没有卖喇叭的。")
     gold = await api.get_data(req.entity_id, _GOLD, component=_STAT) or 0
     price = _SHOP.get(MEGAPHONE_ITEM, {}).get("price", 10)
@@ -304,8 +317,10 @@ async def _open(api: WorlditorPlayAPI, req: InteractionRequest) -> InteractionRe
 
     原实现靠 ``set_state(block_move=False)`` 解除阻挡——D33 起玩法包不得写
     ``core:``，且 D34 已整体移除阻挡机制，所以这里退化为一次普通的组件写。
+
+    D41：判"这是不是一扇门"看组件（``local:door``），不再有 ``kind`` 可读。
     """
-    if req.target is None or req.target.kind != "local:door":
+    if req.target is None or not req.target.has_component("local:door"):
         return InteractionResult(text="这不是一扇能开的门。")
     if req.target.component(_DOOR).get("open"):
         return InteractionResult(text="木门已经开着呢。")
@@ -342,7 +357,7 @@ async def _eat(api: WorlditorPlayAPI, req: InteractionRequest) -> InteractionRes
 async def _on_tick(api: WorlditorPlayAPI, dt: float) -> None:
     """演示 tick 状态机：告示牌定期更新"张贴时间"。"""
     for entity in api.list_entities():
-        if entity.kind == "local:sign":
+        if entity.has_component("local:sign"):
             await api.set_data(
                 entity.id, "last_updated", time.strftime("%H:%M:%S"), component=_SIGN
             )
@@ -352,7 +367,7 @@ async def _on_entity_enter(
     api: WorlditorPlayAPI, entity, map_id: str, row: int, col: int
 ) -> None:
     """演示事件驱动行为：进入迷雾区域发自定义事件（说话下沉后，M2/D1）。"""
-    if row >= FOREST_ROW and entity.kind == "local:player":
+    if row >= FOREST_ROW and entity.has_component("local:player"):
         await api.emit(
             "fog_enter",
             {"entity_id": entity.id, "row": row, "text": "雾越来越浓，你几乎看不清三米以外的东西……"},
@@ -366,7 +381,7 @@ async def _on_world_edited(api: WorlditorPlayAPI, what) -> None:
         entity = api.get_entity(what["entity_id"])
         if (
             entity is not None
-            and entity.kind == "local:player"
+            and entity.has_component("local:player")
             and _GOLD not in entity.component(_STAT)
         ):
             await api.set_data(entity.id, _GOLD, 100, component=_STAT)

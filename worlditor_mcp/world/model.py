@@ -566,8 +566,9 @@ class WorldTemplate:
     - ``scope="location"``：地块预设（复制预设，非继承）。目标存储策略：
       **同图目标存方向相对偏移**（{dr, dc}，放置时按地块位置平移）；
       **跨图目标存绝对 map_id+坐标**（{map_id, row, col}）原样复制。
-    - ``scope="entity"``：实体预设。data = ``{kind, tags[], name, desc, components}``
-      （v2/D32：原 attrs/state 两容器已取消；套用后仍可改）；玩法包注册的实体模板
+    - ``scope="entity"``：实体预设。data = ``{name, desc, components}``
+      （v2/D32：原 attrs/state 两容器已取消；**D41：类型预设 = 一组组件的预设**，
+      所以"类型"这个概念在这里而不是在实体上；套用后仍可改）；玩法包注册的实体模板
       在内存注册表（随包卸载消失），管理端本地模板落这张表——这条"包声明 vs 本地数据"
       的区分正好顶替了 D37 之前"管理员手工物品定义"的位置。
     """
@@ -662,16 +663,15 @@ class Entity:
     **名字与描述**（``core:info``）：同样是组件；``name`` / ``desc`` 以只读 property
     暴露，缺失时 ``name`` 兜底为 ``id`` 前 8 位（§12.4）。
 
-    **标签（D18）**：``kind`` 是基底类型（预设/标志位），``tags`` 为实例级标签，
-    两者一起决定实体的能力（有效标签 = 基底 kind + 类型预设标签 + 实例 tags，
-    能力 = 各标签并集，见 engine 的能力解析）。**v2 第 2 期**将把两者折叠为组件。
+    **能力 = 组件的存在**（D41）：实体带了某个组件键就具备那条能力——纯能力组件的数据
+    是 ``{}``（合法且常见）。所以**没有** ``kind`` / ``tags`` 这类"基底类型"字段：
+    想表达"这是一头狼"，就带上 ``bestiary:wolf`` 组件；"类型 = 一组组件的预设"归
+    **实体模板**（D22）。
     """
 
     id: str  # uuid4 hex（B5）
-    kind: str  # 基底类型（玩法包自由声明的名字；**v2 第 2 期将删除此列**，见 D41）
     components: dict[str, dict] = field(default_factory=dict)
     last_active_ts: float = 0.0  # 在线状态（动作/SSE 活动维护）
-    tags: list[str] = field(default_factory=list)  # 实例级标签（D18，有序、去重）
     # 变更检测（D28）：内核在**落库那一刻**盖章，玩法包/客户端据此刻画增量
     revision: int = 0  # 全局单调变更号（每次写 +1；重启后从库里最大值续号）
     changed_tick: int = 0  # 最近一次变更所在的 tick 窗口（query(changed_since_tick=)）
@@ -738,6 +738,14 @@ class Entity:
         data = self.components.get(key)
         return data if isinstance(data, dict) else {}
 
+    def has_component(self, key: str) -> bool:
+        """是否带某个组件 —— **这就是"有没有这条能力"**（D41）。
+
+        不能用 ``component(key) == {}`` 代替：纯能力组件的数据本来就是 ``{}``，
+        "带了一个空组件"与"没有这个组件"必须分得开。
+        """
+        return key in self.components
+
     @property
     def name(self) -> str:
         """显示名 = ``core:info.name``；缺失 → **``id`` 前 8 位**（§12.4 的兜底语义）。
@@ -779,19 +787,17 @@ class Entity:
         return self.user_id is not None
 
     def to_dict(self) -> dict[str, Any]:
-        """线上投影＝**模型实况**：名字/描述/账户绑定都在 ``components`` 里，不在顶层。
+        """线上投影＝**模型实况**（D41：**5 键**）：``id`` + ``components`` + 三个元信息。
 
-        v2 起不再提供顶层 ``name`` / ``desc`` / ``user_id`` / ``map_id`` / ``row`` / ``col``
-        ——它们是 ``core:info`` / ``core:account`` / ``core:position`` 组件（§12.4）。
-        消费者读 ``components["core:info"]["name"]`` 等；内核自己的文案与"在不在场"
-        走 ``Entity.name`` / ``Entity.map_id`` 这些带缺失语义的只读 property。
+        名字/描述/账户绑定/位置都在 ``components`` 里，不在顶层（§12.4）；能力也在
+        ``components`` 里（组件的存在即能力，D41）——所以没有 ``kind`` / ``tags``。
+        内核自己的文案与"在不在场"走 ``Entity.name`` / ``Entity.map_id`` 这些带缺失
+        语义的只读 property。
         """
         return {
             "id": self.id,
-            "kind": self.kind,
             "components": self.components,
             "last_active_ts": self.last_active_ts,
-            "tags": list(self.tags),
             "revision": self.revision,
             "changed_tick": self.changed_tick,
         }
@@ -806,12 +812,13 @@ class Entity:
         内部与落库只有一种形态——组件；不会出现"两处存同一事实"。
 
         **位置是可选的**（D36）：三个键都不给 = 实体不在世界上，这是合法输入。
+        **能力也是组件**（D41）：没有 ``kind`` / ``tags`` 这类输入键，要带能力就在
+        ``components`` 里给组件键。
         """
         if not isinstance(value, dict):
             return None
-        for key in ("id", "kind"):
-            if not isinstance(value.get(key), str) or not value[key]:
-                return None
+        if not isinstance(value.get("id"), str) or not value["id"]:
+            return None
         components = parse_components(value.get("components"))
         map_id = value.get("map_id")
         row, col = value.get("row"), value.get("col")
@@ -849,12 +856,10 @@ class Entity:
             }
         return Entity(
             id=value["id"],
-            kind=value["kind"],
             components=components,
             last_active_ts=value.get("last_active_ts", 0.0)
             if isinstance(value.get("last_active_ts"), (int, float))
             else 0.0,
-            tags=parse_tags(value.get("tags")),
             revision=_nonneg_int(value.get("revision")),
             changed_tick=_nonneg_int(value.get("changed_tick")),
         )
@@ -867,10 +872,11 @@ def _nonneg_int(value: Any) -> int:
     return 0
 
 
-def parse_tags(value: Any) -> list[str]:
-    """实体标签解析（D18）：非字符串 / 空串丢弃，去重保序。
+def parse_names(value: Any) -> list[str]:
+    """组件名/键列表解析（写入边界的裸名输入）：非字符串 / 空串丢弃，去重保序。
 
-    **去重保序**很重要——标签顺序参与字段覆盖优先级（D19），不能随便排序。
+    **去重保序**很重要——`place_entity(tags=[...])` 的顺序就是组件在实体字典里的顺序，
+    不能随便排序（同一份输入要落出同一份组件字典）。
     """
     if isinstance(value, str):
         value = [value]
@@ -880,9 +886,9 @@ def parse_tags(value: Any) -> list[str]:
     for item in value:
         if not isinstance(item, str):
             continue
-        tag = item.strip()
-        if tag and tag not in out:
-            out.append(tag)
+        name = item.strip()
+        if name and name not in out:
+            out.append(name)
     return out
 
 
@@ -902,27 +908,24 @@ def parse_tags(value: Any) -> list[str]:
 # （否则跨包共享能力会真的丢失，回到 G6/G39 那个"包间契约没有系统表示"的坑）。
 
 
-# ---------- 实体 kind 注册（玩法包扩展点） ----------
-
-
-# ---------- 标签 / 类型注册（玩法包扩展点，D18 / D25） ----------
+# ---------- 组件声明（玩法包扩展点，D41） ----------
 
 
 @dataclass
 class TagSpec:
-    """标签的能力声明（D18：``register_entity_kind`` 与 ``register_entity_tag`` 共用）。
+    """**组件声明**（D41：原来"类型 / 标签"两套声明合并成这一套）。
 
-    **类型与标签共用一个命名空间**：``register_entity_kind("door", ...)`` 等价于注册
-    一个名为 ``door`` 的标签（``implicit=True``）——所以能力解析只有一条路径：
-    实体有效标签 = 基底 kind + 类型预设标签 + 实例 tags，能力 = 各标签并集（D19）。
+    **组件名自带来源**：``key = source:name``——来源进名字，所以两个包各声明
+    ``merchant`` 是**两个组件共存**，不存在"后注册覆盖"，也没有"同名"这回事。
+    ``source`` / ``name`` 从键里派生（归属的唯一事实来源就是键，D44）。
 
     字段语义：
-    - ``interactions``：该标签默认可用的动作名（C3：可用动作 = 标签声明 ∪ 全局注册表）；
+    - ``interactions``：该组件默认可用的动作名（C3：可用动作 = 组件声明 ∪ 全局注册表）；
     - ``label``：文案（B1）；
-    - ``play_id``：声明者——能力面按**世界激活**逐个标签过滤（D21）；
-    - ``fields``：标签声明字段 schema（D9：{name,label,type,default?}，UI 通用渲染）；
-    - ``categories``：分类标签（D10：宽松，无需预注册）；
-    - ``implicit``：来自 kind 注册（True）还是显式标签注册（False）——只影响展示。
+    - ``play_id``：声明者——能力面按**世界激活**逐个组件过滤（D21）；
+    - ``fields``：组件声明的字段 schema（D9：{name,label,type,default?}，UI 通用渲染）；
+      字段清单**按组件分组**，不跨组件摊平（D41）——同一组件内同名字段只能声明一次；
+    - ``categories``：选取分组（D10：宽松，无需预注册；**不再承载字段**，D41）。
     """
 
     key: str
@@ -931,7 +934,6 @@ class TagSpec:
     play_id: str = ""
     fields: list[dict] = field(default_factory=list)
     categories: tuple[str, ...] = ()
-    implicit: bool = False
 
     @property
     def source(self) -> str:
@@ -942,15 +944,6 @@ class TagSpec:
     def name(self) -> str:
         """组件的裸名部分。"""
         return self.key.split(":", 1)[1]
-
-    @property
-    def tag(self) -> str:
-        """旧读点别名；新代码应使用 ``key``。"""
-        return self.key
-
-
-# 旧名（v0.2–v0.4，kind 时代）：D18 起 kind 只是"隐式同名标签"，保留别名供外部引用
-EntityKindSpec = TagSpec
 
 
 # ---------- 交互协议（玩法与 UI 之间的契约） ----------
@@ -1079,7 +1072,7 @@ WORLD_EVENTS: tuple[str, ...] = (
 EVENT_PHASES: tuple[str, ...] = ("input", "simulate", "present")
 DEFAULT_EVENT_PHASE = "simulate"
 
-# 实体 / 组件序列化辅助（组件字典、tags JSON）
+# 实体 / 组件序列化辅助（组件字典）
 
 
 def _dump_json(value: Any) -> str:
@@ -1096,31 +1089,29 @@ def _load_json(raw: str | None, default: Any) -> Any:
 
 
 def entity_db_row(entity: Entity) -> tuple:
-    """entities 表写入行（与 store SQL 列序一致；D28 两列在末尾）。
+    """entities 表写入行（与 store SQL 列序一致；D28 两列在末尾、表 v11 共 4 列）。
 
     v2：名字/描述/账户绑定/位置都已进 ``components``（``core:info`` / ``core:account``
-    / ``core:position``），不再是独立的列——所以这张表**没有**它们。
+    / ``core:position``），**能力同样是组件**（D41）——所以这张表**只有** ``id`` /
+    ``components_json`` / ``revision`` / ``changed_tick``。
     """
     return (
         entity.id,
-        entity.kind,
         _dump_json(entity.components),
-        entity.last_active_ts,
-        _dump_json(entity.tags),
         entity.revision,
         entity.changed_tick,
     )
 
 
 def entity_from_row(row: Any) -> Entity | None:
-    """从 aiosqlite Row 解析实体（容错：json 损坏按空 dict；缺列按 0）。"""
+    """从 aiosqlite Row 解析实体（容错：json 损坏按空 dict；缺列按 0）。
+
+    ``last_active_ts`` **不在表里**（v11：在线状态只在内存），重开后从 0 起。
+    """
     return Entity.from_dict(
         {
             "id": row["id"],
-            "kind": row["kind"],
             "components": _load_json(row["components_json"], {}),
-            "last_active_ts": row["last_active_ts"],
-            "tags": _load_json(row["tags_json"], []),
             # D28 后加列：老库 / 测试假行可能没有这两列
             "revision": _row_get(row, "revision", 0),
             "changed_tick": _row_get(row, "changed_tick", 0),

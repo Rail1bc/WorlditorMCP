@@ -83,11 +83,16 @@ def test_seed_world(tmp_path):
         await install_demo_world(engine)
         assert len(engine.list_locations()) == SEED_LOCATION_COUNT
         assert len(engine.list_entities()) == SEED_ENTITY_COUNT
-        kinds = {e.kind for e in engine.list_entities()}
-        assert kinds == {"local:merchant", "local:sign", "local:door"}
+        abilities = {
+            key
+            for e in engine.list_entities()
+            for key in e.components
+            if key.startswith("local:")
+        }
+        assert abilities == {"local:merchant", "local:sign", "local:door"}
         plaza = engine.list_entities(row=0, col=0)
-        assert any(e.kind == "local:merchant" for e in plaza)
-        door = [e for e in engine.list_entities() if e.kind == "local:door"][0]
+        assert any(e.has_component("local:merchant") for e in plaza)
+        door = [e for e in engine.list_entities() if e.has_component("local:door")][0]
         assert door.component("local:door").get("open") is False
 
     _run(_scenario(tmp_path, fn))
@@ -188,7 +193,7 @@ def test_move_identity_entity(tmp_path):
         assert (scene.map_id, scene.row, scene.col) == ("default", -1, 0)
         assert scene.location.name == "步行街·南街口"
         # 非玩家实体也能走（D42 前这里会报"只有玩家/agent 实体可以按路径移动"）
-        door = [e for e in engine.list_entities() if e.kind == "local:door"][0]
+        door = [e for e in engine.list_entities() if e.has_component("local:door")][0]
         await engine.move_entity(door.id, "default", 0, 0)
         assert (await engine.move(door.id, "up")).location.name == "步行街·南街口"
         # 方向非法
@@ -199,15 +204,15 @@ def test_move_identity_entity(tmp_path):
 
 
 def test_move_not_blocked_by_door(tmp_path):
-    """阻挡机制已移除：木门（kind 声明）不再挡路，也不需要"开门"才能通过。"""
+    """阻挡机制已移除：木门（`local:door` 组件）不再挡路，也不需要"开门"才能通过。"""
 
     async def fn(engine: WorldEngine, clock=None):
         await install_demo_world(engine)  # 木门在 (3,0)
         engine.register_entity_kind("door", interactions=("open",))
-        door = [e for e in engine.list_entities() if e.kind == "local:door"][0]
+        door = [e for e in engine.list_entities() if e.has_component("local:door")][0]
         # block_move 已从能力面（capabilities / list_kinds）整体消失
         assert "block_move" not in engine.capabilities(door)
-        kinds = {k["tag"]: k for k in engine.list_kinds()}
+        kinds = {k["key"]: k for k in engine.list_kinds()}
         assert "block_move" not in kinds["local:door"]
         player = await engine.place_entity("player", "default", 2, 0, name="小明")
         # (2,0) 老路 → 南 (3,0) 林间路口（木门在此）：门不挡路，直接走过去
@@ -227,7 +232,7 @@ def test_move_entity_teleport(tmp_path):
         engine.register_world_event(
             "on_entity_move", lambda api, e, f, t: moves.append((e.id, f, t))
         )
-        sign = [e for e in engine.list_entities() if e.kind == "local:sign"][0]
+        sign = [e for e in engine.list_entities() if e.has_component("local:sign")][0]
         await engine.move_entity(sign.id, "default", 0, 0)
         assert sign.pos_key() == ("default", 0, 0)
         assert moves[-1][2] == ("default", 0, 0)
@@ -323,7 +328,9 @@ def test_interact_flow_command_mode(tmp_path):
         await install_demo_world(engine)  # 商贩·阿福在 (0,0)，(1,0) 老路可放机器人
         engine.attach_play_api("test_play", WorlditorPlayAPI(engine, "test_play"))
         _demo_registry(engine)
-        merchant = [e for e in engine.list_entities() if e.kind == "local:merchant"][0]
+        merchant = [
+            e for e in engine.list_entities() if e.has_component("local:merchant")
+        ][0]
         player = await engine.place_entity("player", "default", 0, 0, name="小明")
         # 可用动作 = kind 声明 ∪ 全局注册（C3）：merchant 声明 talk/trade，
         # 全局注册的 read/buy 对任何目标也可用
@@ -552,7 +559,7 @@ def test_delete_location_cascade(tmp_path):
 
     async def fn(engine: WorldEngine, clock=None):
         await install_demo_world(engine)  # 告示牌 + 广场 (0,0) / (-1,0) / (1,0)
-        sign = [e for e in engine.list_entities() if e.kind == "local:sign"][0]
+        sign = [e for e in engine.list_entities() if e.has_component("local:sign")][0]
         # 把告示牌移到步行街南街口 (-1,0) 然后删除该地块
         await engine.move_entity(sign.id, "default", -1, 0)
         await engine.delete_location("default", -1, 0)
@@ -594,12 +601,12 @@ def test_item_type_declaration_replaces_item_def(tmp_path):
             fields=[{"name": "atk", "label": "攻击", "type": "int", "default": 1}],
         )
         row = next(
-            k for k in api.list_kinds() if k["tag"] == "worlditor_play_items:sword_01"
+            k for k in api.list_kinds() if k["key"] == "worlditor_play_items:sword_01"
         )
         assert row["label"] == "木剑"
         assert [f["name"] for f in row["fields"]] == ["atk"]
-        assert row["play_id"] == "worlditor_play_items"  # 归属仍在（卸载可清）
-        # 名字为空要报错（原物品定义的同一条校验，这里由标签名校验承担）
+        assert row["source"] == "worlditor_play_items"  # 归属仍在（卸载可清）
+        # 名字为空要报错（原物品定义的同一条校验，这里由组件名校验承担）
         with pytest.raises(WorldError):
             api.register_entity_tag("")
 

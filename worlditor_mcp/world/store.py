@@ -43,7 +43,8 @@ from .model import (
 # v8 = entities.components_json（D32：实体 = id + 组件；attrs_json/state_json 取消）
 # v9 = entities 去掉 name / desc / user_id 三列（D32 §12.4：它们进 core:info / core:account）
 # v10 = entities 去掉 map_id / row / col 三列（D36 §12.4：位置进 core:position，可为缺失）
-SCHEMA_VERSION = "10"
+# v11 = entities 去掉 kind / tags_json 两列（D41：能力 = 组件的存在，表 4 列）
+SCHEMA_VERSION = "11"
 DEFAULT_MAP_ID = "default"
 
 # 后加列清单——**不是用来补的，是用来检查的**（`_check_schema`）。
@@ -52,15 +53,25 @@ DEFAULT_MAP_ID = "default"
 # 所以改成"缺任何一列 = 明确拒绝启动，指名删哪个文件"。
 _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     "world_maps": ("sort",),
-    "entities": ("tags_json", "revision", "changed_tick", "components_json"),
+    "entities": ("revision", "changed_tick", "components_json"),
     "templates": ("scope",),
 }
 
 # 「**不该存在**」的列（同样只在启动闸里用）。它们守的是**静默丢数据**的另一半：
-# 一个没有版本记录的库如果还带着 v9 之前那三列（name/desc/user_id），只查"需要的列在不在"
-# 是查不出来的——载入会成功，而名字/描述/账户绑定被**无声丢掉**。所以显式拒绝。
+# 一个没有版本记录的库如果还带着更早版本的列（name/desc/user_id、map_id/row/col，
+# 或 v11 之前的 kind/tags_json），只查"需要的列在不在"是查不出来的——载入会成功，
+# 而名字/描述/账户绑定或**能力归属**被无声丢掉。所以显式拒绝。
 _FORBIDDEN_COLUMNS: dict[str, tuple[str, ...]] = {
-    "entities": ("name", "desc", "user_id", "map_id", "row", "col"),
+    "entities": (
+        "name",
+        "desc",
+        "user_id",
+        "map_id",
+        "row",
+        "col",
+        "kind",
+        "tags_json",
+    ),
 }
 
 # 世界日志保留上限（超出后裁掉最旧记录；防高频事件刷爆库）
@@ -129,15 +140,16 @@ def _bad_location_field(payload: dict) -> str:
 _ENTITY_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS entities (
     id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
     components_json TEXT NOT NULL DEFAULT '{}',
-    last_active_ts REAL NOT NULL DEFAULT 0,
-    tags_json TEXT NOT NULL DEFAULT '[]',
     revision INTEGER NOT NULL DEFAULT 0,
     changed_tick INTEGER NOT NULL DEFAULT 0
 );
 -- v2（D32）：实体表只留"存储与治理"需要的列——位置/名字/描述/账户绑定都在 components 里
 -- （``core:position`` / ``core:info`` / ``core:account``，D36/§12.4）。
+-- v11（D41）：``kind`` / ``tags_json`` 两列删除——**能力 = 组件的存在**，
+-- 实体带某组件即具备该能力（纯能力组件的数据是 ``{}``）。
+-- ``last_active_ts`` 也**不落库**：它是"在线状态"（内存里由动作/SSE 活动维护），
+-- 重启后从 0 重新计——这与"实体数据"不同，没必要让进程生命周期以外的人看见。
 -- 原 idx_entities_pos 已删——实测**无任何 SQL 使用它**（实体相关 SQL 只有 SELECT * 与
 -- DELETE WHERE id），位置筛选一律走内存（索引策略见 D39 / GAPS G42）。
 -- v2 / D37：原 `items` 表已删除——物品不在内核（定义 → 组件声明，实例 → 实体 + 组件）。
@@ -740,9 +752,8 @@ class WorldStore:
             entity.changed_tick = self.tick
         await self._conn.executemany(
             "INSERT OR REPLACE INTO entities("
-            "id, kind, components_json, "
-            "last_active_ts, tags_json, revision, changed_tick"
-            ") VALUES(?, ?, ?, ?, ?, ?, ?)",
+            "id, components_json, revision, changed_tick"
+            ") VALUES(?, ?, ?, ?)",
             [entity_db_row(e) for e in entities],
         )
         await self._commit()

@@ -120,9 +120,11 @@ def test_legacy_shape_without_version_record_is_refused(tmp_path):
 
     只靠"版本值不对"那一道，这种库会一路走到 ``_load_all`` 撞出裸 ``IndexError``
     （一屏栈、没有"删哪个文件"的指引），违背 D13 的承诺。这里的库是**混合形态**：
-    ``entities`` 有 ``components_json`` 但缺 v0.5/v0.6 那三列，``world_maps`` 缺 ``sort``
+    ``entities`` 有 ``components_json`` 但缺 v11 需要的 ``revision`` / ``changed_tick``
+    （D28 后加列），``world_maps`` 缺 ``sort``
     ——确认报的是 ``IncompatibleDataError``、**把真缺的列一次报全**、
-    且**不误报已有的列**。
+    且**不误报已有的列**。（它同时带着 kind/name/map_id/row/col 等禁列，
+    那是闸的另一半，见 tests/test_v2_components.py 的陈旧列用例。）
     """
     import sqlite3
 
@@ -153,8 +155,8 @@ def test_legacy_shape_without_version_record_is_refused(tmp_path):
             assert "world.db" in msg  # 指明该删哪个文件
             # 真缺的列一次报全（不只在第一处停下）
             assert "world_maps.sort" in msg
-            assert "entities.tags_json" in msg
             assert "entities.revision" in msg
+            assert "entities.changed_tick" in msg
             # 已有的列不误报
             assert "entities.components_json" not in msg
         finally:
