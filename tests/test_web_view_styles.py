@@ -279,11 +279,12 @@ def test_entity_panel_renders_schema_and_tags():
     )
     assert "FieldForm" in panel and "ComponentPicker" in panel
     assert "TagPicker" not in panel  # D41：标签选择器已换成组件选择器
-    # v0.7.2：列表**只有组件**一列——位置是 core:position 的数据、"能力"不是一个数据概念，
-    # 两个预览列都删掉；声明侧的汇总留在详情面板（措辞也不再叫"能力"）
+    # v0.7.2：列表**只剩名称 + 操作**——位置是 core:position 的数据、"能力"不是数据概念、
+    # 组件也不可能在列表里列全，所以三个预览列全部删掉；组件信息归详情面板
     assert "组件声明的汇总" in panel
-    assert "<th>位置</th>" not in panel and "<th>能力</th>" not in panel
-    assert "componentSummary" in panel  # 摘要与组件键同列显示
+    for gone in ("<th>组件</th>", "<th>位置</th>", "<th>能力</th>"):
+        assert gone not in panel, f"列表不该有这一列：{gone}"
+    assert "componentSummary" in panel  # 组件摘要显示在详情面板（有地方展开）
     assert "contentComponents" in panel  # "能力组件"改名（内核没有"能力"这个数据概念）
     assert "abilityComponents" not in _strip_comments(panel)
     # v0.7.1：详情面板给**组件摘要**（名字 + 短 id + 组件数 + 组件键 chip）

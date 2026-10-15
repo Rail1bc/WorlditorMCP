@@ -83,7 +83,6 @@
           <thead>
             <tr>
               <th>名称</th>
-              <th>组件</th>
               <th class="ops-col">操作</th>
             </tr>
           </thead>
@@ -98,28 +97,6 @@
                 <!-- 名字在 core:info 组件里；entityName() 负责兜底到 id 前 8 位 -->
                 <span class="name">{{ entityName(e) }}</span>
                 <div v-if="entityDesc(e)" class="dim ell">{{ entityDesc(e) }}</div>
-              </td>
-              <td class="comp-cell">
-                <!-- **只有组件**（v0.7.2）：位置与"能力"都不是独立概念——位置就是
-                     `core:position` 组件的数据，能力就是"带了某个组件"。
-                     所以这一列显示**全部**组件键（含 core:），每个键后面跟它自己的
-                     数据摘要（位置给坐标、其余给键数、空组件不给后缀）。 -->
-                <span v-if="!componentKeys(e).length" class="dim">—</span>
-                <span
-                  v-for="k in componentKeys(e)"
-                  :key="k"
-                  class="chip"
-                  :class="{
-                    core: isCoreComponent(k),
-                    bad: isUnknown(e, k),
-                  }"
-                  :title="chipTitle(e, k)"
-                >
-                  {{ k }}
-                  <span v-if="componentSummary(e, k)" class="sum">
-                    · {{ componentSummary(e, k) }}
-                  </span>
-                </span>
               </td>
               <td class="ops-col">
                 <button
@@ -138,7 +115,7 @@
               </td>
             </tr>
             <tr v-if="!filtered.length">
-              <td colspan="3" class="dim">
+              <td colspan="2" class="dim">
                 {{ tileFilter && tileOnly ? "这个地块上没有实体。" : "没有匹配的实体。" }}
               </td>
             </tr>
@@ -172,8 +149,12 @@
               :key="key"
               class="summary-chip"
               :class="{ core: isCoreComponent(key), unknown: isUnknown(current, key) }"
+              :title="chipTitle(current, key)"
             >
               {{ key }}
+              <span v-if="componentSummary(current, key)" class="sum">
+                · {{ componentSummary(current, key) }}
+              </span>
             </span>
             <span v-if="!componentKeys(current).length" class="dim">暂无组件</span>
           </div>
@@ -551,17 +532,6 @@ table.tight th {
 .name {
   font-weight: 600;
 }
-.comp-cell {
-  max-width: 520px;
-}
-/* 组件 chip：空组件（纯标记）只有键名，带数据的跟一个中性摘要 */
-.comp-cell .chip.core {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.comp-cell .sum {
-  color: var(--text-dim);
-}
 .ops-col {
   white-space: nowrap;
   text-align: right;
@@ -619,6 +589,11 @@ tr.on td {
   border-radius: 999px;
   padding: 2px 6px;
   color: var(--text-dim);
+}
+/* 组件 chip：空组件（纯标记）只有键名，带数据的跟一个中性摘要 */
+.summary-chip .sum {
+  color: var(--text-dim);
+  opacity: 0.75;
 }
 .summary-chip.core {
   color: var(--accent);
