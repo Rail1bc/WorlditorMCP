@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.7.2（2026-10-16）
+
+**修复 v0.7.1 的实体编辑面板白屏（D44 能力键改名未同步前端）。**
+
+### 修复
+
+- **点开任一实体就白屏**（v0.7.1 事故）：`EntityManager.vue` 的详情面板直读
+  `capabilities.unknown_components`，而 D44 已把该键拆成 `orphan_components`
+  （声明它的包不在了）+ `fictional_components`（`local:` 且查无声明）——后端不再返回旧键，
+  模板里的 `.length` 抛 `TypeError: can't access property "length", ... is undefined`，
+  Vue 渲染中断，**整个实体编辑 UI 不渲染**。列表单元格那处因为写了 `?.` 只是静默不显示，
+  所以问题只在详情面板暴露。
+- **能力读取收口到 `capsOf()`**：四象限缺键一律归一化成空数组，模板拿到的永远是能安全
+  `.length` / `.join` 的形状——后端增删能力键不会再让界面整块崩掉。
+- **详情面板补「声明已不在」一栏**：`orphan`（玩法包停用 / 卸载，启用即恢复）与
+  `fictional`（虚构组件，本来就没有行为）分开显示；列表徽标也用 `⛔` / `⚠` 区分两者。
+- **新增守卫 `test_entity_panel_capability_keys_match_backend`**：前端代码不得再读旧键
+  （解释性注释不计入）、能力读取必须经归一化函数、四象限键名与后端 `capabilities()` 同源
+  ——前后端各改一半这类漂移，CI 直接点名。
+
 ## v0.7.1（2026-10-16）
 
 **实体模型 v2（D32–D40）全部落地；内核复合写入收束为单事务；实体编辑器按组件来源重构。**
