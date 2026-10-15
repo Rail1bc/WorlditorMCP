@@ -504,8 +504,8 @@
   随包停用清理、**用户数据**（新增 `api.save_item_def`，管理页走它）停用/整体
   卸载时保留，只有真卸载（删包目录，`purge=True`）才一起删。同时补上
   `delete_item_def` 的归属记账清理、管理页 update 的"先校验后改"。
-- **回归**：`tests/test_admin_pages.py::test_disable_keeps_admin_item_defs`（内存 +
-  直连 SQLite 查库双确认）。
+- **回归**：`tests/test_admin_pages.py::test_disable_keeps_admin_entity_templates`
+  （内存 + 直连 SQLite 查库双确认；测试原名 `…_item_defs`，物品移除后改名）。
 
 ### G32 `async def teardown(api)` 从不被 await
 
@@ -689,10 +689,12 @@
 
 ---
 
-## 待实施（实体模型 v2，2026-10-14 立项）
+## 已落地（实体模型 v2，2026-10-14 立项；G41/G44/G45 为存档项）
 
-> 决策依据：`DESIGN.md` **§12** 与 **D32–D39**。本节只记"还没做的"与"已存档的设计"。
+> 决策依据：`DESIGN.md` **§12** 与 **D32–D44**。本节记落地结果与存档设计。
 > 一句话：**实体 = id + 组件；内核只有实体**。
+> ⚠ 本节标题原为"待实施"——G40 / G42 / G46 / G47 / G48 **均已落地**（v0.7.1），
+> 只剩 G41（多格实体，搁置）/ G44（阻挡重建）/ G45（堆叠约定）未做。
 
 ### G40 实体模型 v2：D32–D40 已落地（总条目）
 - **触发**：一次"取消字段、全部用组件"的重构推演，收敛为完整数据模型（九轮，2026-10-14）
@@ -765,8 +767,8 @@
     - **落地时漏数了一个读点（如实记录）**：`_event_payload` 的 `on_entity_move`
       在实体"从世界外移回来"时对 `None` 调 `list()` → `TypeError`。事前分类数出 3 个
       位置读点，实际是 4 个；两侧已加空值守卫，事件负载里 `from` / `to` 可以是 `null`
-  - 📐 **第 2 期（能力面折叠）设计已定，待实施**：**D41–D44 + §12.6**（2026-10-14 拍板）。
-    **施工计划与交接见 `docs/ENTITY_FOLD_PLAN.md`**（做到哪了 / 四块怎么切 / 已踩过的坑）。
+  - ✅ **第 2 期（能力面折叠）已落地**：**D41–D44 + §12.6**（2026-10-14 拍板，
+    v0.7.1 实施完成）。**施工计划与交接见 `docs/ENTITY_FOLD_PLAN.md`**（已完成，留作记录）。
     终态 = 表 **v11** / **4 列**、`to_dict()` **5 键**、能力 = 组件的存在、身份概念删除、
     组件命名空间即写入边界、卸载不删数据（四象限诊断 + 管理员手动清理）。
     **一步做到位**（不设"2a 不改表"的中间态——那不是设计要的形态，且 D13 本就删库重来）
@@ -791,8 +793,9 @@
     **补记（1c）**：名字 / 描述 / 账户绑定（`core:info` / `core:account`）已按原计划补做。
     **补记（1d）**：位置（`core:position`）也已按原计划补做。**至此"取消字段、全部用组件"
     这一诉求在数据面上已经完整**——名字 / 描述 / 账户 / 位置 / 感知**全部**是组件，
-    表上只剩 `id` / `kind` / `tags` / 存储元数据；**只差能力面（`kind` / `tags`）与
-    `core:player`，而那一步卡在 G47 的命名分叉上**
+    表上当时只剩 `id` / `kind` / `tags` / 存储元数据；**当时只差能力面（`kind` / `tags`）
+    与 `core:player`，那一步卡在 G47 的命名分叉上**——**后续已被第 2 期（D41–D44）
+    取代：`kind` / `tags` 两列已删（表 v11 / 4 列），`core:player` 决定不引入（D42）**
 
 ### G41 占位（footprint，多格实体）——搁置，设计存档
 - **触发**："实体存一个位置的同时，地块也存该格的实体 id"，并考虑"一个实体 id 出现在多个地块"
@@ -1003,5 +1006,103 @@
   可能是人手写的数据）；非 `local:` 且查无声明才算 `orphan`。另外真卸载清理规格时
   按 **`spec.play_id`** 而不是键里的 source——共享命名空间 `local:` 的声明者也是某个包，
   按 source 清会漏掉它们（实测：包卸载后规格还在，query 就再也不匹配了）
+
+---
+
+## 玩法包可用性审查（v0.7.3，2026-10-16）
+
+> 触发：三路审查（文档一致性 / 安装卸载生命周期 / 重构遗留）+ 一手实测，问的是
+> "现在能不能让第三方照 PLAY_DEV.md 写包"。结论：**机制够、交付面不够**。
+> 本节记这一轮发现与处置；已修项标注落地位置，未修项保留设计口径。
+
+### G49 卸载不删 `play_data`（文档说删）——已修文档，语义保持"保留"
+- **现象**：`store.py` 全库**没有 `DELETE FROM play_data`**；`uninstall(purge=True)`
+  只清"组件归属记忆"（`_tag_specs`）。但 `uninstall` docstring 与 `PLAY_DEV.md` 都写
+  "删目录含其数据，不可逆"，管理端确认框也这么提示。
+- **影响**：作者按"卸载即清空"设计（例如把存档放 KV），实际同名重装数据**静默复活**；
+  反过来管理员以为删干净了，磁盘（SQLite）里还留着。
+- **处置**：✅ 文档说真话（`PLAY_DEV` §2、`uninstall` docstring）——**KV 与实体组件
+  一律保留**，"卸载只删包目录"。是否要给一个显式的"连数据一起删"开关，等真实需求。
+
+### G50 玩法包目前只能单文件——待做
+- **现象**：`main.py` 被当**顶层模块** exec（`play/__init__.py:_load_module`），包目录
+  不在 `sys.path`、也不是 Python 包 → `import helper` / `from . import helper` 全部
+  `ModuleNotFoundError`（实测；README/PLAY_DEV 已标注）。
+- **影响**：真实玩法包必然想拆多文件；现在只能发成 pip 依赖包，或在 main.py 里手工
+  `sys.path` 注入（未文档化、易踩）。
+- **方案**：加载前把包目录放进 `sys.path`（`import package.module` 即可用），
+  或在 teardown 时按前缀清 `sys.modules`（顺带修 CORE_AUDIT §4 的"sys.modules 残留"）。
+  需定命名冲突语义（两个包同名辅助模块）。
+
+### G51 只读接口是"浅只读"——待做
+- **现象**（实测）：`api.get_component()` 返回**浅拷贝**（`dict(data)`）——改嵌套的
+  dict/list 会**改到内核内存里的实体数据**；`api.get_map()` / `get_location()` /
+  `get_world()` / `list_worlds()` / `list_templates()` 直接返回**内核活对象**（改
+  `loc.name` 真的改名）。而 `get_entity` / `list_entities` / `query_entities` 是深拷贝。
+- **影响**：不落库、不发事件、不盖 `revision`，但运行中的世界快照会漂移；"只读"承诺
+  只对实体接口成立。当前靠约定（文档已标注"当不可变用"）。
+- **方案**：统一深拷贝（`get_map` 这类热点可用 `copy.deepcopy` 或只读视图包装）；
+  `list_actions` 同时补 `viewer_id` / `tier` 透传（玩法包自建 UI 才能按感知过滤菜单）。
+
+### G52 实体模板未按世界激活过滤——待做（文档已纠正）
+- **现象**：`engine.list_templates(scope)` 只有 scope 参数；`PLAY_DEV` §3 的"世界激活"
+  表里曾写"实体模板不出现在管理端模板列表"（未实现）。只有**整包停用/卸载**才消失。
+- **方案**：`list_templates` 加调用者世界 + 激活集合过滤（与 `/views` 同口径），或把
+  文档口径改成"模板不分世界"。
+
+### G53 安装一致性三连洞——✅ 已修（v0.7.3）
+- **现象与修法**：
+  1. **顶层目录名 ≠ `play.yaml` 的 name**：安装返回错的 play_id、包以 yaml 名加载，
+     `uninstall` 按目录名定位 → **两个名字都卸不掉**，目录永久残留（实测）→
+     现在解压后校验 `spec.play_id == 目录名`，不符即回滚报错。
+  2. **目录缺 `worlditor_play_` 前缀**：装得上、`list_plays` 看不到（discover 只认前缀）、
+     重启后静默消失 → 现在安装即拒绝。
+  3. **与内置包同 id**：顶掉内置、重启后两个都不加载、社区目录删不掉 → 现在安装前
+     检查 `_find_candidate`；`load_all` 同名冲突改为**先扫到的胜出（内置优先）**并在
+     `list_plays().note` 里说"同名目录被忽略"；`uninstall` 只删**社区那份**，
+     已加载实例不属于被删目录时不动它。
+- **落地**：`play/__init__.py`（`install_zip` / `load_all` / `list_plays` / `uninstall` /
+  `_find_candidates`），回归测试 `tests/test_play_manage.py` 6 条。
+- ⚠ **`install_zip` 仍无测试覆盖之外的保护**：管理端上传前用 `request.body()` 读完整
+  body 才判体积（admin.py），没有中间件级上限；条目数/解压比也没限。
+
+### G54 MCP 工具 handler 异常静默——✅ 已修（v0.7.3）
+- **现象**（实测）：工具 handler 抛非 `WorldError` 异常 → 客户端只拿
+  "工具执行出错，请稍后再试"，**服务端零日志**（`mcp/__init__.py` 连 logger 都没有）。
+  其余 7 条玩法包回调路径（交互 / 事件 / on_tick / 服务 / 管理页 / override / ui_hook）
+  全都 `logger.exception`——只有工具这条静默，而这恰是作者最常用的入口。
+- **修法**：`_dynamic` 的兜底 except 补 `logger.exception`；测试
+  `test_play_runtime.py::test_dynamic_tool_error_is_logged`（断言有 ERROR 记录 + 带栈）。
+
+### G55 加载失败只回滚注册表、不回滚世界写入——待做（设计口径见下）
+- **现象**（实测）：世界包 `setup` 里 `create_map` + 2 个地块后抛错 → 地图与地块**留在库里**；
+  重启重跑直接卡在"地图已存在"。更糟的是**按官方幂等写法（"地图存在即跳过"）的包
+  会假装加载成功**，留下一张半成品世界。
+- **同族**：`load_one` 只捕 `Exception` → 包顶层或 setup 里 `sys.exit(3)` 会穿透让**整个
+  服务启动失败**；`setup` 无超时（`time.sleep(30)` 让启动挂住）。
+- **方案**：给内容包一个**单事务导入**入口（复用 v0.7.1 已有的 `store.save_map_bundle`，
+  一次性提交地图+地块+实体+归属），或提供 `api.import_bundle(...)`；`setup` 加超时 +
+  捕 `BaseException` 里的 `SystemExit`（隔离成"该包加载失败"而不是"服务起不来"）。
+
+### G56 MCP 工具清单变化不通知客户端——待做
+- **现象**：SDK 报 `tools.listChanged: false`，且 `FastMCP.add_tool` 不发
+  `notifications/tools/list_changed`——运行期装/启用玩法包后，**已连接的客户端看不到
+  新工具**（`tools/list` 服务端已更新），要重连。`engine._sync_tool_add` 只刷新
+  instructions（那份也只在新的 `initialize` 里下发）。
+- **方案**：在 `_sync_tool_add` / `_sync_tool_remove` 后直接向 lowlevel server 发一次
+  `notifications/tools/list_changed`（不违反 M2：注册的仍是玩法包的工具，内核只发信号）。
+
+### G17 私有地图可见性：**已修**（本节更正 2026-09-24 的复核）
+- `/scene` 现在走 `engine.can_observe_entity()`（`mcp/http.py:289`，不可观察 → 404），
+  动作菜单带 `viewer_id` / `tier`；SSE 按订阅者过滤（`engine._push_to_subscribers`
+  逐个 `map_visible_to`）；`/state` 仍只挡私有地图、**不挡隐身实体**（G12 尾巴，见 G12）。
+- 因此 G17 正文里"四处缺口全部仍成立"与"`map_visible_to` 全仓唯一调用点仍是 `_state`"
+  **已过期**（现为 3 个调用点：`/state`、SSE 推送、`can_observe_entity`）。
+
+### G35 交互动作静默覆盖：**已修**（首条更正）
+- `engine.register_interaction` 现在同名**报错拒绝**（`engine.py:1736`，
+  "交互动作冲突：x（已由 pkg 注册）"，实测）。G35 首条"无冲突检查 → 后者静默顶掉前者"
+  已过期；该条其余小项（`demo_world` 续跑分支、`_ui_components` 死注册表、
+  注释里的 kind 口径）中，注释口径已在本轮统一，其余见 G35 原文与 G50/G51。
 
 

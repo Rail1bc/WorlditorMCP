@@ -4,7 +4,7 @@
 Claude / Cursor / 自建 agent…）都可接入；自带 WebUI——人类玩家登录游玩、
 拥有者经独立管理端口可视化管理（双端口，D16）。
 
-内核纯数据：世界/组织树/地块/连接/实体/物品定义/玩法数据，行为与**世界内容**
+内核纯数据：世界/组织树/地块/连接/实体（= 组件字典）/玩法数据，行为与**世界内容**
 都由**玩法包**承载（社区包放 `<数据目录>/plays/`；内置只剩 1 个世界内容包，
 行为玩法包的参考实现见 `tests/fixtures/plays/`——`docs/PLAY_DEV.md` §12）。
 
@@ -112,14 +112,18 @@ CLI 参数（`worlditor serve …`）优先于同名环境变量：
 一个最小的玩法包（`<数据目录>/plays/worlditor_play_hello/`）：
 
 ```
-play.yaml          # name/display_name/version/requires
-main.py            # setup(api, context)：注册 kind/交互/事件/工具/视图
+play.yaml          # name/display_name/version/requires（name 必须 worlditor_play_ 前缀）
+main.py            # setup(api, context)：注册组件声明/交互/事件/工具/视图
 ```
 
-玩法包可：注册实体 kind（含字段声明）、交互、事件订阅、MCP 工具
+> ⚠️ **包目前只能是单文件**（`main.py` 被当顶层模块加载，包目录不在 `sys.path`
+> 上——同目录的辅助 `.py` 用 `import` 会 `ModuleNotFoundError`；打包多文件见
+> `GAPS.md` G50）。zip 安装（管理端）还要求：顶层目录名 **== `play.yaml` 的 name**。
+
+玩法包可：声明组件（含字段 schema）、注册交互、事件订阅、MCP 工具
 （参数支持 array，G11）、WebUI 视图、覆盖/禁用行为原语（override/
 disable/过滤器链，D11/G14）、跨包服务（M3）、spawn/编辑实体与地图（D14）、
-读写实体字段与按世界隔离的 KV；**世界包**还可写 `async def setup(...)` 导入
+读写实体组件与按世界隔离的 KV；**世界包**还可写 `async def setup(...)` 导入
 地图、地块、连接与实体（参考内置 `worlditor_play_demo_world`，幂等：地图
 已存在则跳过，不覆盖用户改动）。
 
@@ -129,14 +133,14 @@ disable/过滤器链，D11/G14）、跨包服务（M3）、spawn/编辑实体与
 
 - 内置包只有**世界内容包** `worlditor_play_demo_world`（示例主世界：41 地块 +
   商贩·阿福/告示牌/木门；只导入内容，不注册行为）；行为玩法包（工具/视图/
-  服务/kind）不再随仓库分发，参考实现见 `tests/fixtures/plays/`
+  服务/组件声明）不再随仓库分发，参考实现见 `tests/fixtures/plays/`
   （`docs/PLAY_DEV.md` §12）
 - 身份只有一种 `player`：人类玩家与 agent 不作区分（脚本/agent 可用登录页
   「agent / 脚本接入」无密码注册）
 - `docs/PLAY_DEV.md`：玩法包开发指南（API 全量 + 约定 + 示例）
 - `docs/HTTP_API.md`：HTTP 端点参考（玩家端口 + 管理端口：路径 / 档位 / 请求体 / 示例）
 - `docs/NGINX_DEPLOY.md`：域名 + HTTPS 反向代理部署（含双端口暴露边界）
-- `docs/CORE_AUDIT.md`：内核边界审查（零玩法包视角）+ 决策记录 + 待办
+- `docs/CORE_AUDIT.md`：内核边界审查（零玩法包视角）+ 决策记录（其 §4 待办多数已收编进 `GAPS.md` G26/G49–G52）
 - `DESIGN.md`：设计/协议/路线（唯一权威）
 - `GAPS.md`：平台缺口清单（历史与观察项）
 

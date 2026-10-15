@@ -60,7 +60,7 @@
 | 世界 / 组织树 | worlds（玩法包激活集合）+ world_folders（多层纯管理，D15，见 §3.0） |
 | 地块 / 连接 / 模板 | 多地图；4 方向槽位 + 平行路径 + 加权目标 + **分时段文本（v3 模型原样保留）**；地图归属世界与组织节点；**可见性 visible（public/private，G1）** |
 | 文本（TextSchedule） | 地图/地块 `description` 与出口路径 `label` **只有一种格式**：`{"periods": [{"start": "HH:MM", "end": "HH:MM", "items": [{"text": "…", "weight": 1}]}]}`——`None` = 无文案；**纯字符串与非结构一律报错**（v0.5.2 统一，见 GAPS G28：两种写法并存必然引出静默丢字段）。解析：`parse_text_schedule`（**不再静默丢弃非法条目**） |
-| 实体 | 字段化统一模型（见 §3.1），位置持久化（`map_id` / `row` / `col` **仍是表列**，§12.4）；**名字 / 描述 / 账户绑定在组件里**（`core:info` / `core:account`，§12.4）；`revision` / `changed_tick` 变更戳（D28） |
+| 实体 | 组件化统一模型（见 §3.1 / §12）：`entities` 表 **4 列**（`id` / `components_json` / `revision` / `changed_tick`，表结构 **v11**）；**位置 / 名字 / 描述 / 账户绑定 / 能力全在组件里**（`core:position` / `core:info` / `core:account`，能力 = 带没带那个组件，D41）；`revision` / `changed_tick` 变更戳（D28） |
 | 变更检测 | `revision`（全局写序号，world_meta 持久化、重启续号）+ 实体 `changed_tick`（tick 窗口）；增量游标见 D26/D28 |
 | 玩法数据 KV | play_data（namespace = 世界 + 玩法包 双层隔离） |
 | 世界日志 | world_log（5000 上限） |
@@ -72,8 +72,8 @@
 
 | 原语 | 语义 | 默认实现 |
 |---|---|---|
-| `place_entity` / `remove_entity` | 实体生命周期（玩法包可 spawn/despawn，D14；身份化实体不可 remove） | 内核 |
-| `move` | 路径移动（身份化实体） | 内核：读 connections → 按权重抽目标（死引用剔除） |
+| `place_entity` / `remove_entity` | 实体生命周期（玩法包可 spawn/despawn，D14；**绑定了账户的实体不可 remove**，D42） | 内核 |
+| `move` | 路径移动（有位置的实体） | 内核：读 connections → 按权重抽目标（死引用剔除） |
 | `move_entity(map,row,col)` | 直接位移（行为驱动，传送语义） | 内核 |
 | `set_data` / `get_data` / `remove_data` | 字段读写删——**字段 = 组件内的一个键**（v2：`component` 必填，容器不再是扁平 attrs） | 内核 |
 | `add_component` / `set_component` / `remove_component` | 组件级整块增 / 写 / 删（v2 / D32；走分派表，`core:` 除外）。`get_component` / `list_components` 只读、**不进分派表** | 内核 |
@@ -92,7 +92,7 @@ place/remove 可调用但不可覆盖（治理域，D14）。
 | 基础原语（含覆盖/禁用分派） | 行为层地基与能力治理 |
 | 事件总线基础设施（订阅/分发/异常隔离/日志） | 机制留内核，事件语义与自定义事件开放给玩法包 |
 | MCP 传输层 + 连接认证 + 身份注入 | 通道留内核，工具内容玩法包注册 |
-| 编辑原语正确性（实例锁 / 级联清理 / 身份化实体保护） | 程序安全：世界结构不会因玩法包代码漂移而失控；玩法包可调编辑原语（D14），内容治理与数据备份责任归用户/玩法包 |
+| 编辑原语正确性（实例锁 / 级联清理 / 账户绑定实体保护） | 程序安全：世界结构不会因玩法包代码漂移而失控；玩法包可调编辑原语（D14），内容治理与数据备份责任归用户/玩法包 |
 | UI 渲染协议（UiBlock schema） | 协议留内核，视图内容玩法包提供 |
 | 玩法包管理（list/enable/disable/uninstall） | 管理"扩展机制"本身，天然属于内核 admin 域；卸载路径安全（play_id 白名单 + 目录前缀校验，§4.3） |
 
@@ -196,9 +196,9 @@ emit / kv_set…）为同一任务重入，安全且多段「读-判-写」天�
   一个序号空间**（"同级排序"是同一容器内的全序，见 §4.3.2）
 - **play_data**：namespace 加世界前缀——`(world_id, play_id, key)` 双层隔离，
   同玩法包在不同世界各自独立状态
-- **身份全局**：账户/token 跨世界（跳转前提）；**身份化实体数据跟人走**
-  （attrs/字段全局，跳转保留金币/等级/背包）
-- **非身份化实体**属于出生世界（经 map 归属），不可跨世界
+- **身份全局**：账户/token 跨世界（跳转前提）；**绑定了账户的实体数据跟人走**
+  （组件全局，跳转保留金币/等级/背包——判据见 D42：带没带 `core:account`）
+- **未绑定账户的实体**属于出生世界（经 map 归属），不可跨世界
 
 **玩法包绑定（世界激活集合）**：
 - 玩法包**全局加载一次**（注册表机制不变，避免多实例），世界声明激活集合
@@ -211,7 +211,7 @@ emit / kv_set…）为同一任务重入，安全且多段「读-判-写」天�
   | 交互动作 | `engine.interact` / 可用动作菜单按目标世界 | 动作不可用、菜单里不列 |
   | 事件订阅 | `_binding_active`（on_tick 例外） | 事件不触发 |
   | 原语覆盖/过滤器 | `_dispatch_locked` 按**行为主体**世界 | 回落内核默认实现 |
-  | kind 声明 | `block_move` / 交互按实体世界 | 不挡路、动作不出现 |
+  | 组件声明 | 交互动作按实体所在世界生效（D21；`block_move` 已随 D34 移除） | 声明的动作不出现、字段不贡献 |
   | 部件 UI（ui_hook） | 展开时按**查看者**世界 | 注入方不在该世界 → 不注入 |
 - **未归属世界的地图**按**默认世界**（`default`）的激活集合算——"没有归属"
   不等于"没有规则"；管理端建图即归属当前世界，并提供孤儿地图一键归属
@@ -222,7 +222,7 @@ emit / kv_set…）为同一任务重入，安全且多段「读-判-写」天�
 
 **跳转（MCP，⚠ 未实现——见 `GAPS.md` G15）**：
 - `world_list`：世界列表（名称/描述/激活玩法包）
-- `world_travel`：跳转——身份化实体传送到目标世界出生点或指定地图
+- `world_travel`：跳转——绑定了账户的实体传送到目标世界出生点或指定地图
   （传送语义 = move_entity 跨世界版）；跳转后场景/上下文由目标世界玩法包决定
 
 **组织树编辑（管理端口）**：建文件夹 / 重命名 / 移动（地图与文件夹均可拖入
@@ -315,7 +315,7 @@ fields       = **按组件分组**：{组件键: [该组件声明的字段 + 别
 
 ### 4.2 运行时（读写 + 身份）
 
-- 只读：实体/场景/地图/动作列表/背包（玩法包自己的数据）/字段/KV/`list_kinds(category)`；
+- 只读：实体/场景/地图/动作列表/自有数据（KV）/组件与字段/`list_kinds(category)`；
   **实体查询（D26）**：`query_entities(tags=…, exclude_tags=…, map_id/world_id/row/col=…,
   viewer_id=…, changed_since_tick/changed_since_revision=…, where=…, limit=…)`
   ——"所有带中毒标签的实体"不再需要全量扫 + 自己筛；标签匹配按 D21 激活语义
@@ -396,7 +396,7 @@ fields       = **按组件分组**：{组件键: [该组件声明的字段 + 别
 | 组织树 | 递归任意层级渲染 + 折叠、**拖拽移动**（文件夹↔文件夹、地图↔文件夹）、**同级排序**（拖到行之间）、面包屑聚焦、内联重命名、按名字/地图 id 搜索 |
 | 排序 | 文件夹与地图**共用一个序号空间**：每个容器内 `sort` 构成全序；新建/移入默认排到末尾；`POST /admin/worlds/{id}/reorder` 一次性绝对化整个容器的序号（拖拽落位走它） |
 | 地图搬家 | `POST /admin/maps/{id}/move`：世界 / 组织节点 / 序号三者可任意组合；**跨世界自动落到世界根**（旧节点不属于新世界）；`world_id=null` = 解除归属 |
-| 地图生命周期 | 列表内改名、**复制另存**（`POST /admin/maps/{id}/copy`：地块/连接/描述全量，同图目标重写为副本自己、跨图目标原样保留、身份化实体永不复制、可选带布景实体、归属跟随源地图并排到该节点末尾）、删除（身份化实体在场被拒，同 G2） |
+| 地图生命周期 | 列表内改名、**复制另存**（`POST /admin/maps/{id}/copy`：地块/连接/描述全量，同图目标重写为副本自己、跨图目标原样保留、绑定了账户的实体永不复制、可选带布景实体、归属跟随源地图并排到该节点末尾）、删除（绑定了账户的实体在场被拒，同 G2） |
 | 删除文件夹 | 引擎拒绝删非空文件夹；管理端先提示"内容上移到上级节点"再执行（v0.3.0 的文案承诺"回到世界根"与引擎行为不符，属 bug，v0.4.0 修正为真实上浮） |
 | 体检 | `GET /admin/lint[?map_id=]`：**死连接**（主目标不存在，运行时是**静默剔除**→ 必须提前告知）、意外目标失效、孤立地块（无进无出）、无出口/无入口、**出生点落空**、**实体悬空**、未归属世界、空地图；错误/提示两级 |
 | 跨世界总览 | `#/admin/maps`：全部地图表格（世界 / 组织路径 / 地块 / 实体 / 可见性 / 体检/ 操作）、世界与孤儿过滤、搜索、**多选批量归属与转移** |
@@ -1046,8 +1046,8 @@ CREATE TABLE entities (
 > `WorldEngine.declare_component()`（唯一声明入口，旧名 `register_entity_kind` /
 > `register_entity_tag` / `register_entity_type` 等价）、`_resolve_component_key()`（裸名解析）、
 > `capabilities()`（`components` / `active_components` / `inactive_components` /
-> `unknown_components` / `interactions` / **按组件分组的 `fields`**）、`list_kinds()`
-> （一张组件清单）、`effective_fields()` / `fields_by_component()`。
+> `orphan_components` / `fictional_components` / `interactions` / **按组件分组的 `fields`**）、
+> `list_kinds()`（一张组件清单）、`fields_by_component()`。
 
 - **实体带某组件 = 具备该能力**；组件声明（原 `TagSpec`）：名字 + 字段 schema + 归属 + 能力声明
 - **能力 = 组件的存在**：`kind` / `tags` 两列删除（表 **v11**、4 列），`to_dict()` **5 键**
