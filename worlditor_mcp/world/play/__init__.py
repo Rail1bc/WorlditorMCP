@@ -28,9 +28,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ... import __version__ as _WORLDITOR_VERSION
 from ..engine import WorldEngine, WorldError
 from .api import WorlditorPlayAPI
-from .spec import PlaySpec, load_play_spec, version_ok
+from .spec import PLAY_PREFIX, PlaySpec, load_play_spec, version_ok
 
 logger = logging.getLogger("worlditor")
 
@@ -78,8 +79,15 @@ class PlayLoader:
         *,
         plays_dir: Path,
         builtin_dir: Path | None = None,
-        worlditor_version: str = "0.3.0",
+        worlditor_version: str = _WORLDITOR_VERSION,
     ) -> None:
+        """构造加载器。
+
+        Args:
+            worlditor_version: 校验 ``requires.worlditor`` 时用的内核版本；默认
+                = 本包版本（旧默认写死 ``"0.3.0"``，嵌入场景不传参时会把
+                ``>=0.7.0`` 的包误判成不兼容）。
+        """
         self.engine = engine
         self.plays_dir = Path(plays_dir)
         self.builtin_dir = Path(builtin_dir) if builtin_dir else None
@@ -126,6 +134,9 @@ class PlayLoader:
         self._load_errors = {}
         specs: dict[str, tuple[PlaySpec, Path, bool]] = {}
         conflicts: dict[str, list[Path]] = {}
+        # 同名目录冲突（手工复制、旧版安装遗留）：**先扫到的胜出**——discover()
+        # 先内置后社区，所以等价于"内置优先"。落败目录只登记原因，不再"两个都不
+        # 加载"：那会让内置内容包在重启后整体消失，而社区目录又删不掉（旧行为）。
         for path, builtin in self.discover():
             spec = load_play_spec(path)
             if spec is None:
@@ -137,11 +148,12 @@ class PlayLoader:
                 continue
             specs[spec.play_id] = (spec, path, builtin)
         for play_id, paths in conflicts.items():
-            self._load_errors[play_id] = "play_id 冲突：" + "、".join(
-                str(p) for p in paths
+            winner, losers = paths[0], paths[1:]
+            self._load_errors[play_id] = (
+                f"同名目录被忽略（已加载 {winner}）："
+                + "、".join(str(p) for p in losers)
             )
-            specs.pop(play_id, None)
-            logger.error("[worlditor] 拒绝重复 play_id %s：%s", play_id, paths)
+            logger.error("[worlditor] play_id %s 有重复目录，忽略：%s", play_id, losers)
         loaded: list[PlayInfo] = []
         for play_id in self._topo_order(specs):
             spec, path, builtin = specs[play_id]
@@ -220,6 +232,22 @@ class PlayLoader:
                 self.worlditor_version,
             )
             return None
+        # 同 play_id 已加载（install_zip / 直调 load_one 这条不经过 load_all 去重的
+        # 路径）：**拒绝覆盖**——覆盖会换掉 `plays[play_id]` 与它绑定的 api，旧包的
+        # 注册残留却还在，重启后 load_all 又按"同名目录冲突"处理，结果两个都不在。
+        # 这里只记原因、且**不清注册**（清理会误伤已在用的那个包）。
+        existing = self.plays.get(spec.play_id)
+        if existing is not None:
+            self._load_errors[spec.play_id] = (
+                f"play_id 已被占用（{existing.path}），本目录未加载"
+            )
+            logger.error(
+                "[worlditor] 拒绝重复加载 %s：已加载自 %s，本次路径 %s",
+                spec.play_id,
+                existing.path,
+                path,
+            )
+            return None
         main_py = path / "main.py"
         if not main_py.is_file():
             self._load_errors[spec.play_id] = "缺少 main.py"
@@ -248,17 +276,26 @@ class PlayLoader:
             # 玩法包自身的 WorldError（如原语互斥）：原因透出到管理页可见
             logger.exception("[worlditor] 玩法包加载失败：%s", path.name)
             self._load_errors[spec.play_id] = str(e)
-            # 回滚半注册（kind/interaction/event/ui/字段/原语分派按 play_id 清理）
-            self.engine.clear_play_registrations(spec.play_id)
-            self.engine.detach_play_api(spec.play_id)
+            self._rollback_failed_load(spec.play_id)
             return None
         except Exception:  # noqa: BLE001
             logger.exception("[worlditor] 玩法包加载失败：%s", path.name)
             self._load_errors[spec.play_id] = "加载异常（见日志）"
-            # 回滚半注册（kind/interaction/event/ui/字段/原语分派按 play_id 清理）
-            self.engine.clear_play_registrations(spec.play_id)
-            self.engine.detach_play_api(spec.play_id)
+            self._rollback_failed_load(spec.play_id)
             return None
+
+    def _rollback_failed_load(self, play_id: str) -> None:
+        """加载失败后的回滚：清注册 + 解绑 api。
+
+        **首次加载失败要连组件声明一起清**（``purge=True``）——这个包从来没成功
+        过，它的声明留在内存里会让 ``list_kinds()`` / ``capabilities()`` 继续报
+        "有主但未激活"这种不存在的状态（曾由注释承诺回滚、实际没回滚）。
+        曾加载过（disable → enable 又失败）则保留声明：``_tag_specs`` 的留存正是
+        "停用不清规格"的既定语义，清了会把"停用"误报成"未声明"。
+        """
+        purge = play_id not in self._disabled
+        self.engine.clear_play_registrations(play_id, purge=purge)
+        self.engine.detach_play_api(play_id)
 
     def _load_module(self, play_id: str, main_py: Path) -> Any:
         """importlib 加载玩法包 main.py（模块名 = play id）。"""
@@ -273,8 +310,13 @@ class PlayLoader:
     # ---------- 管理（§4.3：list / enable / disable / uninstall） ----------
 
     def list_plays(self) -> list[dict]:
-        """全部候选玩法包状态（loaded / disabled / load_failed + 错误详情）。"""
+        """全部候选玩法包状态（loaded / disabled / load_failed + 错误详情）。
+
+        同名目录只出一行（胜出者），提示放 ``note``——否则管理页会出现两行
+        同一个 play_id，且落败那行还会被算成"已加载"。
+        """
         out: list[dict] = []
+        seen: set[str] = set()
         for path, builtin in self.discover():
             spec = load_play_spec(path)
             if spec is None:
@@ -291,9 +333,14 @@ class PlayLoader:
                         "error": self._load_errors.get(
                             path.name, "play.yaml 缺失或非法"
                         ),
+                        "note": "",
                     }
                 )
                 continue
+            if spec.play_id in seen:
+                continue  # 同名目录：胜出那一行已带 note
+            seen.add(spec.play_id)
+            note = ""
             if spec.play_id in self.plays:
                 status = "loaded"
                 error = ""
@@ -303,6 +350,9 @@ class PlayLoader:
             else:
                 status = "load_failed"
                 error = self._load_errors.get(spec.play_id, "未加载")
+            if status != "load_failed":
+                # 只有"同名目录被忽略"这类非失败信息会落到这里（失败原因走 error）
+                note = self._load_errors.get(spec.play_id, "")
             out.append(
                 {
                     "play_id": spec.play_id,
@@ -314,6 +364,7 @@ class PlayLoader:
                     "builtin": builtin,
                     "status": status,
                     "error": error,
+                    "note": note,
                 }
             )
         return sorted(out, key=lambda p: (p["builtin"], p["play_id"]))
@@ -371,16 +422,26 @@ class PlayLoader:
         await self._notify_plays_changed("disable")
 
     async def uninstall(self, play_id: str) -> None:
-        """卸载社区玩法包（删除目录含其数据，不可逆；G7 路径安全）。"""
+        """卸载社区玩法包（删包目录；G7 路径安全）。
+
+        **先删目录、再清状态**：反过来（旧行为）一旦 ``rmtree`` 失败，包已经被
+        teardown、disabled 标记也落了库，管理端却报错——下次启动它又回来了。
+
+        **数据不在删除范围内**：``play_data`` KV 与实体上的组件一律保留，
+        "卸载即删数据"是过去的错误说法（清理语义见 GAPS G49）。
+        """
         if not _PLAY_ID_RE.match(play_id):
             raise WorldError("play_id 非法（仅允许字母/数字/下划线/连字符）")
         async with self.engine._lock:  # noqa: SLF001
-            target = self._find_candidate(play_id)
-            if target is None:
+            # 同名目录可能有多个：**删社区那份**，内置那份留着。`_find_candidate`
+            # 先扫到内置 → 旧行为会报"内置不可卸载"，社区残留目录永远删不掉
+            candidates = self._find_candidates(play_id)
+            community = [c for c in candidates if not c[1]]
+            if not community:
+                if candidates:
+                    raise WorldError("内置玩法包仅可停用，不可卸载")
                 raise WorldError(f"玩法包不存在：{play_id}")
-            path, builtin = target
-            if builtin:
-                raise WorldError("内置玩法包仅可停用，不可卸载")
+            path, _builtin = community[0]
             # 路径安全：仅限 plays_dir 下直接子目录、目录名 == play_id
             try:
                 resolved = path.resolve()
@@ -398,15 +459,20 @@ class PlayLoader:
                 raise WorldError(
                     f"仍有玩法包依赖它：{'、'.join(sorted(dependents))}，请先停用依赖者"
                 )
-            info = self.plays.pop(play_id, None)
-            if info is not None:
-                await self._teardown_one(info, purge=True)  # 真卸载：含用户数据
-            self._disabled.discard(play_id)
-            await self._save_disabled_state()
             try:
                 shutil.rmtree(resolved)
             except OSError as e:
                 raise WorldError(f"删除玩法包目录失败：{e}") from e
+            info = self.plays.get(play_id)
+            # 只有"已加载的这个实例就来自刚删掉的目录"才卸载它——同名残留 + 内置
+            # 同时存在时，已加载的是内置那份，删掉社区残留不该把内置也摘下来
+            if info is not None and info.path.resolve() == resolved:
+                self.plays.pop(play_id, None)
+                await self._teardown_one(info, purge=True)
+            # 还有别的社区目录同名 → 保留禁用标记（未删干净就别清状态）
+            if not [c for c in self._find_candidates(play_id) if not c[1]]:
+                self._disabled.discard(play_id)
+            await self._save_disabled_state()
             logger.info("[worlditor] 玩法包已卸载：%s", play_id)
         await self._notify_plays_changed("uninstall")
 
@@ -414,7 +480,9 @@ class PlayLoader:
         """安装社区玩法包（zip 字节流；安全校验 → 解压到 plays_dir → 加载）。
 
         包结构要求：zip 内**恰好一个顶层目录** ``<play_id>/``，其中含
-        ``play.yaml`` 与 ``main.py``（目录名即 play_id，须匹配命名规则）。
+        ``play.yaml`` 与 ``main.py``；顶层目录名必须 **== play.yaml 的 name**、
+        且以 ``worlditor_play_`` 开头（安装与卸载都按目录名定位，不一致会导致
+        "装得上却卸不掉"）。
 
         Args:
             data: zip 文件字节。
@@ -424,8 +492,9 @@ class PlayLoader:
             安装并加载成功的 play_id。
 
         Raises:
-            WorldError: 体积超限 / zip 非法 / 结构不符 / play_id 非法 /
-                目录已存在 / 加载失败（失败时自动回滚已解压目录）。
+            WorldError: 体积超限 / zip 非法 / 结构不符 / play_id 非法或缺前缀 /
+                目录名与 play.yaml name 不一致 / 目录已存在 / play_id 被占用 /
+                加载失败（失败时自动回滚已解压目录）。
         """
         if len(data) > _MAX_PLAY_ZIP_BYTES:
             raise WorldError(
@@ -459,9 +528,19 @@ class PlayLoader:
             raise WorldError(
                 f"play_id 非法：{play_id}（仅允许字母/数字/下划线/连字符）"
             )
+        # 前缀是**加载的硬条件**（discover 只认 worlditor_play_*）——少了它包能解压
+        # 成功却永远不出现在清单里，重启后静默消失，目录还删不掉
+        if not play_id.startswith(PLAY_PREFIX):
+            raise WorldError(f"play_id 必须以 {PLAY_PREFIX} 开头：{play_id}")
         target = self.plays_dir / play_id
         if target.exists():
             raise WorldError(f"玩法包目录已存在：{play_id}（如需更新请先卸载）")
+        # 同 play_id 已在别处（内置目录 / 名字不同的目录）：装下去会顶掉那个包，
+        # 而卸载按 play_id 找的是先扫到的那个 → 新装的目录再也删不掉
+        existing = self._find_candidate(play_id)
+        if existing is not None:
+            where = "内置包" if existing[1] else "另一个目录里的同名包"
+            raise WorldError(f"play_id 已被{where}占用：{play_id}（{existing[0]}）")
         self.plays_dir.mkdir(parents=True, exist_ok=True)
         root = self.plays_dir.resolve()
         try:
@@ -484,6 +563,20 @@ class PlayLoader:
         if not (target / "play.yaml").is_file() or not (target / "main.py").is_file():
             shutil.rmtree(target, ignore_errors=True)
             raise WorldError("包内缺少 play.yaml 或 main.py")
+        # 目录名必须 == play.yaml 的 name：安装/卸载都按**目录名**定位（uninstall 要求
+        # 目录名 == play_id），不一致时包能装上、却两个名字都卸不掉（实测）
+        spec = load_play_spec(target)
+        if spec is None:
+            shutil.rmtree(target, ignore_errors=True)
+            raise WorldError(
+                "包内 play.yaml 非法（name 必须为 worlditor_play_* 且 version 非空）"
+            )
+        if spec.play_id != play_id:
+            shutil.rmtree(target, ignore_errors=True)
+            raise WorldError(
+                f"包结构错误：顶层目录名 {play_id} 与 play.yaml 的 name "
+                f"{spec.play_id} 不一致（两者必须相同）"
+            )
         info = await self.load_one(target, None)
         if info is None:
             reason = self._load_errors.pop(play_id, "加载失败")
@@ -501,6 +594,15 @@ class PlayLoader:
             if spec is not None and spec.play_id == play_id:
                 return path, builtin
         return None
+
+    def _find_candidates(self, play_id: str) -> list[tuple[Path, bool]]:
+        """全部同 id 候选目录（同名目录可能有多个：内置包 + 社区残留）。"""
+        out: list[tuple[Path, bool]] = []
+        for path, builtin in self.discover():
+            spec = load_play_spec(path)
+            if spec is not None and spec.play_id == play_id:
+                out.append((path, builtin))
+        return out
 
     def _find_candidate_ids(self) -> set[str]:
         ids: set[str] = set()

@@ -83,6 +83,7 @@
         <p v-if="current.error" class="error-text">
           加载失败：{{ current.error }}
         </p>
+        <p v-if="current.note" class="wt-note">{{ current.note }}</p>
         <p v-if="current.requires && current.requires.length" class="deps">
           依赖：
           <code v-for="r in current.requires" :key="r" class="chip">{{ r }}</code>

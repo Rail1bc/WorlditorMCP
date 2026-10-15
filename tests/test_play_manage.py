@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,26 @@ from worlditor_mcp.world.store import WorldStore
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def _make_zip(top: str, *, name: str | None = None, setup: str | None = None) -> bytes:
+    """构造一个 zip 玩法包（顶层目录 top；play.yaml 的 name 默认同 top）。"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(
+            f"{top}/play.yaml",
+            f"name: {name or top}\n"
+            f"display_name: 测试包\n"
+            f"version: 0.1.0\n"
+            f"requires:\n"
+            f'  worlditor: ">=0.3.0"\n'
+            f"  plays: []\n",
+        )
+        z.writestr(
+            f"{top}/main.py",
+            setup or "def setup(api, context):\n    pass\n",
+        )
+    return buf.getvalue()
 
 
 def _write_play(
@@ -191,6 +213,177 @@ def test_list_plays_states(tmp_path):
         assert status["worlditor_play_broken_x"]["status"] == "load_failed"
         assert status["worlditor_play_broken_x"]["error"]
         assert status["worlditor_play_demo"]["builtin"] is False
+        await engine.terminate()
+
+    _run(fn())
+
+
+# ---------- 安装一致性（v0.7.3：目录名与 play.yaml name 必须一致） ----------
+
+
+def test_install_zip_rejects_dir_name_mismatch(tmp_path):
+    """顶层目录名 ≠ play.yaml 的 name：拒绝安装且不留目录。
+
+    修复前：包能装上（返回的 play_id 还是错的），实际以 yaml 的 name 加载；
+    `uninstall` 按目录名定位 → **两个名字都卸不掉**，目录永久残留。
+    """
+
+    async def fn():
+        engine, loader = await _make(tmp_path)
+        with pytest.raises(WorldError, match="不一致"):
+            await loader.install_zip(
+                _make_zip("worlditor_play_dirmismatch", name="worlditor_play_real"),
+                filename="x.zip",
+            )
+        assert not (tmp_path / "plays" / "worlditor_play_dirmismatch").exists()
+        assert loader.plays == {}
+        await engine.terminate()
+
+    _run(fn())
+
+
+def test_install_zip_rejects_missing_prefix(tmp_path):
+    """顶层目录缺 worlditor_play_ 前缀：拒绝。
+
+    修复前：能装上、`list_plays` 里看不到（discover 只认前缀）、重启后静默消失，
+    目录成为 API 删不掉的孤儿。
+    """
+
+    async def fn():
+        engine, loader = await _make(tmp_path)
+        with pytest.raises(WorldError, match="worlditor_play_"):
+            await loader.install_zip(_make_zip("notprefixed"), filename="x.zip")
+        assert not (tmp_path / "plays" / "notprefixed").exists()
+        await engine.terminate()
+
+    _run(fn())
+
+
+def test_install_zip_rejects_taken_play_id(tmp_path):
+    """play_id 已被内置包占用：拒绝安装（否则顶掉内置、重启后两个都不在）。"""
+
+    async def fn():
+        (tmp_path / "builtin").mkdir()
+        _write_play(
+            tmp_path / "builtin",
+            "worlditor_play_taken",
+            "def setup(api, context):\n    pass\n",
+        )
+        engine, loader = await _make(tmp_path)
+        loader.builtin_dir = tmp_path / "builtin"
+        await loader.load_all()
+        with pytest.raises(WorldError, match="占用"):
+            await loader.install_zip(_make_zip("worlditor_play_taken"))
+        assert not (tmp_path / "plays" / "worlditor_play_taken").exists()
+        await engine.terminate()
+
+    _run(fn())
+
+
+def test_duplicate_play_id_builtin_wins(tmp_path):
+    """同名目录（内置 + 社区残留）：内置胜出，社区目录只在 note 里报"被忽略"。
+
+    修复前 `load_all` 把两个都拒掉 → 内置内容包在重启后整体消失。
+    """
+
+    async def fn():
+        (tmp_path / "builtin").mkdir()
+        _write_play(
+            tmp_path / "builtin",
+            "worlditor_play_dup",
+            "def setup(api, context):\n    pass\n",
+        )
+        _write_play(
+            tmp_path / "plays",
+            "worlditor_play_dup",
+            "def setup(api, context):\n    pass\n",
+        )
+        engine, loader = await _make(tmp_path)
+        loader.builtin_dir = tmp_path / "builtin"
+        await loader.load_all()
+        assert "worlditor_play_dup" in loader.plays
+        assert loader.plays["worlditor_play_dup"].builtin is True
+        rows = [p for p in loader.list_plays() if p["play_id"] == "worlditor_play_dup"]
+        assert len(rows) == 1, "同名目录只应出一行"
+        assert rows[0]["status"] == "loaded"
+        assert "同名目录被忽略" in rows[0]["note"]
+        await engine.terminate()
+
+    _run(fn())
+
+
+def test_uninstall_removes_community_shadow_of_builtin(tmp_path):
+    """同名残留可被卸载：删社区那份、内置那份保持加载。"""
+
+    async def fn():
+        (tmp_path / "builtin").mkdir()
+        _write_play(
+            tmp_path / "builtin",
+            "worlditor_play_dup",
+            "def setup(api, context):\n    pass\n",
+        )
+        _write_play(
+            tmp_path / "plays",
+            "worlditor_play_dup",
+            "def setup(api, context):\n    pass\n",
+        )
+        engine, loader = await _make(tmp_path)
+        loader.builtin_dir = tmp_path / "builtin"
+        await loader.load_all()
+        await loader.uninstall("worlditor_play_dup")
+        assert not (tmp_path / "plays" / "worlditor_play_dup").exists()
+        assert (tmp_path / "builtin" / "worlditor_play_dup").is_dir()
+        assert "worlditor_play_dup" in loader.plays  # 内置仍在
+        await engine.terminate()
+
+    _run(fn())
+
+
+def test_failed_load_rolls_back_component_declarations(tmp_path):
+    """首次加载失败：组件声明一并回滚（旧行为只在卸载时清）。
+
+    否则 `list_kinds()` 会一直列出一个从未加载成功的包声明的组件。
+    """
+
+    async def fn():
+        _write_play(
+            tmp_path / "plays",
+            "worlditor_play_bad_decl",
+            "def setup(api, context):\n"
+            "    api.declare_component('side', label='副作用')\n"
+            "    raise RuntimeError('声明完就炸')\n",
+        )
+        engine, loader = await _make(tmp_path)
+        await loader.load_all()
+        status = {p["play_id"]: p for p in loader.list_plays()}
+        assert status["worlditor_play_bad_decl"]["status"] == "load_failed"
+        assert not any(
+            k.startswith("worlditor_play_bad_decl") for k in engine.list_kinds()
+        )
+        await engine.terminate()
+
+    _run(fn())
+
+
+def test_uninstall_rmtree_failure_keeps_state(tmp_path, monkeypatch):
+    """删目录失败：包保持加载、禁用标记不落库（旧行为是"报错了但已卸载"）。"""
+
+    async def fn():
+        install_demo_play(tmp_path / "plays")
+        engine, loader = await _make(tmp_path)
+        await loader.load_all()
+        assert "worlditor_play_demo" in loader.plays
+
+        def boom(*args, **kwargs):
+            raise OSError("设备忙")
+
+        monkeypatch.setattr("worlditor_mcp.world.play.shutil.rmtree", boom)
+        with pytest.raises(WorldError, match="删除玩法包目录失败"):
+            await loader.uninstall("worlditor_play_demo")
+        assert "worlditor_play_demo" in loader.plays  # 没被 teardown 掉
+        assert "worlditor_play_demo" not in loader._disabled  # noqa: SLF001
+        monkeypatch.undo()
+        assert (tmp_path / "plays" / "worlditor_play_demo").is_dir()
         await engine.terminate()
 
     _run(fn())
