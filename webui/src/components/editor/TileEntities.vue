@@ -8,8 +8,11 @@
     <p v-if="!entities.length" class="dim">这一格上还没有实体（用右侧「实体」视图放置）。</p>
     <div v-for="e in entities" :key="e.id" class="row">
       <span class="name">{{ entityName(e) }}</span>
-      <code class="dim">{{ e.kind }}</code>
-      <span v-for="t in e.tags" :key="t" class="chip">{{ t }}</span>
+      <!-- D41：能力 = 组件的存在——显示非 core: 的组件键；没有就是"没有能力组件" -->
+      <span v-if="!abilityComponents(e).length" class="dim">—</span>
+      <span v-for="k in abilityComponents(e)" :key="k" class="chip" :title="`组件 ${k}`">
+        {{ k }}
+      </span>
       <span class="grow" />
       <button class="mini-btn" title="在实体视图里打开详情" @click="emit('open', e)">编辑</button>
       <button class="mini-btn danger" @click="emit('remove', e)">删除</button>
@@ -18,7 +21,7 @@
 </template>
 
 <script setup>
-import { entityName } from "../../entity.js";
+import { abilityComponents, entityName } from "../../entity.js";
 
 defineProps({
   entities: { type: Array, default: () => [] },

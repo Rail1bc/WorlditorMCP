@@ -1,21 +1,18 @@
 <template>
-  <!-- 实体管理视图：列表（筛选/排序/分页，按上千实体设计）+ 详情面板 -->
+  <!-- 实体管理视图：列表（筛选/排序/分页，按上千实体设计）+ 详情面板。
+       D41：能力 = 组件的存在——实体上没有 kind / tags，只有组件字典。 -->
   <div class="entity-manager">
     <!-- 工具条 -->
     <div class="toolbar">
-      <input v-model="q" class="mini search" placeholder="搜索名称 / 类型 / 标签 / 组件 / id…" />
-      <select v-model="kindFilter" class="mini">
-        <option value="">全部类型</option>
-        <option v-for="k in kindOptions" :key="k" :value="k">{{ k }}</option>
-      </select>
-      <select v-model="tagFilter" class="mini">
-        <option value="">全部标签</option>
-        <option v-for="t in tagOptions" :key="t" :value="t">{{ t }}</option>
+      <input v-model="q" class="mini search" placeholder="搜索名称 / 组件 / id…" />
+      <select v-model="componentFilter" class="mini">
+        <option value="">全部组件</option>
+        <option v-for="k in componentOptions" :key="k" :value="k">{{ k }}</option>
       </select>
       <select v-model="sort" class="mini">
         <option value="pos">按位置</option>
         <option value="name">按名称</option>
-        <option value="kind">按类型</option>
+        <option value="comp">按组件</option>
       </select>
       <label v-if="tileFilter" class="mini-label pinned">
         <input type="checkbox" v-model="tileOnly" />
@@ -28,7 +25,7 @@
       </button>
     </div>
 
-    <!-- 放置（从模板 / 类型 / 标签组合） -->
+    <!-- 放置（从模板 + 能力组件 + 组件数据组合） -->
     <div v-if="showCreate" class="create">
       <div class="row">
         <select v-model="draft.template_id" class="mini" @change="applyTemplate">
@@ -37,11 +34,16 @@
             {{ t.name }}{{ t.source === "play" ? `（${t.play_id}）` : "" }}
           </option>
         </select>
-        <input v-model="draft.kind" class="mini" list="kind-options" placeholder="类型（可自由输入）" />
-        <datalist id="kind-options">
-          <option v-for="k in kinds" :key="k.tag" :value="k.tag">{{ k.label }}</option>
+        <input
+          v-model="draft.ability"
+          class="mini"
+          list="component-options"
+          placeholder="能力组件（可自由输入，裸名由后端解析）"
+        />
+        <datalist id="component-options">
+          <option v-for="k in kinds" :key="k.key" :value="k.key">{{ k.label }}</option>
         </datalist>
-        <input v-model="draft.name" class="mini" placeholder="名称（默认取类型文案）" />
+        <input v-model="draft.name" class="mini" placeholder="名称（默认取组件文案）" />
         <!-- D36：位置可有可无。只有"实体治理"视角（全局页）才允许造一个不进世界的
              实体——地图编辑器里造了它不会出现在本图（`_map_detail` 只看在场实体），
              用户会以为"创建失败"。 -->
@@ -64,11 +66,9 @@
         </template>
         <button class="btn" @click="create">{{ draft.place ? "放置" : "创建" }}</button>
       </div>
-      <TagPicker v-model="draft.tags" :kinds="kinds" :preset="presetOf(draft.kind)" :kind="draft.kind" />
+      <ComponentPicker :model-value="draftKeys" :kinds="kinds" @update:model-value="setDraftKeys" />
       <FieldForm
         :kinds="kinds"
-        :kind="draft.kind"
-        :tags="draft.tags"
         :components="draft.components"
         @update="(v) => (draft.components = v.components)"
       />
@@ -83,10 +83,9 @@
           <thead>
             <tr>
               <th>名称</th>
-              <th>类型</th>
-              <th>标签</th>
+              <th>组件</th>
               <th>位置</th>
-              <th>能力 / 组件</th>
+              <th>能力</th>
               <th class="ops-col">操作</th>
             </tr>
           </thead>
@@ -98,43 +97,53 @@
               @click="select(e)"
             >
               <td>
-                <!-- v2：名字在 core:info 组件里；entityName() 负责兜底到 id 前 8 位 -->
+                <!-- 名字在 core:info 组件里；entityName() 负责兜底到 id 前 8 位 -->
                 <span class="name">{{ entityName(e) }}</span>
                 <div v-if="entityDesc(e)" class="dim ell">{{ entityDesc(e) }}</div>
               </td>
-              <td><code>{{ e.kind }}</code></td>
-              <td>
-                <span v-for="t in e.tags" :key="t" class="chip" :class="{ bad: !specOf(t) }">
-                  {{ t }}
+              <td class="comp-cell">
+                <!-- 能力组件就是 components 里的键（core: 是协议数据，不进这一列）；
+                     没有声明的键照样显示，但要标红说明它不贡献能力 -->
+                <span v-if="!abilityComponents(e).length" class="dim">—</span>
+                <span
+                  v-for="k in abilityComponents(e)"
+                  :key="k"
+                  class="chip"
+                  :class="{ bad: isUnknown(e, k) }"
+                  :title="
+                    isUnknown(e, k)
+                      ? '虚构组件：没有声明，不贡献能力'
+                      : `组件 ${k}（能力 = 组件的存在）`
+                  "
+                >
+                  {{ k }}
                 </span>
               </td>
               <td class="dim">{{ positionLabel(e) }}</td>
               <td class="caps-cell">
                 <span
-                  v-if="componentNames(e).length"
+                  v-for="a in (e.capabilities?.interactions || []).slice(0, 2)"
+                  :key="a"
                   class="chip"
-                  :title="`组件（实体数据的唯一单位）：${componentNames(e).join('、')}`"
                 >
-                  ◇{{ componentNames(e).length }}
-                </span>
-                <span
-                  v-if="undeclaredComponents(e).length"
-                  class="chip bad"
-                  :title="`未声明组件：${undeclaredComponents(e).join('、')}（没有对应声明，不贡献能力）`"
-                >
-                  未声明 {{ undeclaredComponents(e).length }}
-                </span>
-                <span v-for="a in (e.capabilities?.interactions || []).slice(0, 2)" :key="a" class="chip">
                   {{ a }}
                 </span>
                 <span v-if="(e.capabilities?.interactions || []).length > 2" class="dim">
                   +{{ e.capabilities.interactions.length - 2 }}
                 </span>
-                <span v-if="e.capabilities?.unknown_tags?.length" class="chip bad" title="未注册标签：不贡献能力">
-                  ⚠{{ e.capabilities.unknown_tags.length }}
+                <span
+                  v-if="e.capabilities?.unknown_components?.length"
+                  class="chip bad"
+                  title="虚构组件：没有声明，不贡献能力"
+                >
+                  ⚠{{ e.capabilities.unknown_components.length }}
                 </span>
-                <span v-if="e.capabilities?.inactive_tags?.length" class="chip bad" title="标签所属玩法包在本世界未启用">
-                  ⏸{{ e.capabilities.inactive_tags.length }}
+                <span
+                  v-if="e.capabilities?.inactive_components?.length"
+                  class="chip bad"
+                  title="有声明，但它所属的玩法包在本世界未启用"
+                >
+                  ⏸{{ e.capabilities.inactive_components.length }}
                 </span>
               </td>
               <td class="ops-col">
@@ -154,7 +163,7 @@
               </td>
             </tr>
             <tr v-if="!filtered.length">
-              <td colspan="6" class="dim">
+              <td colspan="5" class="dim">
                 {{ tileFilter && tileOnly ? "这个地块上没有实体。" : "没有匹配的实体。" }}
               </td>
             </tr>
@@ -194,45 +203,41 @@
               placeholder="core:info.desc（可留空）"
             ></textarea>
           </label>
-          <label class="field">
-            类型（基底）
-            <template v-if="isIdentity(current)">
-              <code class="dim">{{ current.kind }} · 身份实体的类型由身份服务管理（D20）</code>
-            </template>
-            <input v-else v-model="edit.kind" list="kind-options" />
-          </label>
-          <TagPicker v-model="edit.tags" :kinds="kinds" :preset="presetOf(edit.kind)" :kind="edit.kind" />
+          <ComponentPicker :model-value="editKeys" :kinds="kinds" @update:model-value="setEditKeys" />
           <FieldForm
             :kinds="kinds"
-            :kind="edit.kind"
-            :tags="edit.tags"
             :components="edit.components"
             @update="(v) => (edit.components = v.components)"
           />
           <div v-if="current.capabilities" class="caps">
             <b>合并后的能力</b>
-            <div>有效标签：{{ current.capabilities.active_tags.join("、") || "（无）" }}</div>
-            <div
-              title="有声明可循的组件：内核保留（core:）与已知玩法包来源"
-            >
-              生效组件：{{ effectiveComponents(current).join("、") || "（无）" }}
+            <div>生效组件：{{ current.capabilities.active_components.join("、") || "（无）" }}</div>
+            <div v-if="current.capabilities.inactive_components.length" class="bad">
+              本世界未启用：{{ current.capabilities.inactive_components.join("、") }}
+              （有声明，但该玩法包在本世界没启用）
             </div>
-            <div v-if="undeclaredComponents(current).length" class="bad">
-              未声明组件：{{ undeclaredComponents(current).join("、") }}（没有对应声明，不贡献能力）
+            <div v-if="current.capabilities.unknown_components.length" class="bad">
+              没有声明：{{ current.capabilities.unknown_components.join("、") }}
+              （虚构组件，不贡献能力）
             </div>
             <div>动作：{{ current.capabilities.interactions.join("、") || "（无）" }}</div>
-            <div>字段：{{ current.capabilities.fields.map((f) => f.name).join("、") || "（无）" }}</div>
-            <div v-if="current.capabilities.unknown_tags.length" class="bad">
-              未注册：{{ current.capabilities.unknown_tags.join("、") }}（不贡献能力）
+            <div v-if="fieldGroups.length">
+              字段：
+              <div v-for="g in fieldGroups" :key="g.key" class="fields-row">
+                <code>{{ g.key }}</code
+                >: {{ g.names }}
+              </div>
             </div>
-            <div v-if="current.capabilities.inactive_tags.length" class="bad">
-              本世界未启用：{{ current.capabilities.inactive_tags.join("、") }}
-            </div>
+            <div v-else>字段：（无）</div>
           </div>
           <div class="detail-ops">
             <button class="btn" @click="save">保存</button>
             <button class="mini-btn" @click="emit('save-template', current)">存为模板</button>
-            <button class="mini-btn" :disabled="!hasPosition(current)" @click="emit('locate', current)">
+            <button
+              class="mini-btn"
+              :disabled="!hasPosition(current)"
+              @click="emit('locate', current)"
+            >
               定位
             </button>
             <button class="mini-btn danger" @click="emit('remove', current)">删除</button>
@@ -247,17 +252,22 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
 import {
+  abilityComponents,
+  componentKeys,
+  entityDesc,
   entityName,
   entityPosition,
+  hasComponent,
   hasPosition,
+  isCoreComponent,
   positionLabel,
   positionSortKey,
   rawEntityDesc,
   rawEntityName,
   withoutPosition,
 } from "../../entity.js";
+import ComponentPicker from "./ComponentPicker.vue";
 import FieldForm from "./FieldForm.vue";
-import TagPicker from "./TagPicker.vue";
 
 const props = defineProps({
   entities: { type: Array, default: () => [] },
@@ -271,8 +281,7 @@ const emit = defineEmits(["create", "update", "remove", "save-template", "locate
 
 const error = ref("");
 const q = ref("");
-const kindFilter = ref("");
-const tagFilter = ref("");
+const componentFilter = ref("");
 const sort = ref("pos");
 const tileOnly = ref(true);
 const page = ref(1);
@@ -282,43 +291,68 @@ const selectedId = ref("");
 
 const draft = reactive({
   template_id: "",
-  kind: "",
+  ability: "", // 单个能力组件：自由输入，裸名由后端解析成组件键（省略 = 不带能力组件）
   name: "",
-  tags: [],
-  components: {}, // 组件名 → 数据（实体模型 v2：实体数据的唯一单位）
+  components: {}, // 组件键 → 数据（实体数据的唯一单位）
   row: 0,
   col: 0,
   place: true, // D36：勾选 = 放进世界（发坐标）；不勾 = 造一个不在世界上的实体
 });
-const edit = reactive({ kind: "", name: "", desc: "", tags: [], components: {} });
+const edit = reactive({ name: "", desc: "", components: {} });
 
-const kindOptions = computed(() => [...new Set(props.entities.map((e) => e.kind))].sort());
-const tagOptions = computed(
-  () => [...new Set(props.entities.flatMap((e) => e.tags || []))].sort()
-);
+/** 组件键清单（读法只在 entity.js 里）——组件选择器与组件字典之间的桥。 */
+const draftKeys = computed(() => componentKeys({ components: draft.components }));
+const editKeys = computed(() => componentKeys({ components: edit.components }));
+
+/** 按选择器给的键重建组件字典：留下的键保数据，新增的键从 `{}` 开始。 */
+function withKeys(components, keys) {
+  const out = {};
+  for (const key of keys) {
+    out[key] = Object.prototype.hasOwnProperty.call(components || {}, key)
+      ? components[key]
+      : {};
+  }
+  return out;
+}
+function setDraftKeys(keys) {
+  draft.components = withKeys(draft.components, keys);
+}
+function setEditKeys(keys) {
+  edit.components = withKeys(edit.components, keys);
+}
+
+/** 组件筛选选项 = 所有实体带的组件键（先非 core:，再字典序——有能力的排在前面）。 */
+const componentOptions = computed(() => {
+  const rank = (key) => (isCoreComponent(key) ? 1 : 0);
+  return [...new Set(props.entities.flatMap((e) => componentKeys(e)))].sort(
+    (a, b) => rank(a) - rank(b) || a.localeCompare(b)
+  );
+});
+
+/** "按组件"排序键：能力组件键排好序拼起来（core: 不参与——它是协议数据不是能力）。 */
+function componentSortKey(e) {
+  return abilityComponents(e).sort().join("、");
+}
 
 const filtered = computed(() => {
   const needle = q.value.trim().toLowerCase();
   const list = props.entities.filter((e) => {
     if (tileOnly.value && props.tileFilter) {
-      // v2：位置在 core:position 组件里；不在世界上的实体没有格子，直接排除
+      // 位置在 core:position 组件里；不在世界上的实体没有格子，直接排除
       const p = entityPosition(e);
       if (!p || p.row !== props.tileFilter.row || p.col !== props.tileFilter.col) return false;
     }
-    if (kindFilter.value && e.kind !== kindFilter.value) return false;
-    if (tagFilter.value && !(e.tags || []).includes(tagFilter.value)) return false;
+    if (componentFilter.value && !hasComponent(e, componentFilter.value)) return false;
     if (!needle) return true;
     return (
       entityName(e).toLowerCase().includes(needle) ||
-      e.kind.toLowerCase().includes(needle) ||
       e.id.toLowerCase().includes(needle) ||
-      (e.tags || []).some((t) => t.toLowerCase().includes(needle)) ||
-      // v2：组件名也是可搜的（"哪些实体带 core:perception" 这类排查）
-      componentNames(e).some((n) => n.toLowerCase().includes(needle))
+      // 组件键也是可搜的（"哪些实体带 core:perception" 这类排查）
+      componentKeys(e).some((n) => n.toLowerCase().includes(needle))
     );
   });
-  // v2：名字在 core:info 组件里 → 一律经 entityName（带 id 兜底），别直接读 e.name
-  // v2：位置在 core:position 组件里 → 经 positionSortKey（不在世界上的排最后）
+  // 名字在 core:info 组件里 → 一律经 entityName（带 id 兜底），别直接读 e.name
+  // 位置在 core:position 组件里 → 经 positionSortKey（不在世界上的排最后）
   const byPos = (a, b) => {
     const [ka, ra, ca] = positionSortKey(a);
     const [kb, rb, cb] = positionSortKey(b);
@@ -326,7 +360,8 @@ const filtered = computed(() => {
   };
   if (sort.value === "name")
     list.sort((a, b) => entityName(a).localeCompare(entityName(b)));
-  else if (sort.value === "kind") list.sort((a, b) => a.kind.localeCompare(b.kind) || byPos(a, b));
+  else if (sort.value === "comp")
+    list.sort((a, b) => componentSortKey(a).localeCompare(componentSortKey(b)) || byPos(a, b));
   else list.sort(byPos);
   return list;
 });
@@ -337,6 +372,15 @@ const pageItems = computed(() => {
   return filtered.value.slice(start, start + pageSize.value);
 });
 const current = computed(() => props.entities.find((e) => e.id === selectedId.value) || null);
+
+/** 能力面板的字段（后端是 `{组件键: [字段]}`，按组件分组显示，不摊平）。 */
+const fieldGroups = computed(() => {
+  const fields = (current.value && current.value.capabilities?.fields) || {};
+  return Object.entries(fields).map(([key, list]) => ({
+    key,
+    names: (list || []).map((f) => f.label || f.name).join("、") || "（无）",
+  }));
+});
 
 watch(filtered, () => {
   if (page.value > pages.value) page.value = pages.value;
@@ -351,37 +395,9 @@ watch(
   }
 );
 
-function specOf(tag) {
-  return props.kinds.find((k) => k.tag === tag) || null;
-}
-function presetOf(kind) {
-  return specOf(kind)?.preset_tags || [];
-}
-function isIdentity(e) {
-  return e.kind === "player";
-}
-
-// ---------- 组件诊断（D32/D33：组件 = 数据的唯一单位） ----------
-
-function componentNames(e) {
-  return Object.keys(e.components || {}).sort();
-}
-
-/** 「有声明」= core: 内核保留 / 来源是已知玩法包 / 名字本身就是注册过的标签。 */
-function componentOrigin(name) {
-  const source = String(name).split(":")[0];
-  if (source === "core") return "core";
-  if (props.kinds.some((k) => k.play_id && k.play_id === source)) return "play";
-  if (specOf(name)) return "declared";
-  return "undeclared";
-}
-
-function effectiveComponents(e) {
-  return componentNames(e).filter((n) => componentOrigin(n) !== "undeclared");
-}
-
-function undeclaredComponents(e) {
-  return componentNames(e).filter((n) => componentOrigin(n) === "undeclared");
+/** 这个组件键有没有声明（后端裁决：unknown_components = 虚构组件，不贡献能力）。 */
+function isUnknown(e, key) {
+  return ((e && e.capabilities && e.capabilities.unknown_components) || []).includes(key);
 }
 
 /** 深拷贝组件字典：编辑面板不能直接改 props.entities 里的对象。 */
@@ -391,12 +407,10 @@ function cloneComponents(components) {
 
 function select(e) {
   selectedId.value = e.id;
-  edit.kind = e.kind;
-  // v2：回填 **原始** 名字/描述（不填 id 兜底）——否则"打开一个没名字的实体再保存"
+  // 回填 **原始** 名字/描述（不填 id 兜底）——否则"打开一个没名字的实体再保存"
   // 会把兜底串当成真名写进去。展示侧的兜底在 entityName()。
   edit.name = rawEntityName(e);
   edit.desc = rawEntityDesc(e);
-  edit.tags = [...(e.tags || [])];
   edit.components = cloneComponents(e.components);
 }
 
@@ -404,18 +418,13 @@ function applyTemplate() {
   const t = props.entityTemplates.find((x) => x.id === draft.template_id);
   if (!t) return;
   const d = t.data || {};
-  draft.kind = d.kind || draft.kind;
-  draft.tags = [...(d.tags || [])];
+  // 实体模板负载 = {name, desc, components}（D41：能力 = 一组组件键，没有 kind / tags）
   draft.name = d.name || "";
   draft.components = cloneComponents(d.components);
 }
 
 function create() {
   error.value = "";
-  if (!draft.kind.trim()) {
-    error.value = "类型不能为空（可自由输入一个玩法包声明的类型名）";
-    return;
-  }
   // D36：位置三参数要么全给、要么全不给——"放进世界"不勾就一个坐标都不发
   // （后端据此造一个不在世界上的实体）。半截坐标会被后端拒绝。
   const pos = draft.place ? { row: Number(draft.row), col: Number(draft.col) } : {};
@@ -424,26 +433,25 @@ function create() {
     ? cloneComponents(draft.components)
     : withoutPosition(draft.components);
   emit("create", {
-    kind: draft.kind.trim(),
+    // 能力组件是**输入便利**：裸名由后端解析成组件键；不填 = 不带能力组件
+    kind: draft.ability.trim() || undefined,
     name: draft.name.trim() || undefined,
-    tags: [...draft.tags],
     components,
     ...pos,
   });
   draft.name = "";
+  draft.ability = "";
 }
 
 function save() {
   if (!current.value) return;
   const patch = {
-    // v2：name/desc 走顶层键（后端折进 core:info）。name 为空就**不发**——
+    // name/desc 走顶层键（后端折进 core:info）。name 为空就**不发**——
     // 空的 name 在语义上是"没设名字 → 展示回落 id 前 8 位"，而后端要求 name 非空。
     desc: edit.desc,
-    tags: [...edit.tags],
     components: cloneComponents(edit.components), // PATCH 里 components 是整体替换
   };
   if (edit.name.trim()) patch.name = edit.name.trim();
-  if (!isIdentity(current.value)) patch.kind = edit.kind;
   emit("update", current.value, patch);
 }
 
@@ -509,6 +517,9 @@ table.tight th {
 .name {
   font-weight: 600;
 }
+.comp-cell {
+  max-width: 260px;
+}
 .caps-cell {
   white-space: nowrap;
 }
@@ -565,6 +576,9 @@ tr.on td {
   line-height: 1.6;
   border-top: 1px solid var(--bg-3);
   padding-top: 6px;
+}
+.fields-row {
+  padding-left: 10px;
 }
 .detail-ops {
   display: flex;

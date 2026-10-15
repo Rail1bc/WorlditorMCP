@@ -112,11 +112,11 @@ function summary(t) {
     );
     return `${data.name || "（无名称）"} · 出口 ${paths}`;
   }
-  // 实体模板负载 = {kind, tags[], name, desc, components}（v2：原 attrs/state）
+  // 实体模板负载 = {name, desc, components}（D41：模板是"一组组件的预设"，
+  // 没有 kind / tags——要带能力就在 components 里给组件键）
   const names = Object.keys(data.components || {});
-  const tags = data.tags?.length ? ` · 标签 ${data.tags.join("/")}` : "";
-  const comps = names.length ? ` · 组件 ${names.length}（${names.join("、")}）` : "";
-  return `${data.kind || "?"}${tags}${comps}`;
+  const comps = names.length ? ` · 组件 ${names.length}（${names.join("、")}）` : " · 无组件";
+  return `${data.name || "（无名称）"}${comps}`;
 }
 
 function apply(t) {

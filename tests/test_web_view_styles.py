@@ -198,7 +198,7 @@ def test_editor_is_split_into_panels():
         "ConnectionPanel.vue",
         "EntityManager.vue",
         "TemplateManager.vue",
-        "TagPicker.vue",
+        "ComponentPicker.vue",
         "FieldForm.vue",
     ):
         assert (editor_dir / name).exists(), f"缺少编辑器组件 {name}"
@@ -238,7 +238,9 @@ def test_entity_manager_scales_and_is_tile_scoped():
     )
     assert "pageSize" in manager and "pager" in manager  # 分页
     assert "tileOnly" in manager and "tileFilter" in manager  # 只看某地块
-    assert "kindFilter" in manager and "tagFilter" in manager and "sort" in manager
+    # D41：类型 / 标签两区合成**一张组件清单** —— 筛选/排序都按组件
+    assert "componentFilter" in manager and "sort" in manager
+    assert "kindFilter" not in manager and "tagFilter" not in manager
     tile_ents = (_WEBUI / "components" / "editor" / "TileEntities.vue").read_text(
         encoding="utf-8"
     )
@@ -271,11 +273,12 @@ def test_connection_editor_is_structured():
 
 
 def test_entity_panel_renders_schema_and_tags():
-    """实体管理：按声明渲染字段（FieldForm）+ 标签组合（TagPicker）+ 合并能力展示。"""
+    """实体管理：按声明渲染字段（FieldForm）+ **组件组合**（ComponentPicker）+ 合并能力展示。"""
     panel = (_WEBUI / "components" / "editor" / "EntityManager.vue").read_text(
         encoding="utf-8"
     )
-    assert "FieldForm" in panel and "TagPicker" in panel
+    assert "FieldForm" in panel and "ComponentPicker" in panel
+    assert "TagPicker" not in panel  # D41：标签选择器已换成组件选择器
     assert "合并后的能力" in panel  # A4：让管理员看见并集结果
     fields = (_WEBUI / "components" / "editor" / "FieldForm.vue").read_text(
         encoding="utf-8"
@@ -287,6 +290,9 @@ def test_entity_panel_renders_schema_and_tags():
     assert "内核保留" in fields  # core: 是内核保留命名空间（D33）
     assert "local:" in fields  # 手输裸名自动补 local: 前缀（信封无例外）
     assert "askConfirm" in fields  # 删整个组件走站内确认层（管理端禁原生 confirm）
+    # D41：删掉"猜字段落点"那套——字段的家就是声明它的组件
+    for gone in ("homeOf", "fallbackName", "extraOf", "preset_tags", "isDocked"):
+        assert gone not in fields, f"FieldForm 不该再有「猜落点」逻辑：{gone}"
 
 
 def test_map_grid_supports_multi_select_and_arrows():

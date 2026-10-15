@@ -52,7 +52,8 @@
               <template v-if="a.entity">
                 {{ entityName(a.entity) }}
                 <span class="dim"
-                  >（{{ a.entity.kind }} · {{ positionLabel(a.entity) }}）</span
+                  >（{{ abilityComponents(a.entity).join("、") || "无能力组件" }} ·
+                  {{ positionLabel(a.entity) }}）</span
                 >
               </template>
               <span v-else class="dim">—</span>
@@ -121,7 +122,7 @@
 import { computed, onMounted, ref } from "vue";
 import { apiGet, apiPatch, apiDelete } from "../../api";
 import { askConfirm } from "../../confirm";
-import { entityName, positionLabel } from "../../entity.js";
+import { abilityComponents, entityName, positionLabel } from "../../entity.js";
 
 const PAGE_SIZE = 20;
 

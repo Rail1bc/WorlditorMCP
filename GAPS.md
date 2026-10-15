@@ -966,6 +966,9 @@
     于是 `capabilities()` 报 `unknown_tags`（"未声明"）而 `_live_tags()`（query）仍认为
     "有主但不活跃"——两边结论一致但**解释不一致**，`inactive_tags` 那个桶**永远装不到
     "包被停用"**（而停用是最常发生、最该被解释的情况）
+    - ✅ **已修（D41-a 落地）**：`clear_play_registrations(purge=False)` **不再删规格**，
+      只有 `purge=True`（真卸载）才连同归属记忆一起清——停用现在正确地落进
+      `capabilities()["inactive_components"]`，不再误报"未声明"（D41-b 已随之改名）
 - **清理规则（用户 2026-10-14 定）**：
   - **只有"已卸载"可清**：`disabled`（停用）与 `load_failed`（加载失败）**都不可清**——
     包还在，启用 / 修好即恢复

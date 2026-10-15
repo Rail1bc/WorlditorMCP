@@ -151,7 +151,13 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../api";
 import { askConfirm } from "../../confirm";
 import { askDiff, diffFields } from "../../diff";
-import { entityDesc, entityName, entityPosition, withoutPosition } from "../../entity.js";
+import {
+  abilityComponents,
+  entityDesc,
+  entityName,
+  entityPosition,
+  withoutPosition,
+} from "../../entity.js";
 import { scheduleToJson } from "../../textSchedule.js";
 import MapGrid from "../../components/editor/MapGrid.vue";
 import TilePanel from "../../components/editor/TilePanel.vue";
@@ -595,21 +601,18 @@ async function updateEntity(entity, patch) {
   // 一行再 diff：删掉一个组件会显示成 "组件 x：{…} →（无）"
   const afterComponents = patch.components ?? entity.components ?? {};
   const before = {
-    // v2：名字/描述在 core:info 组件里 → 展示用 entityName（带 id 兜底）
+    // 名字/描述在 core:info 组件里 → 展示用 entityName（带 id 兜底）
     name: entityName(entity),
     desc: entityDesc(entity),
-    tags: (entity.tags || []).join("、"),
     ...componentRows(entity.components),
   };
   const after = {
     ...before,
     ...patch,
-    tags: (patch.tags || []).join("、"),
     ...componentRows(afterComponents),
   };
-  if (!("kind" in patch) || patch.kind === entity.kind) delete after.kind;
   delete after.components; // 已展开成每个组件一行
-  const labels = { name: "名称", desc: "描述", tags: "标签", kind: "类型" };
+  const labels = { name: "名称", desc: "描述" };
   for (const key of Object.keys(before)) {
     if (key.startsWith("components.")) {
       labels[key] = `组件 ${key.slice("components.".length)}`;
@@ -617,7 +620,7 @@ async function updateEntity(entity, patch) {
   }
   const ok = await askDiff({
     title: `保存实体「${entityName(entity)}」`,
-    detail: "tags / components 都是整体替换；components 按组件逐个对比（未列出的组件不变）",
+    detail: "components 是整体替换；按组件逐个对比（未列出的组件不变）",
     changes: diffFields(before, after, labels),
   });
   if (!ok) return;
@@ -630,11 +633,15 @@ async function updateEntity(entity, patch) {
 }
 
 async function removeEntity(entity) {
+  // D41：能力 = 组件的存在——删实体时列一下它带的能力组件，别拿已删掉的 kind 说事
+  const comps = abilityComponents(entity);
   const ok = await askConfirm({
     title: "删除实体",
     danger: true,
-    text: `删除实体「${entityName(entity)}」（${entity.kind}）？`,
-    detail: (entity.tags || []).length ? `标签：${entity.tags.join("、")}` : "",
+    text: `删除实体「${entityName(entity)}」？`,
+    detail: comps.length
+      ? `能力组件：${comps.join("、")}（能力 = 组件的存在，会随实体一起消失）`
+      : "它没有任何能力组件。",
   });
   if (!ok) return;
   try {
@@ -652,7 +659,8 @@ async function saveTemplate(payload) {
     await apiPost("/admin/templates", {
       id: payload.id,
       name: payload.name,
-      scope: payload.scope || (payload.data?.kind ? "entity" : "location"),
+      // 实体模板负载带 components；地块模板带 connections/name/description
+      scope: payload.scope || ("components" in (payload.data || {}) ? "entity" : "location"),
       data: payload.data,
     });
     await loadDetail();
@@ -662,17 +670,19 @@ async function saveTemplate(payload) {
 }
 
 function saveEntityTemplate(entity) {
+  // 模板 id 里带一个能力组件名做 slug（组件键可能带 `:`，换成 `_` 保证 id 干净）
+  const slug = abilityComponents(entity)[0]?.replace(/[^A-Za-z0-9_.-]/g, "_") || "bare";
   return saveTemplate({
-    id: `entity_${entity.kind}_${Date.now().toString(36)}`,
+    id: `entity_${slug}_${Date.now().toString(36)}`,
     name: `${entityName(entity)}（模板）`,
+    scope: "entity",
     data: {
-      kind: entity.kind,
-      tags: [...(entity.tags || [])],
       // 模板负载里 name/desc 是**输入便利**（套用时后端折进 core:info）；
       // 这里取实体的展示名，模板名才好认
       name: entityName(entity),
       desc: entityDesc(entity),
-      // 实体模板负载 = {kind, tags[], name, desc, components}（v2：原 attrs/state）
+      // 实体模板负载 = {name, desc, components}（D41：模板是"一组组件的预设"，
+      // 没有 kind / tags——要带能力就在 components 里给组件键）
       // **位置不进模板**：模板是"这东西是什么"，不是"它在哪"——带上位置后套用处会
       // 静默把实体搬回老地方（D36：位置归"放进世界"这一步）
       components: withoutPosition(entity.components),

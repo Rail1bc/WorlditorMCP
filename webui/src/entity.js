@@ -1,11 +1,14 @@
 /**
- * 实体读写的统一入口（实体模型 v2 / DESIGN §12.4）。
+ * 实体读写的统一入口（实体模型 v2 / DESIGN §12.4；D41：**能力 = 组件的存在**）。
  *
- * v2 起实体的**名字 / 描述 / 账户绑定 / 位置都不是顶层字段**，而是组件：
+ * 实体的**名字 / 描述 / 账户绑定 / 位置 / 能力全都不是顶层字段**，而是组件：
  *
- *   { id, kind, last_active_ts, tags, revision, changed_tick,
+ *   { id, components, last_active_ts, revision, changed_tick }
  *     components: { "core:info": {name, desc}, "core:account": {user_id},
- *                   "core:position": {map_id, row, col}, ... } }
+ *                   "core:position": {map_id, row, col}, ... }
+ *
+ * 投影里**没有 `kind`、没有 `tags`**（D41-b 已从实体上删除）：能力组件就是
+ * `components` 里的键，纯能力组件的数据是 `{}`。
  *
  * 读名规则（内核的缺失语义，前端照做，且只在这一处实现）：
  *   name = components["core:info"].name  ||  id 前 8 位
@@ -14,8 +17,10 @@
  * 读位置规则（D36）：
  *   位置 = components["core:position"]   → 没有就是"不在世界上"，返回 null
  *
- * 写名规则：PATCH /admin/entities/{id} 仍接受顶层 `name` / `desc`（后端折进 core:info）。
+ * 写名规则：PATCH /admin/entities/{id} 接受顶层 `name` / `desc`（后端折进 core:info）。
  * ⚠️ `components` 在 PATCH 里是**整体替换** —— 改名字别用 components，改组件别混名字。
+ * ⚠️ `kind` / `tags` 只在 POST 上是**输入便利**（裸名由后端解析成组件键）：写完之后
+ *   实体上就只剩组件键了，前端别再把它们当成实体的字段读。
  */
 
 export const CORE_INFO = "core:info";
@@ -110,4 +115,27 @@ export function entityUserId(e) {
 /** 该实体是否带某个组件（组件名 = `source:name` 信封）。 */
 export function hasComponent(e, key) {
   return Boolean(e && e.components && Object.prototype.hasOwnProperty.call(e.components, key));
+}
+
+/** 实体带的全部组件键（含 `core:`）；**能力清单就是它**（D41）。 */
+export function componentKeys(e) {
+  return Object.keys((e && e.components) || {});
+}
+
+const CORE_PREFIX = "core:";
+
+/** 是否是内核保留组件（协议数据：名字 / 账户 / 位置——**不是能力**）。 */
+export function isCoreComponent(key) {
+  return String(key).startsWith(CORE_PREFIX);
+}
+
+/**
+ * 能力组件键（排除 `core:`）——界面上"这个实体有什么能力"要显示的那一列。
+ *
+ * 注意：**有键 ≠ 有能力**。"没有声明的组件"（虚构组件）照样在这里，但它不贡献
+ * 任何能力；要判断生效与否看 `capabilities.active_components` /
+ * `inactive_components` / `unknown_components`（那是后端的裁决，前端不重算）。
+ */
+export function abilityComponents(e) {
+  return componentKeys(e).filter((key) => !isCoreComponent(key));
 }
