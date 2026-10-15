@@ -151,19 +151,28 @@ class IdentityService:
                 role=role,
                 created_ts=self._now(),
             )
-            entity = await self._materialize(username, account_id=account.id)
-            await self._engine.store.save_account(account)
-            token = await self._issue_token(
+            entity = await self._materialize(
+                username, account_id=account.id, persist=False
+            )
+            token = TokenInfo(
+                token=_new_token(),
                 entity_id=entity.id if entity is not None else "",
                 tier="admin" if role == "admin" else "play",
                 kind="player",
                 account_id=account.id,
                 username=username,
             )
-            if invite_code:
-                consumed = await self._engine.store.consume_invite_code(invite_code)
-                if not consumed:
+            if entity is None:
+                await self._engine.store.save_account(account)
+                await self._engine.store.save_token(token, self._now())
+                if invite_code and not await self._engine.store.consume_invite_code(
+                    invite_code
+                ):
                     raise IdentityError("邀请码无效或已使用")
+            else:
+                await self._engine.store.save_registration_bundle(
+                    account, entity, token, self._now(), invite_code
+                )
             return token
 
     async def register_agent(
@@ -182,17 +191,24 @@ class IdentityService:
             raise IdentityError("agent 自助注册已关闭，请联系管理员")
         async with self._engine._lock:
             self._check_invite(self.auth_mode, invite_code)
-            entity = await self._materialize(name)
-            token = await self._issue_token(
+            entity = await self._materialize(name, persist=False)
+            token = TokenInfo(
+                token=_new_token(),
                 entity_id=entity.id if entity is not None else "",
                 tier="play",
                 kind="player",
                 username=name,
             )
-            if invite_code:
-                consumed = await self._engine.store.consume_invite_code(invite_code)
-                if not consumed:
+            if entity is None:
+                await self._engine.store.save_token(token, self._now())
+                if invite_code and not await self._engine.store.consume_invite_code(
+                    invite_code
+                ):
                     raise IdentityError("邀请码无效或已使用")
+            else:
+                await self._engine.store.save_registration_bundle(
+                    None, entity, token, self._now(), invite_code
+                )
             return token
 
     async def login(self, username: str, password: str) -> TokenInfo:
@@ -457,7 +473,13 @@ class IdentityService:
             return None
         return (m.id, m.spawn_row, m.spawn_col)
 
-    async def _materialize(self, name: str, *, account_id: str | None = None):
+    async def _materialize(
+        self,
+        name: str,
+        *,
+        account_id: str | None = None,
+        persist: bool = True,
+    ):
         """按出生点放置 player 实体；无地图 → None（调用方照常发凭据）。"""
         spawn = self._spawn_pos()
         if spawn is None:
@@ -467,7 +489,13 @@ class IdentityService:
             )
             return None
         return await self._engine.place_entity(
-            "player", spawn[0], spawn[1], spawn[2], name=name, user_id=account_id
+            "player",
+            spawn[0],
+            spawn[1],
+            spawn[2],
+            name=name,
+            user_id=account_id,
+            _persist=persist,
         )
 
     async def _issue_token(

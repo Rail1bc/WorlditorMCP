@@ -89,6 +89,28 @@ def _run_scenario(tmp_path, fn, **kwargs):
 # ---------- 开放模式 ----------
 
 
+def test_registration_bundle_failure_leaves_no_identity_rows(tmp_path, monkeypatch):
+    """注册事务失败时账户、实体、token 与邀请码都不应进入内存。"""
+
+    async def fn(identity):
+        codes = await identity.create_invite_codes(1)
+        original_commit = identity._engine.store._commit
+
+        async def fail_commit():
+            raise RuntimeError("commit failed")
+
+        monkeypatch.setattr(identity._engine.store, "_commit", fail_commit)
+        with pytest.raises(RuntimeError, match="commit failed"):
+            await identity.register_human("atomic", "pass123", invite_code=codes[0])
+        assert identity._engine.store.get_account_by_username("atomic") is None
+        assert not identity._engine.store.tokens
+        assert not identity._engine.store.entities
+        assert identity._engine.store.get_invite_code(codes[0])["used"] is False
+        monkeypatch.setattr(identity._engine.store, "_commit", original_commit)
+
+    _run(_scenario(tmp_path / "world.db", fn, auth_mode="invite"))
+
+
 def test_register_human_open(tmp_path):
     """开放模式：注册 → player 实体 + play 档凭据；登录/改密/注销。"""
 

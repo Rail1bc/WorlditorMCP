@@ -855,6 +855,66 @@ class WorldStore:
         """写回 / 新建一个实体（整体替换对象）。"""
         await self.save_entities([entity])
 
+    async def save_registration_bundle(
+        self,
+        account: Account | None,
+        entity: Entity,
+        token: TokenInfo,
+        created_ts: float,
+        invite_code: str | None = None,
+    ) -> None:
+        """一次事务写入注册所需的实体、账户、凭据与邀请码消费。"""
+        assert self._conn is not None
+        revision = self.revision + 1
+        snapshot = copy.deepcopy(entity)
+        snapshot.revision = revision
+        snapshot.changed_tick = self.tick
+        if account is not None:
+            await self._conn.execute(
+                "INSERT INTO accounts(id, username, password_hash, role, created_ts) "
+                "VALUES(?, ?, ?, ?, ?)",
+                (
+                    account.id,
+                    account.username,
+                    account.password_hash,
+                    account.role,
+                    account.created_ts,
+                ),
+            )
+        await self._conn.execute(
+            "INSERT INTO entities(id, components_json, revision, changed_tick) VALUES(?, ?, ?, ?)",
+            entity_db_row(snapshot),
+        )
+        await self._conn.execute(
+            "INSERT INTO tokens(token, entity_id, tier, kind, account_id, username, created_ts, revoked) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, 0)",
+            (
+                token.token,
+                token.entity_id,
+                token.tier,
+                token.kind,
+                token.account_id,
+                token.username,
+                created_ts,
+            ),
+        )
+        if invite_code is not None:
+            cursor = await self._conn.execute(
+                "UPDATE invite_codes SET used = 1 WHERE code = ? AND used = 0",
+                (invite_code,),
+            )
+            if cursor.rowcount != 1:
+                raise WorldError("邀请码无效或已使用")
+        await self._commit()
+        entity.revision = snapshot.revision
+        entity.changed_tick = snapshot.changed_tick
+        self.entities[entity.id] = entity
+        if account is not None:
+            self.accounts[account.id] = account
+        self.tokens[token.token] = token
+        if invite_code is not None and invite_code in self.invite_codes:
+            self.invite_codes[invite_code]["used"] = True
+
     async def save_entities(self, entities: list[Entity]) -> None:
         """批量写回实体（单事务；同 ``save_locations`` 的理由）。
 

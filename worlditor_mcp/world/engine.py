@@ -2827,6 +2827,7 @@ class WorldEngine:
         components: dict | None = None,
         user_id: str | None = None,
         tags: list[str] | tuple[str, ...] | None = None,
+        _persist: bool = True,
     ) -> Entity:
         """放置实体（新实体 = **一个组件字典**，D41）。
 
@@ -2886,15 +2887,16 @@ class WorldEngine:
                 components=payload,
                 last_active_ts=self._now_ts(),
             )
-            await self.store.save_entity(entity)
-            await self._emit(
-                "on_world_edited",
-                {
-                    "op": "place_entity",
-                    "entity_id": entity.id,
-                    "components": ability,
-                },
-            )
+            if _persist:
+                await self.store.save_entity(entity)
+                await self._emit(
+                    "on_world_edited",
+                    {
+                        "op": "place_entity",
+                        "entity_id": entity.id,
+                        "components": ability,
+                    },
+                )
             return entity
 
     def _resolve_new_position(
