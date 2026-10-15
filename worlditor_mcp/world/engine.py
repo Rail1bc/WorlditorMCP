@@ -646,7 +646,7 @@ class WorldEngine:
         # 玩法包 API 实例（PlayLoader attach；handler 调用时按 play_id 取）
         self._play_apis: dict[str, Any] = {}
         # 事件流订阅者（SSE 出口，B11：事件总线序列化推送；队列满丢最旧）
-        self._subscribers: set[asyncio.Queue] = set()
+        self._subscribers: set[tuple[asyncio.Queue, str | None, str]] = set()
         self._tick_task: asyncio.Task | None = None
         self._binding_seq = 0  # D27 事件注册序（同 phase/order 的稳定兜底）
 
@@ -2118,25 +2118,41 @@ class WorldEngine:
 
     # ---------- 事件流订阅（SSE 出口，B11） ----------
 
-    def subscribe(self) -> asyncio.Queue:
-        """订阅世界事件流：返回队列，事件入队（队列满丢最旧）。"""
+    def subscribe(self, viewer_id: str | None = None, tier: str = "") -> asyncio.Queue:
+        """订阅过滤后的世界事件流；private 地图事件只发给可见查看者。"""
         queue: asyncio.Queue = asyncio.Queue(maxsize=200)
-        self._subscribers.add(queue)
+        self._subscribers.add((queue, viewer_id, tier))
         return queue
 
     def unsubscribe(self, queue: asyncio.Queue) -> None:
-        self._subscribers.discard(queue)
+        self._subscribers = {item for item in self._subscribers if item[0] is not queue}
 
     def _push_to_subscribers(self, payload: dict | None) -> None:
         if payload is None or not self._subscribers:
             return
-        for queue in list(self._subscribers):
+        map_id = self._event_map_id(payload)
+        for queue, viewer_id, tier in list(self._subscribers):
+            if map_id is not None and not self.map_visible_to(map_id, viewer_id, tier):
+                continue
             if queue.full():
                 try:
                     queue.get_nowait()
                 except asyncio.QueueEmpty:
                     pass
             queue.put_nowait(payload)
+
+    def _event_map_id(self, payload: dict) -> str | None:
+        entity = payload.get("entity")
+        if isinstance(entity, dict):
+            position = entity.get("components", {}).get("core:position", {})
+            if isinstance(position, dict):
+                return position.get("map_id")
+        request = payload.get("request")
+        if isinstance(request, dict):
+            target_id = request.get("target_id")
+            target = self.store.entities.get(target_id)
+            return target.map_id if target is not None else None
+        return payload.get("map_id")
 
     def _event_payload(self, event: str, args: tuple) -> dict | None:
         """事件 → SSE payload（WebUI 增量更新用；实体全量序列化）。"""
@@ -2390,6 +2406,20 @@ class WorldEngine:
             )
         )
         return matched[:limit] if limit is not None else matched
+
+    def can_observe_entity(
+        self, entity_id: str, viewer_id: str | None, tier: str = ""
+    ) -> bool:
+        """统一判断查看者是否能观察实体及其所在地图。"""
+        entity = self.store.entities.get(entity_id)
+        if entity is None or not self.map_visible_to(entity.map_id, viewer_id, tier):
+            return False
+        if tier == "admin" or viewer_id == entity_id:
+            return True
+        viewer = self.store.entities.get(viewer_id or "")
+        return not entity.component(CORE_PERCEPTION).get(ATTR_INVISIBLE) or bool(
+            viewer and viewer.component(CORE_PERCEPTION).get(ATTR_SEE_INVISIBLE)
+        )
 
     def _filter_perception(self, entities: list[Entity], viewer_id: str | None) -> None:
         """就地按隐身规则过滤（G12：list_entities / query / 场景同一套判定）。"""
@@ -3378,12 +3408,19 @@ class WorldEngine:
         target_id: str,
         action: str,
         args: dict | None = None,
+        *,
+        viewer_id: str | None = None,
+        tier: str = "",
     ) -> InteractionResult:
         """交互通道（分派入口，D11/D12；默认实现见 _interact_default）。
 
         v2 / D37：原 ``item_id`` 参数已删除——物品不在内核，玩法包把它的标识放进
         ``args``（如 ``args={"item": "apple"}``），内核不解释其内容。
         """
+        if viewer_id is not None and not self.can_observe_entity(
+            target_id, viewer_id, tier
+        ):
+            raise WorldError("目标不可见")
         return await self._dispatch_primitive(
             "interact", entity_id, target_id, action, args
         )

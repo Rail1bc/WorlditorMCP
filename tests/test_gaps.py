@@ -163,6 +163,22 @@ def test_map_visibility_state_filter(tmp_path):
         hr = {"Authorization": f"Bearer {read}"}
         state = (await client.get("/state", headers=hr)).json()
         assert {m["id"] for m in state["maps"]} == {"default"}
+        # /scene 也必须遵守 private 地图授权；B 在场后可读
+        forbidden = await client.get(
+            "/scene?entity_id="
+            + next(
+                e.id
+                for e in engine.list_entities(include_absent=True)
+                if e.map_id == "home_a" and not e.is_account_bound()
+            ),
+            headers=hr,
+        )
+        assert forbidden.status_code == 404
+        allowed_scene = await client.get(
+            "/scene?entity_id=" + b.entity_id,
+            headers=hb,
+        )
+        assert allowed_scene.status_code == 200
         # admin 全见
         admin = await identity.register_human("owner", "pass123", admin_key="sekret")
         ha = {"Authorization": f"Bearer {admin.token}"}

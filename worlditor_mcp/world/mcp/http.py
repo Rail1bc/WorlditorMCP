@@ -286,7 +286,7 @@ async def _scene(request: Request) -> Response:
     entity = engine.get_entity(entity_id)
     if entity is None:
         raise HTTPException(404, f"实体不存在：{entity_id}")
-    if not engine.map_visible_to(entity.map_id, info.entity_id, info.tier):
+    if not engine.can_observe_entity(entity.id, info.entity_id, info.tier):
         raise HTTPException(404, "场景不存在")
     scene = engine._build_scene(entity)
     peers = [
@@ -317,7 +317,11 @@ async def _scene(request: Request) -> Response:
 async def _events(request: Request) -> Response:
     _require_tier(_identity_of(request.scope), ("play", "admin"))
     engine = request.app.state.world_engine
-    queue = engine.subscribe()
+    info = _identity_of(request.scope)
+    queue = engine.subscribe(
+        info.entity_id if info else None,
+        info.tier if info else "",
+    )
 
     async def event_gen():
         try:

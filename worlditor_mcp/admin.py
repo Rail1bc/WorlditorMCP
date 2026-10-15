@@ -807,13 +807,17 @@ async def _connection_update(request: Request) -> Response:
     _require_admin(request)
     data = await _json_body(request)
     try:
+        kwargs = {}
+        if "enabled" in data:
+            kwargs["enabled"] = data["enabled"]
+        if "paths" in data:
+            kwargs["paths"] = data["paths"]
         await _engine(request).update_connection(
             str(data.get("map_id") or ""),
             _as_int(data.get("row"), "row"),
             _as_int(data.get("col"), "col"),
             str(data.get("direction") or ""),
-            enabled=data.get("enabled"),
-            paths=data.get("paths"),
+            **kwargs,
         )
     except WorldError as e:
         return _err(e)
