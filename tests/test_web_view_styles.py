@@ -301,6 +301,55 @@ def test_entity_panel_renders_schema_and_tags():
         assert gone not in fields, f"FieldForm 不该再有「猜落点」逻辑：{gone}"
 
 
+def _strip_comments(text: str) -> str:
+    """去掉模板 / 块 / 行注释——守卫要查的是**代码**，说明性文字可以提名旧键。"""
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"(?m)^\s*//.*$", "", text)
+
+
+def test_entity_panel_capability_keys_match_backend():
+    """实体面板的能力键必须与后端 D44 四象限一致（v0.7.1 白屏事故守卫）。
+
+    事故：`EntityManager.vue` 直读 `capabilities.unknown_components`，而 D44 已把该键
+    拆成 `orphan_components` + `fictional_components`——后端不再返回旧键，模板里的
+    `.length` 抛 `TypeError: can't access property "length", ... is undefined`，
+    **点开任一实体就白屏**（整个编辑面板不渲染）。
+
+    守卫两层：① 前端代码里不得再读旧键（注释除外）；② 能力读取必须经归一化函数收口。
+    """
+    panel = _strip_comments(
+        (_WEBUI / "components" / "editor" / "EntityManager.vue").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "unknown_components" not in panel, "D44 已把该键拆成 orphan / fictional"
+    assert "capsOf" in panel, "能力读取必须经归一化函数（缺键 = 空数组）"
+    # 四象限键与后端 capabilities() 同名（改名时这条会亮）
+    for key in (
+        "active_components",
+        "inactive_components",
+        "orphan_components",
+        "fictional_components",
+    ):
+        assert key in panel, f"实体面板缺能力键：{key}"
+    # 整仓前端也不该再读旧键
+    for path in _WEBUI.rglob("*.vue"):
+        code = _strip_comments(path.read_text(encoding="utf-8"))
+        assert "unknown_components" not in code, f"{path.name} 仍在读旧能力键"
+    # 后端 capabilities() 必须真的返回这四个键（前后端同源，别各改一半）
+    engine = (_ROOT / "worlditor_mcp" / "world" / "engine.py").read_text(
+        encoding="utf-8"
+    )
+    for key in (
+        '"active_components"',
+        '"inactive_components"',
+        '"orphan_components"',
+        '"fictional_components"',
+    ):
+        assert key in engine, f"后端 capabilities() 缺键：{key}"
+
+
 def test_map_grid_supports_multi_select_and_arrows():
     """网格：多选 / 框选 / 出口方向箭头（D24 的 E1/E2）。"""
     grid = (_WEBUI / "components" / "editor" / "MapGrid.vue").read_text(

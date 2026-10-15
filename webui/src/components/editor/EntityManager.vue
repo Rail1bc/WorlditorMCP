@@ -131,19 +131,18 @@
                 <span v-if="(e.capabilities?.interactions || []).length > 2" class="dim">
                   +{{ e.capabilities.interactions.length - 2 }}
                 </span>
-                <span
-                  v-if="e.capabilities?.unknown_components?.length"
-                  class="chip bad"
-                  title="虚构组件：没有声明，不贡献能力"
-                >
-                  ⚠{{ e.capabilities.unknown_components.length }}
+                <span v-if="capsOf(e).fictional.length" class="chip bad" title="虚构组件：没有声明，不贡献能力">
+                  ⚠{{ capsOf(e).fictional.length }}
+                </span>
+                <span v-if="capsOf(e).orphan.length" class="chip bad" title="声明它的玩法包已停用 / 卸载">
+                  ⛔{{ capsOf(e).orphan.length }}
                 </span>
                 <span
-                  v-if="e.capabilities?.inactive_components?.length"
+                  v-if="capsOf(e).inactive.length"
                   class="chip bad"
                   title="有声明，但它所属的玩法包在本世界未启用"
                 >
-                  ⏸{{ e.capabilities.inactive_components.length }}
+                  ⏸{{ capsOf(e).inactive.length }}
                 </span>
               </td>
               <td class="ops-col">
@@ -225,16 +224,20 @@
           />
           <div v-if="current.capabilities" class="caps">
             <b>合并后的能力</b>
-            <div>生效组件：{{ current.capabilities.active_components.join("、") || "（无）" }}</div>
-            <div v-if="current.capabilities.inactive_components.length" class="bad">
-              本世界未启用：{{ current.capabilities.inactive_components.join("、") }}
+            <div>生效组件：{{ caps.active.join("、") || "（无）" }}</div>
+            <div v-if="caps.inactive.length" class="bad">
+              本世界未启用：{{ caps.inactive.join("、") }}
               （有声明，但该玩法包在本世界没启用）
             </div>
-            <div v-if="current.capabilities.unknown_components.length" class="bad">
-              没有声明：{{ current.capabilities.unknown_components.join("、") }}
+            <div v-if="caps.orphan.length" class="bad">
+              声明已不在：{{ caps.orphan.join("、") }}
+              （声明它的玩法包已停用 / 卸载，暂时不贡献能力）
+            </div>
+            <div v-if="caps.fictional.length" class="bad">
+              没有声明：{{ caps.fictional.join("、") }}
               （虚构组件，不贡献能力）
             </div>
-            <div>动作：{{ current.capabilities.interactions.join("、") || "（无）" }}</div>
+            <div>动作：{{ caps.interactions.join("、") || "（无）" }}</div>
             <div v-if="fieldGroups.length">
               字段：
               <div v-for="g in fieldGroups" :key="g.key" class="fields-row">
@@ -409,9 +412,36 @@ watch(
   }
 );
 
-/** 这个组件键有没有声明（后端裁决：unknown_components = 虚构组件，不贡献能力）。 */
+/**
+ * 能力裁决的**归一化读取**（D44 四象限）。
+ *
+ * ⚠️ v0.7.1 事故：这里原来直读 `capabilities.unknown_components`——D44 把该键
+ * 拆成 `orphan_components`（声明它的包不在了）+ `fictional_components`（`local:`
+ * 且查无声明），后端不再返回旧键，于是详情面板在 `.length` 上抛
+ * `TypeError: can't access property "length", ... is undefined`，
+ * **整块实体编辑 UI 白屏**。模板直读后端可选字段就是这类缺陷的温床，
+ * 所以统一经这里收口：缺键 = 空数组，前端永远拿到可安全 `.length` / `.join` 的形状。
+ */
+function capsOf(e) {
+  const raw = (e && e.capabilities) || {};
+  const list = (key) => (Array.isArray(raw[key]) ? raw[key] : []);
+  return {
+    components: list("components"),
+    active: list("active_components"),
+    inactive: list("inactive_components"),
+    orphan: list("orphan_components"),
+    fictional: list("fictional_components"),
+    interactions: list("interactions"),
+  };
+}
+
+/** 当前实体的能力快照（详情面板用）。 */
+const caps = computed(() => capsOf(current.value));
+
+/** 这个组件键有没有声明（后端裁决：orphan / fictional 都不贡献能力）。 */
 function isUnknown(e, key) {
-  return ((e && e.capabilities && e.capabilities.unknown_components) || []).includes(key);
+  const c = capsOf(e);
+  return c.orphan.includes(key) || c.fictional.includes(key);
 }
 
 /** 深拷贝组件字典：编辑面板不能直接改 props.entities 里的对象。 */

@@ -134,7 +134,13 @@ export function isCoreComponent(key) {
  *
  * 注意：**有键 ≠ 有能力**。"没有声明的组件"（虚构组件）照样在这里，但它不贡献
  * 任何能力；要判断生效与否看 `capabilities.active_components` /
- * `inactive_components` / `unknown_components`（那是后端的裁决，前端不重算）。
+ * `inactive_components` / `orphan_components` / `fictional_components`
+ * （那是后端的裁决，前端不重算）。
+ *
+ * ⚠️ 能力键会随设计演进改名（D44 把 `unknown_components` 拆成 `orphan_components` +
+ * `fictional_components`）。**别在模板里直读 `capabilities.<键>`**——后端不再返回旧键时
+ * 读到的是 `undefined`，`.length` / `.join` 当场抛错、整块 UI 白屏（v0.7.1 事故）。
+ * 统一经归一化读取（`EntityManager.vue` 的 `capsOf()`）：缺键 = 空数组。
  */
 export function abilityComponents(e) {
   return componentKeys(e).filter((key) => !isCoreComponent(key));
