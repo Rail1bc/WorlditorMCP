@@ -258,6 +258,8 @@ class WorldStore:
         self.loc_by_pos: dict[tuple[str, int, int], Location] = {}
         self.templates: dict[str, WorldTemplate] = {}
         self.entities: dict[str, Entity] = {}
+        # D39/G42：位置到实体 id 的派生内存索引，不落库。
+        self.entities_at: dict[tuple[str, int, int], set[str]] = {}
         self.play_data: dict[tuple[str, str], Any] = {}
         self.accounts: dict[str, Account] = {}
         self.tokens: dict[str, TokenInfo] = {}
@@ -540,6 +542,7 @@ class WorldStore:
                     ValueError("行不合法"),
                 )
             self.entities[entity.id] = entity
+            self._index_entity(entity)
         cur = await self._conn.execute("SELECT * FROM play_data")
         for row in await cur.fetchall():
             where = f"play_data({row['namespace']!r}, {row['key']!r})"
@@ -714,7 +717,11 @@ class WorldStore:
         for entity, snapshot in zip(entities, entity_snapshots):
             entity.revision = snapshot.revision
             entity.changed_tick = snapshot.changed_tick
+            old = self.entities.get(entity.id)
+            if old is not None:
+                self._unindex_entity(old)
             self.entities[entity.id] = entity
+            self._index_entity(entity)
         if world_id is not None:
             self.map_world[world_map.id] = world_id
             self.map_folder[world_map.id] = folder_id
@@ -791,7 +798,11 @@ class WorldStore:
         for entity, snapshot in zip(entities, snapshots):
             entity.revision = snapshot.revision
             entity.changed_tick = snapshot.changed_tick
+            old = self.entities.get(entity.id)
+            if old is not None:
+                self._unindex_entity(old)
             self.entities[entity.id] = entity
+            self._index_entity(entity)
 
     async def delete_location(self, map_id: str, row: int, col: int) -> None:
         """删除地块（引用清理由引擎负责）。"""
@@ -819,7 +830,9 @@ class WorldStore:
         await self._conn.execute("DELETE FROM world_maps WHERE map_id = ?", (map_id,))
         await self._commit()
         for entity_id in entity_ids:
-            self.entities.pop(entity_id, None)
+            entity = self.entities.pop(entity_id, None)
+            if entity is not None:
+                self._unindex_entity(entity)
         self.maps.pop(map_id, None)
         self.loc_by_pos = {k: v for k, v in self.loc_by_pos.items() if k[0] != map_id}
         self.map_world.pop(map_id, None)
@@ -850,6 +863,35 @@ class WorldStore:
         self.templates.pop(template_id, None)
 
     # ---------- 实体 ----------
+
+    def _index_entity(self, entity: Entity) -> None:
+        if entity.has_position():
+            self.entities_at.setdefault(entity.pos_key(), set()).add(entity.id)
+
+    def _unindex_entity(self, entity: Entity) -> None:
+        if not entity.has_position():
+            return
+        key = entity.pos_key()
+        ids = self.entities_at.get(key)
+        if ids is not None:
+            ids.discard(entity.id)
+            if not ids:
+                self.entities_at.pop(key, None)
+
+    def entities_at_position(self, map_id: str, row: int, col: int) -> list[Entity]:
+        return [
+            self.entities[eid]
+            for eid in self.entities_at.get((map_id, row, col), ())
+            if eid in self.entities
+        ]
+
+    def check_entity_position_index(self) -> None:
+        expected: dict[tuple[str, int, int], set[str]] = {}
+        for entity in self.entities.values():
+            if entity.has_position():
+                expected.setdefault(entity.pos_key(), set()).add(entity.id)
+        if expected != self.entities_at:
+            raise WorldError("实体位置索引不一致")
 
     async def save_entity(self, entity: Entity) -> None:
         """写回 / 新建一个实体（整体替换对象）。"""
@@ -909,6 +951,7 @@ class WorldStore:
         entity.revision = snapshot.revision
         entity.changed_tick = snapshot.changed_tick
         self.entities[entity.id] = entity
+        self._index_entity(entity)
         if account is not None:
             self.accounts[account.id] = account
         self.tokens[token.token] = token
@@ -945,14 +988,20 @@ class WorldStore:
             # 保留现有调用方持有的对象身份，但只在事务成功后盖章并入表。
             entity.revision = snapshot.revision
             entity.changed_tick = snapshot.changed_tick
+            old = self.entities.get(entity.id)
+            if old is not None:
+                self._unindex_entity(old)
             self.entities[entity.id] = entity
+            self._index_entity(entity)
 
     async def delete_entity(self, entity_id: str) -> None:
         """删除实体。"""
         assert self._conn is not None
         await self._conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
         await self._commit()
-        self.entities.pop(entity_id, None)
+        entity = self.entities.pop(entity_id, None)
+        if entity is not None:
+            self._unindex_entity(entity)
 
     # ---------- 物品：已移除（v2 / D37） ----------
     #

@@ -2260,7 +2260,10 @@ class WorldEngine:
         这是**老接口**：只按位置筛、不校验地图存在、保持存储顺序。要按标签/世界/
         变更窗口查一批实体，用 ``query_entities``（D26，严格校验 + 稳定排序）。
         """
-        entities = list(self.store.entities.values())
+        if map_id is not None and row is not None and col is not None:
+            entities = self.store.entities_at_position(map_id, row, col)
+        else:
+            entities = list(self.store.entities.values())
         if not include_absent:
             entities = [e for e in entities if e.has_position()]
         if map_id is not None:
