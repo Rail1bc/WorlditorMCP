@@ -209,10 +209,23 @@ class WorlditorPlayAPI:
         return copy.deepcopy(entity) if entity is not None else None
 
     def list_entities(
-        self, map_id=None, row=None, col=None, viewer_id: str | None = None
+        self,
+        map_id=None,
+        row=None,
+        col=None,
+        viewer_id: str | None = None,
+        *,
+        include_absent: bool = False,
     ) -> list:
+        """实体列表（位置筛选 + 感知过滤）。
+
+        ``include_absent=True`` 连**不在世界上**的实体一起拿（D36：位置是可选
+        组件，缺失 = 容器里的东西 / 下线玩家）；默认只返回在场实体。
+        """
         return copy.deepcopy(
-            self._engine.list_entities(map_id, row, col, viewer_id=viewer_id)
+            self._engine.list_entities(
+                map_id, row, col, viewer_id=viewer_id, include_absent=include_absent
+            )
         )
 
     def query_entities(
@@ -229,6 +242,7 @@ class WorlditorPlayAPI:
         changed_since_revision: int | None = None,
         where=None,
         limit: int | None = None,
+        include_absent: bool = False,
     ) -> list:
         """实体查询（D26）：「所有带某组件的实体」不再需要全量扫 + 自己筛。
 
@@ -246,6 +260,8 @@ class WorlditorPlayAPI:
         - 组件匹配按 D21 生效：声明该组件的包在实体所在世界未激活 → 不匹配；
           实体自带的纯数据组件（无声明者）照常匹配。
         - ``viewer_id`` 走感知过滤（G12 隐身），与 list_entities 同源。
+        - ``include_absent=True`` 连**不在世界上**的实体一起查（D36：容器里的
+          东西 / 下线玩家）；默认只查在场实体（位置是可选组件）。
         - 增量遍历（D28）：``changed_since_revision``（精确游标，配
           ``api.world_revision()``）或 ``changed_since_tick``（窗口粒度，宁可多报）。
         - 严格校验：拼错的地图/世界、非法组件名会报错，而不是"查到空"。
@@ -269,6 +285,7 @@ class WorlditorPlayAPI:
                 changed_since_revision=changed_since_revision,
                 where=safe_where,
                 limit=limit,
+                include_absent=include_absent,
             )
         )
 

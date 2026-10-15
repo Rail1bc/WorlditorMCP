@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -183,6 +184,78 @@ def test_dynamic_tool_serialized_under_lock(tmp_path):
 
             await asyncio.gather(dyn(FakeCtx()), dyn(FakeCtx()))
             assert await engine.get_data(player.id, "n", component=_STAT) == 2
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
+def test_dynamic_tool_error_is_logged(tmp_path, caplog):
+    """工具 handler 的意外异常：客户端拿通用文案，**服务端必须留栈**。
+
+    其余玩法包回调路径（交互 / 事件 / on_tick / 服务 / 管理页 / 原语覆盖 /
+    ui_hook）都 `logger.exception`，只有 MCP 工具这条曾静默——包作者因此
+    无从定位"工具执行出错，请稍后再试"到底是哪一行炸的。
+    """
+
+    async def fn():
+        engine, _ = await _make(tmp_path)
+        try:
+            api = WorlditorPlayAPI(engine, "pkg_a")
+            engine.attach_play_api("pkg_a", api)
+
+            async def boom(api, ctx, **kw):
+                raise ValueError("作者自己的 bug")
+
+            api.register_tool("world_boom", boom, description="炸")
+            binding = engine._tools["world_boom"]  # noqa: SLF001
+            dyn = build_dynamic_tool(engine, binding, "world_boom")
+            player = await engine.place_entity("player", "default", 0, 0, name="甲")
+
+            class FakeMeta:
+                worlditor_entity_id = player.id
+                worlditor_tier = "play"
+
+            class FakeReqCtx:
+                meta = FakeMeta()
+
+            class FakeCtx:
+                request_context = FakeReqCtx()
+
+            with caplog.at_level(logging.ERROR, logger="worlditor"):
+                payload = json.loads(await dyn(FakeCtx()))
+            assert payload["text"] == "工具执行出错，请稍后再试"
+            records = [r for r in caplog.records if "world_boom" in r.getMessage()]
+            assert records, "工具 handler 异常没有留下任何日志"
+            assert records[0].exc_info, "日志里没有异常栈（作者看不到崩在哪一行）"
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
+# ---------- 玩法包 API：只读与查询 ----------
+
+
+def test_play_api_include_absent(tmp_path):
+    """D36：玩法包经 API 也能枚举"不在世界上"的实体。
+
+    修复前 `include_absent` 只在引擎上，`WorlditorPlayAPI.list_entities` /
+    `query_entities` 都没有该参数——文档却写着"要它们传 include_absent=True"
+    （PLAY_DEV §4），照抄即 `TypeError`；容器 / 下线玩家在玩法包侧无法枚举。
+    """
+
+    async def fn():
+        engine, _ = await _make(tmp_path)
+        try:
+            api = WorlditorPlayAPI(engine, "pkg_a")
+            engine.attach_play_api("pkg_a", api)
+            box = await api.place_entity("container", name="箱子")
+            assert not box.has_position()
+            assert box.id not in {e.id for e in api.list_entities()}
+            assert box.id in {e.id for e in api.list_entities(include_absent=True)}
+            assert box.id not in {e.id for e in api.query_entities()}
+            assert box.id in {e.id for e in api.query_entities(include_absent=True)}
         finally:
             await engine.terminate()
 

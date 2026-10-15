@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextvars
 import inspect
 import json
+import logging
 import re
 from collections.abc import Callable
 from typing import Any
@@ -26,6 +27,8 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from ..engine import WorldError
+
+logger = logging.getLogger("worlditor")
 
 # MCP 工具返回：结构化 JSON 字符串（ensure_ascii=False，LLM/UI 双端消费）
 _META_ENTITY_KEY = "worlditor_entity_id"
@@ -123,8 +126,15 @@ def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
             # 引擎锁内执行（DESIGN §2.4：handler 锁内执行；任务级可重入）
             result = await engine.invoke_locked(binding.handler, api, ctx, **kwargs)
         except WorldError as e:
+            # 玩法包主动抛的业务错误：文案就是要给用户看的那句话，不打栈
             return _result({"text": str(e)})
         except Exception:  # noqa: BLE001
+            # 玩法包 handler 的意外异常（作者自己的 bug）：客户端只拿通用文案，
+            # 所以**服务端必须留栈**——否则作者/管理员无从定位（其余玩法包回调
+            # 路径：交互/事件/tick/服务/管理页/override/ui_hook 都是这么做的）。
+            logger.exception(
+                "[worlditor] MCP 工具 handler 异常：%s (%s)", name, binding.play_id
+            )
             return _result({"text": "工具执行出错，请稍后再试"})
         finally:
             _caller_entity.reset(token)
