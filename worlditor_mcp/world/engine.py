@@ -3741,6 +3741,8 @@ class WorldEngine:
         spawn_row: int = 0,
         spawn_col: int = 0,
         visible: str = "public",
+        world_id: str | None = None,
+        folder_id: str | None = None,
     ) -> WorldMap:
         """新建地图（id 唯一；visible = public/private，G1 可见性）。"""
         async with self._lock:
@@ -3764,7 +3766,16 @@ class WorldEngine:
                     "visible": visible,
                 }
             )
-            await self.store.save_map(m)
+            if world_id is not None:
+                if world_id not in self.store.worlds:
+                    raise WorldError(f"世界不存在：{world_id}")
+                if folder_id is not None and folder_id not in self.store.folders:
+                    raise WorldError(f"文件夹不存在：{folder_id}")
+                await self.store.save_map_bundle(
+                    m, [], [], world_id=world_id, folder_id=folder_id
+                )
+            else:
+                await self.store.save_map(m)
             await self._emit("on_world_edited", {"op": "create_map", "map_id": map_id})
             return m
 

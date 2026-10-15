@@ -48,6 +48,29 @@ async def _world_with_two_maps(engine: WorldEngine) -> None:
 # ---------- 组织树排序 ----------
 
 
+def test_create_map_with_world_assignment_is_atomic(tmp_path):
+    """创建地图时一并写入世界归属，避免创建后再搬家留下孤儿地图。"""
+
+    async def fn():
+        engine = await _engine(tmp_path)
+        try:
+            await engine.create_world("world_a", "甲世界")
+            folder = await engine.create_folder("world_a", "甲组")
+            created = await engine.create_map(
+                "atomic_map", "原子图", world_id="world_a", folder_id=folder.id
+            )
+            assert created.id == "atomic_map"
+            assert engine.map_world("atomic_map") == "world_a"
+            assert engine.store.map_folder["atomic_map"] == folder.id
+            with pytest.raises(WorldError, match="世界不存在"):
+                await engine.create_map("broken_map", "坏图", world_id="missing")
+            assert engine.get_map("broken_map") is None
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
 def test_sort_space_is_shared_and_appends(tmp_path):
     """新条目排到末尾；文件夹与地图共用一个序号空间。"""
 

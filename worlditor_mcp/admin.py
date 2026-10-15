@@ -644,6 +644,8 @@ async def _map_create(request: Request) -> Response:
             spawn_row=_as_int(data.get("spawn_row"), "spawn_row"),
             spawn_col=_as_int(data.get("spawn_col"), "spawn_col"),
             visible=str(data.get("visible") or "public"),
+            world_id=data.get("world_id"),
+            folder_id=data.get("folder_id"),
         )
     except WorldError as e:
         return _err(e)
