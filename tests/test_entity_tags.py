@@ -124,9 +124,10 @@ def test_composition_player_plus_spawner(tmp_path):
                 "core:info",
             }
             # player 没有注册过规格（D42：身份概念已删，player 只是个未声明的组件名）
-            # → 只有 spawner 在贡献
+            # → 只有 spawner 在贡献；D44：`local:` 未声明 = 虚构（不是"坏了"）
             assert caps["active_components"] == ["local:spawner"]
-            assert caps["unknown_components"] == ["local:player"]
+            assert caps["fictional_components"] == ["local:player"]
+            assert caps["orphan_components"] == []
             assert "tune" in caps["interactions"]
             assert "tune" in engine.available_actions(player.id)
             assert {f["name"] for f in caps["fields"]["local:spawner"]} == {"mob"}
@@ -303,12 +304,13 @@ def test_unregistered_component_is_fictional_and_harmless(tmp_path):
             caps = engine.capabilities(e)
             assert "local:rock" in caps["components"]
             assert "local:nobody_knows" in caps["components"]
-            # 两个 local: 组件都没有声明 → 都算虚构，不贡献能力
+            # 两个 local: 组件都没有声明 → 都算**虚构**（D44：本来就没有行为，不是坏了）
             assert caps["active_components"] == []
-            assert set(caps["unknown_components"]) == {
+            assert set(caps["fictional_components"]) == {
                 "local:rock",
                 "local:nobody_knows",
             }
+            assert caps["orphan_components"] == []
             assert caps["fields"] == {}
             assert caps["interactions"] == []
             assert "block_move" not in caps  # D34：阻挡机制已移除
@@ -361,6 +363,9 @@ def test_component_capability_filtered_by_world_activation(tmp_path):
             engine.register_entity_tag(
                 "spawner", interactions=("tune",), play_id="pkg_b"
             )
+            # D44：**"有声明但包没加载"算孤儿**，不是"未启用"——所以要模拟"包已加载、
+            # 只是这个世界没启用它"，得把 API 挂上（真实部署里由 PlayLoader 做）
+            engine.attach_play_api("pkg_b", WorlditorPlayAPI(engine, "pkg_b"))
             await engine.create_world("w_a", "只有A", play_ids=["pkg_a"])
             await engine.create_world("w_b", "有B", play_ids=["pkg_b"])
             await engine.create_map("m_a", "甲图")
@@ -402,6 +407,8 @@ def test_spec_cache_invalidated_when_component_declared_later(tmp_path):
 
             # 另一个来源的同名组件是**另一个组件**：不会把能力"接"到已有实体上
             engine.register_entity_tag("late", interactions=("poke",), play_id="pkg_x")
+            # D44：pkg_x 没加载 → 它的组件算孤儿（不是"生效"），所以先把包挂上
+            engine.attach_play_api("pkg_x", WorlditorPlayAPI(engine, "pkg_x"))
             assert engine.capabilities(e)["interactions"] == [
                 "poke"
             ]  # 仍只有 local:late
@@ -803,12 +810,13 @@ def test_admin_entity_components_create_and_patch(tmp_path):
             "components",
             "active_components",
             "inactive_components",
-            "unknown_components",
+            "orphan_components",
+            "fictional_components",
             "interactions",
             "fields",
         }
         assert set(row["capabilities"]["components"]) == set(row["components"])
-        assert "local:a" in row["capabilities"]["unknown_components"]  # 未声明 = 虚构
+        assert "local:a" in row["capabilities"]["fictional_components"]  # 未声明 = 虚构
 
     _run(_admin_scenario(tmp_path, fn))
 

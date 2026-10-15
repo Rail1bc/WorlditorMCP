@@ -48,6 +48,13 @@
         >
           <span class="play-name">{{ p.name || p.play_id }}</span>
           <span class="badge" :class="'st-' + p.status">{{ statusText(p) }}</span>
+          <span
+            v-if="legacyOf(p.play_id)"
+            class="chip"
+            :title="`停用不影响实体数据：${legacyOf(p.play_id).keys.join('、')} 仍留在 ${legacyOf(p.play_id).count} 个实体上（启用即恢复，不可清理）`"
+          >
+            遗留组件 {{ legacyOf(p.play_id).count }}
+          </span>
           <button
             class="world-pill"
             :class="{ on: isActive(p.play_id) }"
@@ -210,6 +217,43 @@
       <div v-else class="play-detail dim center">
         ← 选择一个玩法包查看详情
       </div>
+
+      <!-- 组件遗留（D44）：停用的包在列表里（启用即恢复、不可清理）；
+           已卸载的包**不在列表里** → 单开一栏，只有这一栏能清 -->
+      <details v-if="leftovers.length || staleLeftovers.length" class="leftovers">
+        <summary>
+          组件遗留（{{ leftovers.length + staleLeftovers.length }}）
+        </summary>
+        <p class="dim">
+          D41 起**能力 = 组件的存在**：卸载一个包只撤掉它的声明，实体上的组件一个字节
+          都不动（键稳定 → 重装即恢复）。下面是这些组件的去向。
+        </p>
+
+        <div v-if="leftovers.length" class="leftover-group">
+          <b>包还在（停用 / 加载失败）——不可清理</b>
+          <div v-for="row in leftovers" :key="'keep-' + row.source" class="leftover">
+            <code>{{ row.source }}</code>
+            <span class="badge st-disabled">{{ row.package }}</span>
+            <span class="dim">{{ row.count }} 个实体 · {{ row.keys.join("、") }}</span>
+            <span class="dim">启用 / 修好即恢复，不能清理</span>
+          </div>
+        </div>
+
+        <div v-if="staleLeftovers.length" class="leftover-group">
+          <b>包已卸载——可手动清理（不可逆）</b>
+          <div v-for="row in staleLeftovers" :key="'gone-' + row.source" class="leftover">
+            <code>{{ row.source }}</code>
+            <span class="dim">{{ row.count }} 个实体 · {{ row.keys.join("、") }}</span>
+            <button class="mini-btn danger" :disabled="busy" @click="purge(row)">
+              清理
+            </button>
+          </div>
+          <p class="dim">
+            清理 = **数据没了，该实体的这项能力也没了**（重装只对还带着该组件的实体恢复
+            行为）；<code>local:</code> 永不清理——读不出归属，可能是人手写的数据。
+          </p>
+        </div>
+      </details>
     </div>
   </section>
 </template>
@@ -225,6 +269,7 @@ const props = defineProps({
 const emit = defineEmits(["world-changed"]);
 
 const plays = ref([]);
+const components = ref([]); // 组件诊断（D44：按 source 的四象限 + 清理资格）
 const tools = ref([]);
 const services = ref([]);
 const views = ref([]);
@@ -316,13 +361,14 @@ async function load() {
   busy.value = true;
   error.value = "";
   try {
-    const [worlds, pl, tl, sv, vw, ov] = await Promise.allSettled([
+    const [worlds, pl, tl, sv, vw, ov, comp] = await Promise.allSettled([
       apiGet("/admin/worlds"),
       apiGet("/admin/plays"),
       apiGet("/admin/tools"),
       apiGet("/admin/services"),
       apiGet("/admin/views"),
       apiGet("/admin/overrides"),
+      apiGet("/admin/orphan-components"),
     ]);
     if (worlds.status === "fulfilled") {
       const list = worlds.value.worlds || [];
@@ -346,8 +392,54 @@ async function load() {
       overrides.value = ov.value.overrides || [];
       filters.value = ov.value.filters || [];
     }
+    if (comp.status === "fulfilled") components.value = comp.value.components || [];
   } finally {
     busy.value = false;
+  }
+}
+
+// ---------- 组件遗留（D44 / G48） ----------
+
+/** 包还在（停用 / 加载失败）：不可清理。 */
+const leftovers = computed(() =>
+  components.value.filter((r) => r.state === "orphan" && !r.purgeable)
+);
+/** 包已卸载：唯一可清的一栏。 */
+const staleLeftovers = computed(() => components.value.filter((r) => r.purgeable));
+
+/** 某个玩法包名下的遗留组件（列表行内提示"停用不清数据"，D44）。 */
+function legacyOf(playId) {
+  return components.value.find((r) => r.source === playId && r.state === "orphan");
+}
+
+async function purge(row) {
+  error.value = "";
+  try {
+    // 先 dry-run：把受影响实体数 / 键 / 样例摆出来再让管理员确认（服务端也默认 dry-run）
+    const preview = await apiPost("/admin/orphan-components/purge", {
+      source: row.source,
+    });
+    const data = preview.data || preview;
+    const ok = await askConfirm({
+      title: `清理 ${row.source} 的遗留组件`,
+      text: `${data.count} 个实体带这些组件：${(data.keys || []).join("、")}`,
+      detail:
+        "不可逆：数据没了，这些实体的对应能力也没了（重装只对还带着该组件的实体恢复行为）。" +
+        (data.sample && data.sample.length
+          ? `样例实体：${data.sample.join("、")}`
+          : ""),
+      confirmText: "确认清理",
+      danger: true,
+    });
+    if (!ok) return;
+    await apiPost("/admin/orphan-components/purge", {
+      source: row.source,
+      dry_run: false,
+    });
+    note.value = `已清理 ${data.count} 个实体上的 ${row.source} 组件`;
+    await load();
+  } catch (e) {
+    error.value = e.message;
   }
 }
 
@@ -622,6 +714,32 @@ onMounted(load);
   cursor: pointer;
   color: var(--text-dim);
   font-size: 13px;
+}
+/* 组件遗留（D44）：可清的一栏标红边框，与"包还在"那栏一眼分得开 */
+.leftovers {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  border-top: 1px solid var(--bg-3);
+  padding-top: 8px;
+}
+.leftovers summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.leftover-group {
+  margin-top: 8px;
+}
+.leftover {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.leftover-group:last-child .leftover code {
+  color: var(--danger);
 }
 .dim {
   color: var(--text-dim);

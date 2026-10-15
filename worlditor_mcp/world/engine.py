@@ -615,11 +615,8 @@ class WorldEngine:
         # D41：**只有一套组件声明**（_tag_specs，键 = 组件键 source:name）——
         # 带某组件即具备该能力，能力解析只有一条路径
         self._tag_specs: dict[str, TagSpec] = {}
-        # D21/D26 组件归属：key -> 最近声明它的玩法包。**停用不清、卸载才清**——
-        # query 要能回答"这个组件的能力在当前世界存不存在"：停用的包声明过的
-        # 组件若被当成"未注册 → 纯数据"就会在 query 里诈尸（D26）。
-        # （D44 会把它删掉：归属已经写在键里）
-        self._tag_owner: dict[str, str] = {}
+        # D41/D44：**归属从键与规格里读**（键带 source、规格带 play_id）——
+        # 原来那张 `_tag_owner` 表已删除："另存一份归属"必然会与键/规格走散
         # D21 规格级能力缓存：组件的键集合 → 有序 TagSpec 列表（不含世界过滤）
         self._spec_cache: dict[tuple[str, ...], tuple[TagSpec, ...]] = {}
         self._interactions: dict[str, _InteractionBinding] = {}
@@ -871,9 +868,8 @@ class WorldEngine:
                 str(c) for c in categories if isinstance(c, str) and c.strip()
             ),
         )
-        if play_id:
-            # D26：记住声明者（键自带 source，但"D44 之前"仍用它区分"有主但不活跃"）
-            self._tag_owner[tag] = play_id
+        # D44：这里**不再另记归属**——声明者就是 `spec.play_id`（键里还有 source），
+        # 需要"这个组件属于谁"时读规格，别维护第二份真相
         self._invalidate_spec_cache()
 
     # ---------- 字段设施（D9 / D41：**按组件分组**，不跨组件摊平） ----------
@@ -1005,40 +1001,249 @@ class WorldEngine:
             if not spec.play_id or self._world_play_active(world_id, spec.play_id)
         )
 
+    def component_origin(self, key: str, world_id: str | None = None) -> str:
+        """一个组件键的**来源性质**（D44 四象限的判据）。
+
+        - ``active``：有声明，且声明者在该实体所在世界启用（或声明者无归属）；
+        - ``inactive``：有声明，声明者已加载，但该实体所在世界没启用它；
+        - ``orphan``：**声明者已经不在了**——要么规格还在但包没加载（停用 / 加载失败），
+          要么规格都没了（包被卸载）。⚠ 键里的 source 只是**线索**：一个非 ``local:``
+          的键查无声明，也可能是人手写上去的；
+        - ``fictional``：``local:`` 且查无声明——**本来就没有行为，不是坏了**（D41）。
+
+        ``world_id`` 传 None = 不按世界过滤（只回答"包在不在"）。
+        """
+        spec = self._tag_specs.get(key)
+        source = key.split(":", 1)[0]
+        if spec is None:
+            return "fictional" if source == "local" else "orphan"
+        owner = spec.play_id
+        if owner and owner not in self._play_apis:
+            return "orphan"  # 规格在、包没加载（停用 / 加载失败）
+        if (
+            owner
+            and world_id is not None
+            and not self._world_play_active(world_id, owner)
+        ):
+            return "inactive"
+        return "active"
+
     def capabilities(self, entity: Entity) -> dict:
-        """实体合并后的能力（D19 / D41；管理端、编辑器诊断 + 玩法包自查用）。
+        """实体合并后的能力（D19 / D41 / D44；管理端、编辑器诊断 + 玩法包自查用）。
 
         ``interactions`` = 各**生效组件**声明的动作并集；``fields`` = **按组件分组**
         （``{组件键: [字段]}``，不跨组件摊平）。
 
-        同时把组件**分类**报出来，便于编辑器解释"为什么没效果"：
-        ``inactive_components``（声明在，但该世界未激活）、``unknown_components``
-        （没有任何声明 = **虚构组件**）。``core:`` 组件是内核协议数据，不进这三类。
+        组件按**四象限**分桶（D44），方便编辑器解释"为什么没效果"：
+        ``active_components``（生效）、``inactive_components``（声明在，但该世界未启用）、
+        ``orphan_components``（声明它的包没加载 / 已被卸载）、``fictional_components``
+        （``local:`` 且没有声明 = 虚构组件：本来就没有行为）。``core:`` 组件是内核协议
+        数据，不进这四个桶。
         （诊断路径不做缓存，热路径走 `_active_specs`。）
         """
         world_id = self.store.map_world.get(entity.map_id)
-        active: list[str] = []
-        inactive: list[str] = []
-        unknown: list[str] = []
+        buckets: dict[str, list[str]] = {
+            "active": [],
+            "inactive": [],
+            "orphan": [],
+            "fictional": [],
+        }
         for tag in self.entity_components(entity):
             if is_core_component(tag):
                 continue  # 内核协议数据（core:position / core:info / …）：不是能力
-            spec = self._tag_specs.get(tag)
-            if spec is None:
-                unknown.append(tag)
-            elif not spec.play_id or self._world_play_active(world_id, spec.play_id):
-                active.append(tag)
-            else:
-                inactive.append(tag)
-        specs = [self._tag_specs[t] for t in active]
+            buckets[self.component_origin(tag, world_id)].append(tag)
+        specs = [self._tag_specs[t] for t in buckets["active"]]
         return {
             "components": self.entity_components(entity),
-            "active_components": active,
-            "inactive_components": inactive,
-            "unknown_components": unknown,
+            "active_components": buckets["active"],
+            "inactive_components": buckets["inactive"],
+            "orphan_components": buckets["orphan"],
+            "fictional_components": buckets["fictional"],
             "interactions": sorted({a for s in specs for a in s.interactions}),
-            "fields": self.fields_by_component(active),
+            "fields": self.fields_by_component(buckets["active"]),
         }
+
+    # ---------- 组件诊断与孤儿清理（D44 / G48） ----------
+
+    def component_usage(self) -> list[dict]:
+        """实体上出现的组件键，按 **source** 聚合（D44 诊断与清理的共同数据源）。
+
+        每行 = 一个 source：``keys``（该 source 下出现过的组件键）、``entities``
+        （带其中任意一个键的实体 id，稳定排序）、``count``。``core:`` 不列
+        （那是内核协议数据，不是能力）。
+        """
+        rows: dict[str, dict] = {}
+        for entity in self.store.entities.values():
+            for key in entity.components:
+                source = key.split(":", 1)[0]
+                if source == "core":
+                    continue
+                row = rows.setdefault(
+                    source, {"source": source, "keys": set(), "entities": set()}
+                )
+                row["keys"].add(key)
+                row["entities"].add(entity.id)
+        out = []
+        for row in rows.values():
+            out.append(
+                {
+                    "source": row["source"],
+                    "keys": sorted(row["keys"]),
+                    "entities": sorted(row["entities"]),
+                    "count": len(row["entities"]),
+                }
+            )
+        return sorted(out, key=lambda r: r["source"])
+
+    def _package_states(self) -> dict[str, str]:
+        """已加载的玩法包集合（默认的包状态判据，D44）。
+
+        引擎只知道"谁加载过"；"目录还在不在"要问 PlayLoader——管理端会传入更细的
+        解析器（``loaded`` / ``disabled`` / ``load_failed`` / ``invalid`` / ``uninstalled``）。
+        """
+        return dict.fromkeys(self._play_apis, "loaded")
+
+    def diagnose_components(
+        self, package_state: Callable[[str], str] | None = None
+    ) -> list[dict]:
+        """按 source 的组件诊断（D44 四象限 + **清理资格**）。
+
+        每行：``source`` / ``state``（active / inactive / orphan / fictional）/
+        ``package``（loaded / disabled / load_failed / invalid / uninstalled / none）/
+        ``purgeable`` / ``keys`` / ``count`` / ``sample``（样例实体 id，最多 3 个）。
+
+        ⚠ **`local:` 一律是 fictional 且不可清理**：键里读不出"哪个包"，用手写数据
+        也用它——清理它等于删用户数据。清理只针对**非 local 的 source**，且服务端强制
+        ``purgeable``（包目录真的不在 + 当前没有声明）。
+        """
+        resolver = package_state or self._loaded_state
+        out: list[dict] = []
+        for row in self.component_usage():
+            source = row["source"]
+            package = resolver(source)
+            state = self._quadrant_of(source, package)
+            out.append(
+                {
+                    "source": source,
+                    "state": state,
+                    "package": package,
+                    "purgeable": state == "orphan" and package == "uninstalled",
+                    "keys": row["keys"],
+                    "count": row["count"],
+                    "sample": row["entities"][:3],
+                }
+            )
+        return out
+
+    def _loaded_state(self, source: str) -> str:
+        """默认包状态：引擎只知道加载集合（PlayLoader 会传更细的解析器）。"""
+        if source == "local":
+            return "none"
+        return "loaded" if source in self._play_apis else "uninstalled"
+
+    def _quadrant_of(self, source: str, package: str) -> str:
+        """一个 source 的四象限归属（D44）：看包状态 + 声明是否还在。"""
+        if source == "local":
+            return "fictional"
+        if package != "loaded":
+            return "orphan"
+        declared = any(spec.source == source for spec in self._tag_specs.values())
+        if not declared:
+            return "orphan"  # 包在、但没有任何声明留下（旧数据 / 手工键）→ 一样是孤儿
+        # 包在、声明也在：再看这些实体所在世界用不用它（按实体算，取"至少一处生效"）
+        return "active" if self._any_world_uses(source) else "inactive"
+
+    def _any_world_uses(self, source: str) -> bool:
+        """该 source 的组件是否在**某个**世界生效（世界为空 = 全部启用）。"""
+        for world_id in self.store.worlds:
+            if self._world_play_active(world_id, source):
+                return True
+        return not self.store.worlds  # 没有世界容器 = 不按世界过滤
+
+    def source_components(self, source: str) -> dict:
+        """某 source 在实体上的占用：``{keys, entities, count}``（清理前的影响面）。"""
+        source = _clean_required(source, "来源")
+        keys: set[str] = set()
+        entities: list[str] = []
+        for entity in self.store.entities.values():
+            hit = [k for k in entity.components if k.split(":", 1)[0] == source]
+            if hit:
+                keys.update(hit)
+                entities.append(entity.id)
+        return {
+            "source": source,
+            "keys": sorted(keys),
+            "entities": sorted(entities),
+            "count": len(entities),
+        }
+
+    async def purge_components(
+        self,
+        source: str,
+        *,
+        keys: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool = True,
+        package_state: Callable[[str], str] | None = None,
+    ) -> dict:
+        """**清理某个已卸载来源的遗留组件**（D44 / G48；管理端手动、默认 dry-run）。
+
+        规则（服务端强制，不能只靠界面藏按钮）：
+        - **只有"包真的不在了"（``package == "uninstalled"``）才允许清**：停用
+          （``disabled``）与加载失败（``load_failed``）都**不行**——包还在，启用 / 修好
+          即恢复，清了就是白删数据；
+        - ``local:`` **永不可清**（读不出归属，可能是人手写的数据）；
+        - 粒度 = 按 source 全清，或给 ``keys`` 子集（键必须属于该 source）；**不支持按实体挑**；
+        - ``dry_run=True``（默认）只回影响面，不落盘。
+
+        ⚠ **清理是双重不可逆**：能力 = 组件的存在——删掉 ``pkg_b:duel`` = 数据没了、
+        该实体的这项能力也没了；重装只对**还带着该组件的实体**恢复行为。
+        """
+        async with self._lock:
+            resolver = package_state or self._loaded_state
+            report = self.source_components(source)
+            package = resolver(report["source"])
+            if report["source"] == "local":
+                raise WorldError("local: 是共享命名空间，读不出归属，不能清理")
+            if package != "uninstalled":
+                raise WorldError(
+                    f"玩法包 {report['source']} 还在（{package}）——启用 / 修好即恢复，"
+                    f"不能清理它的组件"
+                )
+            wanted = report["keys"] if keys is None else sorted(set(map(str, keys)))
+            if keys is not None:
+                unknown = [k for k in wanted if k not in report["keys"]]
+                if unknown:
+                    raise WorldError(
+                        f"这些组件不属于 {report['source']}：{'、'.join(unknown)}"
+                    )
+            payload = {
+                **report,
+                "keys": wanted,
+                "dry_run": bool(dry_run),
+                "purged": False,
+            }
+            if dry_run or not wanted:
+                return payload
+            changed: list[Entity] = []
+            for entity in self.store.entities.values():
+                hit = [k for k in wanted if k in entity.components]
+                if not hit:
+                    continue
+                entity.components = {
+                    k: v for k, v in entity.components.items() if k not in hit
+                }
+                changed.append(entity)
+            await self.store.save_entities(changed)
+            await self._emit(
+                "on_world_edited",
+                {
+                    "op": "purge_components",
+                    "source": report["source"],
+                    "keys": wanted,
+                    "entities": len(changed),
+                },
+            )
+            return {**payload, "purged": True, "count": len(changed)}
 
     # ---------- MCP 工具注册（D2 / G2） ----------
 
@@ -1644,10 +1849,12 @@ class WorldEngine:
         包注册的模板在 `_play_templates` 内存表，前者本就不受影响）。
         """
         if purge:
+            # 按**声明者**清（`spec.play_id`），不是按键里的 source：共享命名空间
+            # `local:` 的声明者也是某个玩法包（D41：世界内容写 local:、行为包声明同键）
+            # ——按 source 清会漏掉它们，于是包卸载后规格还在，query 就再也不匹配了
             self._tag_specs = {
-                k: v for k, v in self._tag_specs.items() if v.source != play_id
+                k: v for k, v in self._tag_specs.items() if v.play_id != play_id
             }
-            self._tag_owner = {k: v for k, v in self._tag_owner.items() if v != play_id}
         self._interactions = {
             k: v for k, v in self._interactions.items() if v.play_id != play_id
         }
@@ -2196,20 +2403,26 @@ class WorldEngine:
     def _live_components(self, entity: Entity) -> set[str]:
         """实体身上"活着"的组件键集（D26：激活语义的**唯一**落地点）。
 
-        "活着" = 该组件的**声明者当前已加载** 且 **实体所在世界启用了它**；
-        没有声明者的组件（实体自带的纯数据组件，或声明包已被真卸载）算活着。
+        "活着" = 该组件有声明，且它的**声明者当前已加载**、**实体所在世界启用了它**；
+        没有声明的组件（虚构组件，或声明包已被真卸载）算活着——"组件即数据"的用法
+        不该因为查不到声明就查不到实体。
 
         为什么比"世界激活"多一条"已加载"：组件是**留在实体数据上的**，包停用后
         组件还在（不像过滤器/覆盖登记那样随停用消失）。只看世界激活集合时，
         空 ``play_ids``（= 全部激活）会让停用包声明的组件"诈尸"成纯数据组件——
         于是 query 说"这是商贩"，available_actions 却说"它没有任何动作"。
+        （D44：归属读 `spec.play_id` 与键里的 source，不再另存 `_tag_owner`。）
 
         包含与排除用同一份集合判定，所以语义天然对称。
         """
         world_id = self.store.map_world.get(entity.map_id)
         live: set[str] = set()
         for tag in self.entity_components(entity):
-            owner = self._tag_owner.get(tag)
+            spec = self._tag_specs.get(tag)
+            if spec is None:
+                live.add(tag)  # 无声明（虚构 / 已卸载）：照常匹配
+                continue
+            owner = spec.play_id
             if owner and (
                 owner not in self._play_apis
                 or not self._world_play_active(world_id, owner)

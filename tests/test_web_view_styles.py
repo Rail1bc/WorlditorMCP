@@ -305,6 +305,25 @@ def test_map_grid_supports_multi_select_and_arrows():
     assert "ctrlKey" in grid  # Ctrl 多选
 
 
+def test_plays_page_shows_component_leftovers():
+    """玩法包页：**只有"已卸载"那栏能清**（D44）。
+
+    两栏必须分开显示——停用 / 加载失败的包还在列表里（"启用即恢复，不能清理"），
+    已卸载的包不在列表里（单开"可清理"栏）。清理走服务端 dry-run +
+    站内确认（管理端禁原生 confirm）。
+    """
+    page = (_WEBUI / "pages" / "admin" / "WorldPlaysPage.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "/admin/orphan-components" in page  # 诊断端点
+    assert "/admin/orphan-components/purge" in page  # 清理端点
+    assert "leftovers" in page and "staleLeftovers" in page  # 两栏
+    assert "不能清理" in page and "可手动清理" in page
+    assert "askConfirm" in page  # 清理前站内确认
+    assert "dry_run: false" in page  # 先 dry-run 再真删
+    assert "legacyOf" in page  # 停用包行内的"遗留组件 N"提示
+
+
 def test_view_components_use_no_hardcoded_light_colors():
     """视图组件不得硬编码浅色（否则暗色主题下白底/白底白字）。"""
     files = _view_component_files()

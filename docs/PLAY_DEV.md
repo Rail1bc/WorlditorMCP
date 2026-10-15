@@ -110,7 +110,10 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
   未归属世界的地图按**默认世界**的激活集合算（不会逃逸过滤）。
 - **数据隔离**：`api.kv_*` 的 namespace = 本包 id（或 `世界id:包id` 双层）——
   不同玩法包互不可见；同包跨世界各自状态
-- **disable 保留数据**：只卸载代码注册，kv/data/web 资源保留，enable 即恢复
+- **disable 保留数据**：只卸载代码注册，kv/data/web 资源保留，enable 即恢复。
+  **实体上的组件一律不动**（D41/D44：能力 = 组件的存在）——停用后实体照常带着那些组件，
+  `capabilities()` 把它们报成 `orphan_components`（"包没加载"），启用即恢复行为
+
 - **安装/分发**：包目录放到 `<数据目录>/plays/`（或管理端「安装玩法包（zip）」
   上传：zip 内单个顶层目录 `<play_id>/`，含 play.yaml 与 main.py）；内置包
   随版本分发、只可停用不可卸载
@@ -127,7 +130,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `register_entity_type(kind, ...)` | 同上（"类型只是预设"这个读法已过时——预设归实体模板） |
 | `add_tag_fields(component, fields)` / `add_kind_fields(...)` | 给**一个组件**追加字段（D41：跨包扩展的正当路径）。**同一组件内同名字段重复声明 → 报错**；字段清单**按组件分组**，不跨组件摊平。⚠ `add_category_fields` **已删除** |
 | `list_kinds(category=None)` | **组件清单**：`key` / `source` / `name` / `label` / `interactions` / `fields` / `categories`（没有"是否隐式""预设标签"了），`category` 只是选取分组 |
-| `capabilities(entity)` | 某实体的能力：`components / active_components / inactive_components / unknown_components / interactions / fields`——`fields` 是 **`{组件键: [字段]}`**（按组件分组）；没有声明的组件是**虚构组件**（在 `unknown_components` 里）。**不再有阻挡键**（阻挡机制已移除，见 §10） |
+| `capabilities(entity)` | 某实体的能力：`components / active_components / inactive_components / **orphan_components** / **fictional_components** / interactions / fields`——`fields` 是 **`{组件键: [字段]}`**（按组件分组）。四象限（D44）：生效 / 本世界未启用 / **声明它的包不在了**（停用、加载失败、已卸载）/ **虚构组件**（`local:` 且无声明——本来就没有行为，不是坏了）。**不再有阻挡键**（阻挡机制已移除，见 §10） |
 | `register_interaction(action, handler, label)` | 全局交互动作；`async (api, req) -> InteractionResult` |
 | `register_world_event(event, handler, interval=0, phase="simulate", order=0)` | 事件订阅；on_tick 必须给 interval（秒）；**phase/order 声明跨包执行顺序**（D27，见 §5.3） |
 | `register_ui_hook(block_kind, position, provider)` | UiBlock 注入（before/after/replace，**可用**；服务端展开，见 §11） |

@@ -863,7 +863,7 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 | **1c** | **名字 / 描述 / 账户绑定进组件**（原属第 2 期）：`core:info`（`name` / `desc`）+ `core:account`（`user_id`） | ✅ **已落地**（表结构 **v9**、`entities` **10 列**——`name` / `desc` / `user_id` 三列删除；`to_dict()` 不再给顶层三键，见 12.3 / 12.4） |
 | **1d** | **位置进组件**：`core:position`（`map_id` / `row` / `col`）+ **D36"不在任何地方"**（原属第 2 期） | ✅ **已落地**（表结构 **v10**、`entities` **7 列**——位置三列删除；`Entity.map_id` / `row` / `col` 变**只读 property**（缺失 → `None`，**不是** `""` / `0`），新增 `has_position()` / `pos_key()` / `require_position()`；`list_entities` / `query_entities` 默认 `include_absent=False` 跳过无位置实体；`move()` 对无位置实体报错"实体不在任何地块"；前端位置读点收进 `entity.js` 的 `entityPosition()` / `positionLabel()` / `positionSortKey()`） |
 | ~~**2**~~ | ~~`kind` / `tags` 折叠为组件 + `core:player`~~ | **本行的"暂缓"已被下一行取代**：2026-10-14 一度裁定「先别动能力面，保持现状」（卡在 G47 的命名分叉）；同日随后把分叉想清楚并拍板，**改判为"设计已定、待实施"**，见下一行与 D41–D44。⚠ 原计划的 `core:player` **取消**（D42：身份概念整个删除，不引入该组件） |
-| **2** | **能力面折叠（D41–D44）**：`kind` / `tags` 删两列 + 声明合并 + 裸名解析 + 身份移除 + 写入边界 + 删摊平与分类字段 + 卸载/清理语义 | 🟡 **D41 / D42 / D43 已落地，D44 待做**。落地面：表 **v11 / 4 列**（`id` / `components_json` / `revision` / `changed_tick`，`kind` / `tags_json` 进禁列名单，`last_active_ts` 改为只在内存）、`to_dict()` **5 键**、**能力 = 组件的存在**（`Entity.has_component()`；无"基底类型"字段）、声明只有一套 `declare_component`（`register_entity_kind` / `register_entity_tag` / `register_entity_type` 为等价旧名，`register_entity_kind(tags=…)` 作废 → 报错，预设归实体模板）、字段**按组件分组**（`capabilities()["fields"]` 是 `{组件键: [字段]}`）、`add_category_fields` 删除、同组件内同名字段重复声明报错、`/admin/kinds` 只剩一张组件清单。⚠ 原"2a 不改表 + 2b 改表"的两步切分**已放弃**：中间态（能力仍存表列、只是键变全名）不是设计要的形态，而 D13 本就"删库重来"、无历史数据要兼容——**一步做到位**。**D44（四象限诊断 / 孤儿清理 / 删 `_tag_owner`）仍待做**；**前端「按组件分组渲染」已落地**（组件选择器 + 按组件分组的字段表单，"猜字段落点"那套已删；"已卸载包的遗留组件"栏等 D44） |
+| **2** | **能力面折叠（D41–D44）**：`kind` / `tags` 删两列 + 声明合并 + 裸名解析 + 身份移除 + 写入边界 + 删摊平与分类字段 + 卸载/清理语义 | ✅ **已落地（D41–D44 + 前端）**。落地面：表 **v11 / 4 列**（`id` / `components_json` / `revision` / `changed_tick`，`kind` / `tags_json` 进禁列名单，`last_active_ts` 改为只在内存）、`to_dict()` **5 键**、**能力 = 组件的存在**（`Entity.has_component()`；无"基底类型"字段）、声明只有一套 `declare_component`（`register_entity_kind` / `register_entity_tag` / `register_entity_type` 为等价旧名，`register_entity_kind(tags=…)` 作废 → 报错，预设归实体模板）、字段**按组件分组**（`capabilities()["fields"]` 是 `{组件键: [字段]}`）、`add_category_fields` 删除、同组件内同名字段重复声明报错、`/admin/kinds` 只剩一张组件清单。**D44**：`capabilities()` 四象限（`active` / `inactive` / `orphan` / `fictional`）、`diagnose_components()` + `GET /admin/orphan-components` + `POST /admin/orphan-components/purge`（服务端只接受"包真的不在了"、默认 dry-run、`local:` 永不可清）、**`_tag_owner` 已删**（归属读键 + `spec.play_id`）、前端"玩法包"页两栏（停用=不可清 / 已卸载=可清）。⚠ 原"2a 不改表 + 2b 改表"的两步切分**已放弃**：中间态不是设计要的形态，而 D13 本就"删库重来"、无历史数据要兼容——**一步做到位** |
 | **3** | 内核移除物品（D37） | ✅ **已落地**（落地面全删：`ItemDef` / `items` 表 / 7 个注册与落库 API（`register_item_def` / `save_item_def` / `add_item_fields` / `get_item_def` / `list_item_defs` / `delete_item_def` / `flush_item_defs`）/ `InteractionRequest.item_id` 槽位 / `on_item_used` 内核事件——见 12.8） |
 | **4** | 索引（G42） | ⏸ 不做（可无限期推迟） |
 
@@ -1040,7 +1040,7 @@ CREATE TABLE entities (
 
 ### 12.6 能力即组件（`kind` / `tags` 折叠 → **D41–D44**）
 
-> **状态：🟡 D41 / D42 / D43 + 前端已落地（表 v11 / 4 列），D44 待做**——见 §12.0。
+> **状态：✅ 已落地（D41–D44 + 前端；表 v11 / 4 列）**——见 §12.0。
 >
 > **落地面**（读代码时的入口）：`Entity.has_component()` / `Entity.components`（**能力清单**）；
 > `WorldEngine.declare_component()`（唯一声明入口，旧名 `register_entity_kind` /
@@ -1071,6 +1071,10 @@ CREATE TABLE entities (
   `local:<同键>`** 即可对接（声明可以，写 `<别人的 play_id>:` 不行）。于是"世界包 + 行为包"
   这对软依赖**不依赖加载顺序**：内容是 `local:merchant`，谁声明它谁提供行为；没人声明
   就只是一块虚构组件（照常存在、不贡献能力）。内置演示世界包与测试夹具就是这么对接的
+  - ⚠ **代价（如实记录）**：`local:` 的归属**读不出来**——键里没有包名，所以
+    (a) 声明包被卸载后，`local:merchant` 只能回到"无声明"（数据留下、行为消失），
+    (b) **它永远不进孤儿清理**（可能是人手写的数据，清理等于删用户数据）。
+    四象限里它算 `fictional`，不报 `orphan`
 - **卸载 / 清理**（D44）：卸载不删数据、键稳定（重装即恢复）；四象限诊断
   `active` / `inactive` / `orphan` / `fictional`；**只有"已卸载"的组件可清理，且必须管理员手动**
   （服务端强制 + dry-run）

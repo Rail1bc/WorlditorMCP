@@ -525,6 +525,69 @@ async def _template_apply(request: Request) -> Response:
 # ---------- 组件清单（D41：管理端名词表） ----------
 
 
+def _package_state_resolver(request: Request):
+    """包状态解析器（D44：**先看目录在不在**，再看 status）。
+
+    `list_plays()` 只遍历**磁盘上还在的包目录**，所以它没列出的 play_id = 包已卸载；
+    而 `_disabled` 是**持久化的 play_id 集合**（包目录删了 id 还可能留着）——只看
+    "在不在 disabled 里"会把"已卸载"误判成"停用"，于是清理按钮永远不出现（或反过来
+    把还能恢复的包当孤儿删掉）。
+    """
+    loader = getattr(request.app.state, "world_loader", None)
+    engine = _engine(request)
+    if loader is None:
+        return engine._loaded_state  # noqa: SLF001 - 没挂 loader（测试/嵌入）时的兜底
+
+    def resolve(source: str) -> str:
+        if source == "local":
+            return "none"
+        for row in loader.list_plays():
+            if row["play_id"] == source:
+                return str(row["status"])  # loaded / disabled / load_failed / invalid
+        return "uninstalled"
+
+    return resolve
+
+
+async def _orphan_components(request: Request) -> Response:
+    """**组件诊断**（GET /admin/orphan-components）：按来源分组的四象限 + 清理资格。
+
+    每行含 ``state``（active / inactive / orphan / fictional）、``package``
+    （loaded / disabled / load_failed / uninstalled / none）、``purgeable``、
+    ``keys`` 与 ``count`` / ``sample``。只有 ``purgeable`` 的行才该出现"清理"按钮
+    （服务端在 purge 时**再判一次**，不靠界面藏按钮）。
+    """
+    _require_admin(request)
+    engine = _engine(request)
+    return JSONResponse(
+        {"components": engine.diagnose_components(_package_state_resolver(request))}
+    )
+
+
+async def _orphan_purge(request: Request) -> Response:
+    """**清理已卸载包的遗留组件**（POST /admin/orphan-components/purge）。
+
+    body：``{source, keys?, dry_run?}``——``dry_run`` 默认 **True**（先看影响面再删）；
+    粒度是按 source 全清或 ``keys`` 子集，**不支持按实体挑**。服务端强制只接受
+    "包真的不在了"的来源（停用 / 加载失败 → 400）。
+    """
+    _require_admin(request)
+    data = await _json_body(request)
+    keys = data.get("keys")
+    if keys is not None and not isinstance(keys, list):
+        return _err(WorldError("keys 必须是组件键数组（省略 = 清该来源全部）"))
+    try:
+        report = await _engine(request).purge_components(
+            str(data.get("source") or ""),
+            keys=keys,
+            dry_run=bool(data.get("dry_run", True)),
+            package_state=_package_state_resolver(request),
+        )
+    except WorldError as e:
+        return _err(e)
+    return _ok(report)
+
+
 async def _kinds(request: Request) -> Response:
     """**组件清单**（编辑器组件选择器的数据源）。
 
@@ -960,6 +1023,8 @@ def build_admin_app(
         Route("/admin/templates", _templates_list),
         Route("/admin/templates/apply", _template_apply, methods=["POST"]),
         Route("/admin/kinds", _kinds),
+        Route("/admin/orphan-components", _orphan_components),
+        Route("/admin/orphan-components/purge", _orphan_purge, methods=["POST"]),
         Route(
             "/admin/templates/{template_id}",
             _template_delete,

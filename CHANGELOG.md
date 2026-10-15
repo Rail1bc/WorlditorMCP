@@ -39,6 +39,23 @@
 - **`parse_tags` 改名 `parse_names`**（名字列表的容错解析）；`TagSpec.implicit`、`EntityKindSpec`
   别名删除。
 
+### 新增（D44：卸载 / 清理语义）
+
+- **四象限诊断**：`capabilities(entity)` 现在是 `components` / `active_components` /
+  `inactive_components` / **`orphan_components`** / **`fictional_components`** / `interactions` / `fields`
+  （原来的 `unknown_components` 拆成后两个）。`orphan` = **声明它的包不在了**（停用 / 加载失败 /
+  已卸载）；`fictional` = `local:` 且查无声明（本来就没有行为，不是坏了）。
+- **`GET /admin/orphan-components`**：按来源分组的影响面（`state` / `package` / `purgeable` /
+  `keys` / `count` / `sample`）。判定**先看目录在不在**，再看 `status`。
+- **`POST /admin/orphan-components/purge`**：管理员手动清理**已卸载包**的遗留组件
+  （`{source, keys?, dry_run?}`）。服务端强制只接受"包真的不在了"（停用 / 加载失败 → 400）；
+  `local:` 永不可清；**默认 dry-run**；粒度按 source 或 keys，不支持按实体挑；
+  ⚠ **不可逆**（数据没了 + 该实体的这项能力也没了）。事件复用 `on_world_edited`
+  （`{op: "purge_components", …}`）。
+- **`_tag_owner` 删除**：归属从**键里的 source + 规格的 `play_id`** 读，不再另存一份。
+- **管理端"玩法包"页**：停用的包在列表里并显示"遗留组件 N"（启用即恢复、**不可清理**）；
+  已卸载的包不在列表里 → 单开"组件遗留"栏，只有那一栏能清。
+
 ### 破坏性变更（第 1 / 1b / 1c / 1d / 3 期）
 
 - **`Entity.attrs` / `Entity.state` 两个容器删除** → 统一为 `Entity.components`（组件字典）。
@@ -152,12 +169,9 @@
 
 ### 未做（见 `GAPS.md` G40 / G47 / G48）
 
-- **第 2 期能力面折叠的 D41 / D42 / D43 已落地**（见下），**D44（卸载 / 清理语义：四象限诊断 +
-  管理员手动清理"已卸载包的遗留组件" + 删 `_tag_owner`）与前端「按组件分组渲染」待做**。
-  `core:info` / `core:account` / `core:position` 已分别随第 1c / 1d 期落地。
-- **D44 预告**：`active` / `inactive` / `orphan` / `fictional` 四象限诊断；
-  `GET /admin/orphan-components` + `POST /admin/orphan-components/purge`
-  （服务端强制只接受"已卸载"，先 dry-run，按 source 或 keys 清）。
+- **第 2 期（D41–D44 + 前端）已全部落地**：`core:info` / `core:account` / `core:position`
+  已分别随第 1c / 1d 期落地，能力面与卸载 / 清理语义随本期完成——见上面的
+  "能力面折叠"条目。**第 2 期到此完整**（版本 bump 与 tag 由用户决定）。
 
 ## v0.7.0（2026-09-25）
 

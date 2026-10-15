@@ -955,7 +955,7 @@
   - **仍未做（D44 / G48）**：四象限诊断（`orphan` 与 `fictional` 分开报）、
     孤儿组件清理端点、删 `_tag_owner`
 
-### G48 组件四象限诊断与孤儿清理（📐 设计已定，待实施）
+### G48 组件四象限诊断与孤儿清理（**✅ 已落地**，D44）
 - **触发**：折叠后**不存在"同名标签"**，卸载一个玩法包 = 组件留在实体上、行为消失
   （键稳定 → 重装即恢复）。于是要能回答"这个组件为什么没效果"，并且给"永久孤儿"一条出口
 - **设计（D44）**：
@@ -985,6 +985,16 @@
   （`{op: "purge_components", …}`，**不加第 8 个内核事件**）；落库走 `save_entities`（D28）
 - **界面落点**："玩法包"页——**停用的包在列表里**（每行显示"遗留组件 N 个"+ "启用即恢复，不可清理"）；
   **已卸载的包不在列表里** → 单开一栏"**已卸载包的遗留组件**"（两种情况天然分栏）
-- **状态**：📐 设计已定，随第 2 期一起实施（**施工计划见 `docs/ENTITY_FOLD_PLAN.md`**）
+- **状态**：✅ **已落地（D44）**——`capabilities()` 四象限（`active_components` /
+  `inactive_components` / `orphan_components` / `fictional_components`）、
+  `engine.diagnose_components(package_state=…)` 按 source 聚合、
+  `engine.purge_components(source, keys?, dry_run=True)`；
+  管理端 `GET /admin/orphan-components` + `POST /admin/orphan-components/purge`
+  （服务端只接受"包真的不在了"，默认 dry-run）；`_tag_owner` 已删（归属读键 + `spec.play_id`）。
+  前端"玩法包"页两栏：**包还在**（停用 / 加载失败 → 不可清理）/ **包已卸载**（可手动清理）。
+  ⚠ **落地时补的一条**：`local:` 一律算 `fictional` 且**永不可清**（键里读不出归属，
+  可能是人手写的数据）；非 `local:` 且查无声明才算 `orphan`。另外真卸载清理规格时
+  按 **`spec.play_id`** 而不是键里的 source——共享命名空间 `local:` 的声明者也是某个包，
+  按 source 清会漏掉它们（实测：包卸载后规格还在，query 就再也不匹配了）
 
 
