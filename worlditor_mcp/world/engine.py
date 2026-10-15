@@ -8,7 +8,7 @@
 - **交互**：handler 命令式调用内核原语（D12，无 effects 清单）。
 - **事件总线**：单一事件源（8 事件），玩法包订阅 + world_log 历史；
   SSE 是事件总线的序列化出口。
-- **注册表**：kind / interaction / event / ui 组件与钩子，玩法包扩展入口。
+- **注册表**：component / interaction / event / ui 组件与钩子，玩法包扩展入口。
 - **on_tick 调度**（A3）：单循环按 1s 粒度检查，各 handler 各自间隔，
   串行执行 + 异常隔离。
 
@@ -1733,6 +1733,9 @@ class WorldEngine:
         action = _clean_required(action, "动作名")
         if not callable(handler):
             raise WorldError("交互 handler 必须是可调用对象")
+        if action in self._interactions:
+            previous = self._interactions[action]
+            raise WorldError(f"交互动作冲突：{action}（已由 {previous.play_id} 注册）")
         self._interactions[action] = _InteractionBinding(
             play_id=play_id, handler=handler, label=str(label or action)
         )
@@ -2013,8 +2016,8 @@ class WorldEngine:
         async with self._lock:  # 入口自持锁（可重入）；锁外调用亦安全
             await self._emit(event, data, log=log)
 
-    async def _emit(self, event: str, *args: Any, log: bool = True) -> None:
-        """分发事件给订阅者（串行 + 异常隔离），并写入世界日志。
+    async def _emit(self, event: str, *args: Any, log: bool = False) -> None:
+        """分发事件给订阅者（串行 + 异常隔离），默认不写世界日志。
 
         调用方持锁；handler 内调原语可重入（AsyncRLock）。
         世界激活过滤（D15）：事件带实体时按实体所在世界检查玩法包激活。
@@ -2041,6 +2044,10 @@ class WorldEngine:
         if event == "on_tick":
             return True
         entity = next((a for a in args if isinstance(a, Entity)), None)
+        if entity is None:
+            request = next((a for a in args if isinstance(a, InteractionRequest)), None)
+            if request is not None:
+                entity = self.store.entities.get(request.entity_id) or request.target
         if entity is None:
             return True
         world_id = self.store.map_world.get(entity.map_id)

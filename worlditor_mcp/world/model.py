@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import random
@@ -734,9 +735,9 @@ class Entity:
         }
 
     def component(self, key: str) -> dict:
-        """读一个组件的数据（**返回内部引用**，缺失返回空 dict——调用方勿改）。"""
+        """读取组件数据的副本；调用方不能通过返回值修改实体。"""
         data = self.components.get(key)
-        return data if isinstance(data, dict) else {}
+        return copy.deepcopy(data) if isinstance(data, dict) else {}
 
     def has_component(self, key: str) -> bool:
         """是否带某个组件 —— **这就是"有没有这条能力"**（D41）。

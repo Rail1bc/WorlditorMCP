@@ -445,13 +445,13 @@ function create() {
 
 function save() {
   if (!current.value) return;
+  // name/desc 走顶层键（后端折进 core:info）。空 name 也要发送：
+  // 后端将空串解释为删除名字，恢复 id 前 8 位的兜底显示。
   const patch = {
-    // name/desc 走顶层键（后端折进 core:info）。name 为空就**不发**——
-    // 空的 name 在语义上是"没设名字 → 展示回落 id 前 8 位"，而后端要求 name 非空。
+    name: edit.name.trim(),
     desc: edit.desc,
     components: cloneComponents(edit.components), // PATCH 里 components 是整体替换
   };
-  if (edit.name.trim()) patch.name = edit.name.trim();
   emit("update", current.value, patch);
 }
 

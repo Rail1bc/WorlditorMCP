@@ -103,7 +103,7 @@ class AuthMiddleware:
             return
         path = scope.get("path", "")
         is_public = path in self.public_exact or any(
-            path == p or path.startswith(p) for p in self.public_paths
+            path == p or path.startswith(f"{p}/") for p in self.public_paths
         )
         headers = {
             k.decode("latin-1").lower(): v.decode("latin-1")
@@ -286,6 +286,8 @@ async def _scene(request: Request) -> Response:
     entity = engine.get_entity(entity_id)
     if entity is None:
         raise HTTPException(404, f"实体不存在：{entity_id}")
+    if not engine.map_visible_to(entity.map_id, info.entity_id, info.tier):
+        raise HTTPException(404, "场景不存在")
     scene = engine._build_scene(entity)
     peers = [
         p

@@ -110,7 +110,10 @@ function addTarget(p) {
 }
 
 function targetExists(t) {
-  const key = `${t.map_id || props.mapId}:${t.row}:${t.col}`;
+  // This panel only receives locations for the current map. A cross-map target
+  // cannot be proven absent here, so leave it valid until the server validates it.
+  if (t.map_id && t.map_id !== props.mapId) return true;
+  const key = `${props.mapId}:${t.row}:${t.col}`;
   return props.locationKeys.includes(key);
 }
 

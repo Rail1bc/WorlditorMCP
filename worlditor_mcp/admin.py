@@ -263,7 +263,10 @@ async def _world_assign_map(request: Request) -> Response:
 async def _world_unassign_map(request: Request) -> Response:
     _require_admin(request)
     data = await _json_body(request)
-    await _engine(request).unassign_map(str(data.get("map_id") or ""))
+    try:
+        await _engine(request).unassign_map(str(data.get("map_id") or ""))
+    except WorldError as e:
+        return _err(e)
     return _ok()
 
 

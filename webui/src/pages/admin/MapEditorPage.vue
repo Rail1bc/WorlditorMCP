@@ -221,7 +221,13 @@ function tileAtKey(key) {
 
 function syncFromHash() {
   const parts = location.hash.replace(/^#/, "").split("/").filter(Boolean);
-  mapId.value = parts[2] || "";
+  // Router segments are URI encoded so map ids may contain spaces, slashes, etc.
+  // Decode only the segment and keep malformed hashes from breaking the editor.
+  try {
+    mapId.value = parts[2] ? decodeURIComponent(parts[2]) : "";
+  } catch {
+    mapId.value = "";
+  }
   const next = parts[3] || "map";
   tab.value = TABS.some((t) => t.key === next) ? next : "map";
   // "#/admin/maps/{map}/{tab}/{row}/{col}"：全局实体页的「定位」跳过来时带的选中格。

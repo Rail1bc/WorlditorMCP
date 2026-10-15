@@ -125,10 +125,23 @@ class PlayLoader:
         await self._load_disabled_state()
         self._load_errors = {}
         specs: dict[str, tuple[PlaySpec, Path, bool]] = {}
+        conflicts: dict[str, list[Path]] = {}
         for path, builtin in self.discover():
             spec = load_play_spec(path)
-            if spec is not None:
-                specs[spec.play_id] = (spec, path, builtin)
+            if spec is None:
+                continue
+            if spec.play_id in specs:
+                conflicts.setdefault(spec.play_id, [specs[spec.play_id][1]]).append(
+                    path
+                )
+                continue
+            specs[spec.play_id] = (spec, path, builtin)
+        for play_id, paths in conflicts.items():
+            self._load_errors[play_id] = "play_id 冲突：" + "、".join(
+                str(p) for p in paths
+            )
+            specs.pop(play_id, None)
+            logger.error("[worlditor] 拒绝重复 play_id %s：%s", play_id, paths)
         loaded: list[PlayInfo] = []
         for play_id in self._topo_order(specs):
             spec, path, builtin = specs[play_id]

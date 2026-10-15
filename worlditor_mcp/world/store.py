@@ -1,15 +1,15 @@
 """SQLite 持久化层（aiosqlite，真异步；设计见 DESIGN.md）。
 
-全部表（地图/地块/连接/模板 + 实体/物品/数据 KV/日志 + 世界/组织/身份/凭据）
+全部表（地图/地块/连接/模板 + 实体/数据 KV/日志 + 世界/组织/身份/凭据）
 建在同一个 world.db；启动时全量载入内存（读路径快、免锁），写操作由调用方
 （WorldEngine）在实例锁内执行，本类不自行加锁。
 
-播种（幂等）：maps 空 → 种子世界（41 地块）；entities 空 → 种子实体
-（商贩 / 告示牌 / 木门）；items 空 → 种子物品（喇叭）。
+内核不播种世界内容；地图与实体由玩法包或管理端创建。
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import uuid
 from pathlib import Path
@@ -542,10 +542,11 @@ class WorldStore:
             self.entities[entity.id] = entity
         cur = await self._conn.execute("SELECT * FROM play_data")
         for row in await cur.fetchall():
+            where = f"play_data({row['namespace']!r}, {row['key']!r})"
             try:
                 value = json.loads(row["value_json"])
-            except (ValueError, TypeError):
-                value = None
+            except (ValueError, TypeError) as e:
+                raise self._incompatible_error(where, "value_json", e) from e
             self.play_data[(row["namespace"], row["key"])] = value
         cur = await self._conn.execute("SELECT * FROM accounts")
         for row in await cur.fetchall():
@@ -559,17 +560,22 @@ class WorldStore:
         # 世界与组织（D15）
         cur = await self._conn.execute("SELECT * FROM worlds")
         for row in await cur.fetchall():
+            where = f"worlds.id={row['id']!r}"
             try:
                 play_ids = json.loads(row["play_ids_json"] or "[]")
-            except (ValueError, TypeError):
-                play_ids = []
+            except (ValueError, TypeError) as e:
+                raise self._incompatible_error(where, "play_ids_json", e) from e
+            if not isinstance(play_ids, list) or not all(
+                isinstance(play_id, str) and play_id for play_id in play_ids
+            ):
+                raise self._incompatible_error(
+                    where, "play_ids_json", ValueError("必须是非空字符串数组")
+                )
             self.worlds[row["id"]] = World(
                 id=row["id"],
                 name=row["name"],
                 desc=row["desc"] or "",
-                play_ids=[str(p) for p in play_ids]
-                if isinstance(play_ids, list)
-                else [],
+                play_ids=play_ids,
             )
         cur = await self._conn.execute("SELECT * FROM world_folders")
         for row in await cur.fetchall():
@@ -747,17 +753,25 @@ class WorldStore:
         if not entities:
             return
         revision = self.revision + 1  # _commit 会把它推进到同一个值
+        snapshots = []
+        rows = []
         for entity in entities:
-            entity.revision = revision
-            entity.changed_tick = self.tick
+            snapshot = copy.deepcopy(entity)
+            snapshot.revision = revision
+            snapshot.changed_tick = self.tick
+            snapshots.append(snapshot)
+            rows.append(entity_db_row(snapshot))
         await self._conn.executemany(
             "INSERT OR REPLACE INTO entities("
             "id, components_json, revision, changed_tick"
             ") VALUES(?, ?, ?, ?)",
-            [entity_db_row(e) for e in entities],
+            rows,
         )
         await self._commit()
-        for entity in entities:
+        for entity, snapshot in zip(entities, snapshots):
+            # 保留现有调用方持有的对象身份，但只在事务成功后盖章并入表。
+            entity.revision = snapshot.revision
+            entity.changed_tick = snapshot.changed_tick
             self.entities[entity.id] = entity
 
     async def delete_entity(self, entity_id: str) -> None:
@@ -940,6 +954,20 @@ class WorldStore:
         )
         await self._commit()
         self.invite_codes[code]["used"] = used
+        return True
+
+    async def consume_invite_code(self, code: str) -> bool:
+        """原子消费未使用的邀请码；调用方必须持有引擎锁。"""
+        assert self._conn is not None
+        if code not in self.invite_codes:
+            return False
+        cursor = await self._conn.execute(
+            "UPDATE invite_codes SET used = 1 WHERE code = ? AND used = 0", (code,)
+        )
+        if cursor.rowcount != 1:
+            return False
+        await self._commit()
+        self.invite_codes[code]["used"] = True
         return True
 
     # ---------- 世界元数据（world_meta 表） ----------

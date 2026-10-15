@@ -137,11 +137,10 @@ class IdentityService:
         username = self._check_username(username)
         self._check_password(password)
         is_admin = bool(admin_key and self.admin_key and admin_key == self.admin_key)
-        if not is_admin:
-            # 管理员注册通道（admin_key）豁免模式限制——否则 invite 模式下
-            # 第一个管理员无法注册（鸡生蛋）
-            self._check_invite(self.auth_mode, invite_code)
         async with self._engine._lock:
+            if not is_admin:
+                # 校验必须与消费处于同一引擎锁内，避免并发复用一次性邀请码。
+                self._check_invite(self.auth_mode, invite_code)
             if self._engine.store.get_account_by_username(username) is not None:
                 raise IdentityError("用户名已存在")
             role = "admin" if is_admin else "user"
@@ -162,7 +161,9 @@ class IdentityService:
                 username=username,
             )
             if invite_code:
-                await self._engine.store.set_invite_code_used(invite_code)
+                consumed = await self._engine.store.consume_invite_code(invite_code)
+                if not consumed:
+                    raise IdentityError("邀请码无效或已使用")
             return token
 
     async def register_agent(
@@ -179,8 +180,8 @@ class IdentityService:
         name = self._check_username(name)
         if not self.allow_agent_register:
             raise IdentityError("agent 自助注册已关闭，请联系管理员")
-        self._check_invite(self.auth_mode, invite_code)
         async with self._engine._lock:
+            self._check_invite(self.auth_mode, invite_code)
             entity = await self._materialize(name)
             token = await self._issue_token(
                 entity_id=entity.id if entity is not None else "",
@@ -189,7 +190,9 @@ class IdentityService:
                 username=name,
             )
             if invite_code:
-                await self._engine.store.set_invite_code_used(invite_code)
+                consumed = await self._engine.store.consume_invite_code(invite_code)
+                if not consumed:
+                    raise IdentityError("邀请码无效或已使用")
             return token
 
     async def login(self, username: str, password: str) -> TokenInfo:

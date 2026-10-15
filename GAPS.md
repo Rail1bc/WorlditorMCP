@@ -23,7 +23,7 @@
 - **成本**：~20 行内核 + /state 过滤 + 测试（事实层轻扩展，不违背红线）
 - **状态**：⚠ **部分解决**（地图 `visible` 字段 + `/state` 在场过滤，admin 全见）；
   文档方案里的"`list_maps` 带可见性过滤参数"**没做**（`engine.list_maps()` 无参数），
-  `/scene`、SSE、`interact` 仍未过滤 → 真实尾巴记在 **G17**
+  `/scene` 已补目标地图授权；SSE、`interact` / `list_actions` 仍未过滤 → 真实尾巴记在 **G17**
 
 ### G2 delete_map 缺失
 - **触发**：自有世界玩法——家地图生命周期需要删除，但 engine 只有

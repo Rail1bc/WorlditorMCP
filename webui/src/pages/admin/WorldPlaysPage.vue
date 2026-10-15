@@ -479,7 +479,13 @@ async function useCustom() {
 
 async function toggle(playId) {
   if (!world.value) return;
-  const ids = new Set(mode.value === "all" ? loadedPlays.value.map((p) => p.play_id) : playIds.value);
+  // Drop ids for uninstalled packages while editing a custom list. Otherwise every
+  // subsequent toggle preserves stale entries and the warning never clears.
+  const ids = new Set(
+    (mode.value === "all" ? loadedPlays.value.map((p) => p.play_id) : playIds.value).filter(
+      (id) => plays.value.some((p) => p.play_id === id)
+    )
+  );
   const next = ids.has(playId);
   if (next) ids.delete(playId);
   else ids.add(playId);

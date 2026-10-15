@@ -475,10 +475,10 @@ def test_events_and_world_log(tmp_path):
         await engine.move(player.id, "up")
         assert ("say", "hello") in seen
         assert ("move", player.id, "default", 0, 0) in seen
-        # world_log：自定义事件/移动已写入
+        # world_log：只有显式 log=True 的自定义事件写入；高频移动事件默认不写
         logs = await engine.store.list_world_log(limit=50)
         kinds = {log["kind"] for log in logs}
-        assert "my_say" in kinds and "on_entity_move" in kinds
+        assert "my_say" in kinds and "on_entity_move" not in kinds
         assert all(log["data"].get("event") for log in logs)
 
     _run(_scenario(tmp_path, fn))

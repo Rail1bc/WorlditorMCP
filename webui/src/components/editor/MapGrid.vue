@@ -27,10 +27,13 @@
       @mousedown="onCanvasDown"
       @mouseleave="dragging = false"
     >
+      <p v-if="sparse" class="grid-warning">
+        地块坐标跨度过大，已切换为稀疏显示。
+      </p>
       <div ref="stageEl" class="stage" :style="stageStyle">
         <div
           class="grid"
-          :style="{ gridTemplateColumns: `repeat(${cols}, ${CELL}px)` }"
+          :style="{ gridTemplateColumns: `repeat(${renderedCols}, ${CELL}px)` }"
           @mousedown.stop="onGridDown"
         >
           <button
@@ -43,7 +46,7 @@
               primary: isPrimary(cellBox),
               picking: inRect(cellBox),
             }"
-            :style="{ width: `${CELL}px`, height: `${CELL}px` }"
+            :style="{ width: `${CELL}px`, height: `${CELL}px`, ...(sparse ? { gridColumn: cellBox.gridColumn, gridRow: cellBox.gridRow } : {}) }"
             :data-cell="cellBox.key"
             @mouseenter="onMouseEnter(cellBox)"
             @click="onClick(cellBox, $event)"
@@ -120,6 +123,8 @@ const maxCol = computed(() =>
 );
 const cols = computed(() => maxCol.value - minCol.value + 1);
 const rows = computed(() => maxRow.value - minRow.value + 1);
+const sparse = computed(() => rows.value * cols.value > 10000);
+const renderedCols = computed(() => sparse.value ? Math.max(1, props.locations.length) : cols.value);
 
 const stageStyle = computed(() => ({
   transform: `translate(${tx.value}px, ${ty.value}px) scale(${scale.value})`,
@@ -134,6 +139,20 @@ const cells = computed(() => {
     if (!p) continue; // D36：不在世界上的实体不上网格（它们没有格子可画）
     const key = `${p.row}:${p.col}`;
     (ents[key] = ents[key] || []).push(e);
+  }
+  if (sparse.value) {
+    return props.locations.map((loc, index) => {
+      const key = `${loc.row}:${loc.col}`;
+      return {
+        row: loc.row,
+        col: loc.col,
+        key,
+        loc,
+        entities: ents[key] || [],
+        gridColumn: index + 1,
+        gridRow: 1,
+      };
+    });
   }
   const out = [];
   for (let r = minRow.value; r <= maxRow.value; r += 1) {

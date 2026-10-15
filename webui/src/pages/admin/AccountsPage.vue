@@ -187,7 +187,14 @@ async function toggleDetails(a) {
   }
 }
 
+async function refreshDetails(accountId) {
+  if (!accountId || openId.value !== accountId) return;
+  const data = await apiGet(`/admin/accounts/${accountId}/tokens`);
+  detailsTokens.value = data.tokens || [];
+}
+
 async function revokeToken(token) {
+  const accountId = openId.value;
   const ok = await askConfirm({
     title: "吊销凭据",
     danger: true,
@@ -197,7 +204,7 @@ async function revokeToken(token) {
   if (!ok) return;
   try {
     await apiDelete(`/admin/tokens/${token}`);
-    await toggleDetails(openId.value);
+    await refreshDetails(accountId);
     await load();
   } catch (e) {
     error.value = e.message;

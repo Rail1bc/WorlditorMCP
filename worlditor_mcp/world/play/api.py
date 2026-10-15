@@ -7,6 +7,7 @@ API 原语操作；API 版本随内核版本绑定。
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from ..engine import WorldEngine
@@ -203,12 +204,16 @@ class WorlditorPlayAPI:
     # ---------- 只读 ----------
 
     def get_entity(self, entity_id: str):
-        return self._engine.get_entity(entity_id)
+        """返回实体快照，禁止玩法包直接修改内核对象。"""
+        entity = self._engine.get_entity(entity_id)
+        return copy.deepcopy(entity) if entity is not None else None
 
     def list_entities(
         self, map_id=None, row=None, col=None, viewer_id: str | None = None
     ) -> list:
-        return self._engine.list_entities(map_id, row, col, viewer_id=viewer_id)
+        return copy.deepcopy(
+            self._engine.list_entities(map_id, row, col, viewer_id=viewer_id)
+        )
 
     def query_entities(
         self,
@@ -245,18 +250,26 @@ class WorlditorPlayAPI:
           ``api.world_revision()``）或 ``changed_since_tick``（窗口粒度，宁可多报）。
         - 严格校验：拼错的地图/世界、非法组件名会报错，而不是"查到空"。
         """
-        return self._engine.query_entities(
-            tags=tags,
-            exclude_tags=exclude_tags,
-            map_id=map_id,
-            world_id=world_id,
-            row=row,
-            col=col,
-            viewer_id=viewer_id,
-            changed_since_tick=changed_since_tick,
-            changed_since_revision=changed_since_revision,
-            where=where,
-            limit=limit,
+        safe_where = None
+        if where is not None:
+
+            def safe_where(entity):
+                return where(copy.deepcopy(entity))
+
+        return copy.deepcopy(
+            self._engine.query_entities(
+                tags=tags,
+                exclude_tags=exclude_tags,
+                map_id=map_id,
+                world_id=world_id,
+                row=row,
+                col=col,
+                viewer_id=viewer_id,
+                changed_since_tick=changed_since_tick,
+                changed_since_revision=changed_since_revision,
+                where=safe_where,
+                limit=limit,
+            )
         )
 
     def current_tick(self) -> int:
