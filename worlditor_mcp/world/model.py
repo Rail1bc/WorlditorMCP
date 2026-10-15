@@ -925,13 +925,28 @@ class TagSpec:
     - ``implicit``：来自 kind 注册（True）还是显式标签注册（False）——只影响展示。
     """
 
-    tag: str
+    key: str
     interactions: tuple[str, ...] = ()
     label: str = ""
     play_id: str = ""
     fields: list[dict] = field(default_factory=list)
     categories: tuple[str, ...] = ()
     implicit: bool = False
+
+    @property
+    def source(self) -> str:
+        """组件来源；组件键是唯一事实来源。"""
+        return self.key.split(":", 1)[0]
+
+    @property
+    def name(self) -> str:
+        """组件的裸名部分。"""
+        return self.key.split(":", 1)[1]
+
+    @property
+    def tag(self) -> str:
+        """旧读点别名；新代码应使用 ``key``。"""
+        return self.key
 
 
 # 旧名（v0.2–v0.4，kind 时代）：D18 起 kind 只是"隐式同名标签"，保留别名供外部引用

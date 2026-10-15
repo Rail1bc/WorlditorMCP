@@ -71,7 +71,7 @@ def test_move_location_rewrites_refs_and_entities(tmp_path):
         # 真实地名/实体断言 → 用演示世界（内容来自内置世界包）
         await install_demo_world(engine)
         # 把告示牌移到 (-1,0)（地块移动前），再移动地块 → 实体跟随
-        sign = [e for e in engine.list_entities() if e.kind == "sign"][0]
+        sign = [e for e in engine.list_entities() if e.kind == "local:sign"][0]
         await engine.move_entity(sign.id, "default", -1, 0)
         # 把 (-1,0) 步行街·南街口移到 (10, 0)
         await engine.move_location("default", -1, 0, 10, 0)
@@ -155,7 +155,7 @@ def test_update_entity_fields(tmp_path):
     async def fn(engine: WorldEngine):
         # 告示牌实体由演示世界包提供
         await install_demo_world(engine)
-        sign = [e for e in engine.list_entities() if e.kind == "sign"][0]
+        sign = [e for e in engine.list_entities() if e.kind == "local:sign"][0]
         changed = []
         engine.register_world_event(
             "on_entity_changed", lambda api, e, c: changed.append(e.id)

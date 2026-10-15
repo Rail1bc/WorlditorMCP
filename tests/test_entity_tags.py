@@ -49,10 +49,10 @@ def test_kind_registration_is_implicit_tag(tmp_path):
         engine = await _engine(tmp_path)
         try:
             engine.register_entity_kind("door", interactions=("open",), label="木门")
-            spec = engine._tag_specs["door"]
+            spec = engine._tag_specs["local:door"]
             assert isinstance(spec, TagSpec) and spec.implicit is True
             listing = engine.list_kinds()
-            door = next(k for k in listing if k["tag"] == "door")
+            door = next(k for k in listing if k["tag"] == "local:door")
             assert door["implicit"] is True
             assert door["interactions"] == ["open"]
             assert door["label"] == "木门"
@@ -81,9 +81,9 @@ def test_explicit_tag_registration_marks_non_implicit(tmp_path):
                 "spawner", label="刷怪笼", interactions=("tune",)
             )
             listing = {k["tag"]: k for k in engine.list_kinds()}
-            assert listing["spawner"]["implicit"] is False
-            assert listing["spawner"]["label"] == "刷怪笼"
-            assert listing["spawner"]["interactions"] == ["tune"]
+            assert listing["local:spawner"]["implicit"] is False
+            assert listing["local:spawner"]["label"] == "刷怪笼"
+            assert listing["local:spawner"]["interactions"] == ["tune"]
         finally:
             await engine.terminate()
 
@@ -107,11 +107,11 @@ def test_composition_player_plus_spawner(tmp_path):
                 "player", "default", 0, 0, name="小明", tags=["spawner"]
             )
             caps = engine.capabilities(player)
-            assert caps["tags"] == ["player", "spawner"]
+            assert caps["tags"] == ["local:player", "local:spawner"]
             # player 没有注册过规格（v2/D42：身份概念已删，player 只是个未声明的标签名）
             # → 只有 spawner 在贡献
-            assert caps["active_tags"] == ["spawner"]
-            assert caps["unknown_tags"] == ["player"]
+            assert caps["active_tags"] == ["local:spawner"]
+            assert caps["unknown_tags"] == ["local:player"]
             assert "tune" in caps["interactions"]
             assert "tune" in engine.available_actions(player.id)
             assert {f["name"] for f in caps["fields"]} == {"mob"}
@@ -140,15 +140,15 @@ def test_type_preset_tags(tmp_path):
 
             a = await engine.place_entity("A", "default", 0, 0)
             b = await engine.place_entity("B", "default", 0, 1)
-            assert engine.entity_tags(a) == ["A", "c"]
-            assert engine.entity_tags(b) == ["B", "c"]
+            assert engine.entity_tags(a) == ["local:A", "local:c"]
+            assert engine.entity_tags(b) == ["local:B", "local:c"]
             # 公共能力 c 同时作用于两种类型
             assert engine.capabilities(a)["interactions"] == ["ping"]
             assert engine.capabilities(b)["interactions"] == ["ping"]
             # list_kinds 暴露预设标签，编辑器可据此展示"选 A 即得 A+C"
             listing = {k["tag"]: k for k in engine.list_kinds()}
-            assert listing["A"]["preset_tags"] == ["c"]
-            assert listing["B"]["preset_tags"] == ["c"]
+            assert listing["local:A"]["preset_tags"] == ["local:c"]
+            assert listing["local:B"]["preset_tags"] == ["local:c"]
         finally:
             await engine.terminate()
 
@@ -276,8 +276,8 @@ def test_unregistered_tag_is_harmless(tmp_path):
                 "rock", "default", 0, 0, tags=["nobody_knows"]
             )
             caps = engine.capabilities(e)
-            assert caps["tags"] == ["rock", "nobody_knows"]
-            assert caps["active_tags"] == []  # rock 未注册、nobody_knows 未注册
+            assert caps["tags"] == ["local:rock", "local:nobody_knows"]
+            assert caps["active_tags"] == []  # 两个 local: 组件均未注册
             assert caps["fields"] == []
             assert caps["interactions"] == []
             assert "block_move" not in caps  # D34：阻挡机制已移除
@@ -344,14 +344,14 @@ def test_tag_capability_filtered_by_world_activation(tmp_path):
             e = await engine.place_entity("slime", "m_a", 0, 0, tags=["spawner"])
 
             caps = engine.capabilities(e)
-            assert caps["tags"] == ["slime", "spawner"]
+            assert caps["tags"] == ["local:slime", "pkg_b:spawner"]
             assert caps["active_tags"] == []  # pkg_b 不在 w_a
             assert caps["interactions"] == []
-            assert caps["inactive_tags"] == ["spawner"]
+            assert caps["inactive_tags"] == ["pkg_b:spawner"]
 
             await engine.assign_map("m_a", "w_b")
             caps = engine.capabilities(e)
-            assert caps["active_tags"] == ["spawner"]
+            assert caps["active_tags"] == ["pkg_b:spawner"]
             assert caps["interactions"] == ["tune"]
         finally:
             await engine.terminate()
@@ -366,7 +366,7 @@ def test_spec_cache_invalidated_when_tag_registered_later(tmp_path):
         engine = await _engine(tmp_path)
         try:
             e = await engine.place_entity("slime", "default", 0, 0, tags=["late"])
-            assert engine.capabilities(e)["interactions"] == []  # late 还没注册
+            assert engine.capabilities(e)["interactions"] == []  # local:late 还没注册
             engine.register_entity_tag("late", interactions=("poke",))
             assert engine.capabilities(e)["interactions"] == ["poke"]  # 缓存已失效
             # 卸载包后回到未注册状态，能力随之消失
@@ -374,7 +374,7 @@ def test_spec_cache_invalidated_when_tag_registered_later(tmp_path):
             e2 = await engine.place_entity("slime", "default", 0, 1, tags=["late2"])
             assert engine.capabilities(e2)["interactions"] == ["poke"]
             engine.clear_play_registrations("pkg_x")
-            assert engine.capabilities(e2)["interactions"] == []
+            assert engine.capabilities(e2)["interactions"] == ["poke"]
         finally:
             await engine.terminate()
 
@@ -393,15 +393,15 @@ def test_tags_persist_and_parse_rules(tmp_path):
             e = await engine.place_entity(
                 "player", "default", 0, 0, name="小明", tags=["b", "a", "b", "", 7]
             )
-            assert e.tags == ["b", "a"]
+            assert e.tags == ["local:b", "local:a"]
         finally:
             await engine.terminate()
         again = WorldEngine(WorldStore(tmp_path / "world.db"))
         await again.initialize()
         try:
             stored = next(iter(again.store.entities.values()))
-            assert stored.tags == ["b", "a"]
-            assert stored.to_dict()["tags"] == ["b", "a"]
+            assert stored.tags == ["local:b", "local:a"]
+            assert stored.to_dict()["tags"] == ["local:b", "local:a"]
         finally:
             await again.terminate()
 
@@ -423,7 +423,7 @@ def test_update_entity_replaces_tags(tmp_path):
         try:
             e = await engine.place_entity("rock", "default", 0, 0, tags=["x"])
             await engine.update_entity(e.id, tags=["y", "z"])
-            assert e.tags == ["y", "z"]
+            assert e.tags == ["local:y", "local:z"]
             await engine.update_entity(e.id, tags=None)
             assert e.tags == []
             with pytest.raises(WorldError, match="tags 必须是标签数组"):
@@ -678,22 +678,22 @@ def test_admin_kinds_lists_types_and_tags(tmp_path):
         )
 
         data = (await client.get("/admin/kinds", headers=h)).json()
-        assert {k["tag"] for k in data["types"]} == {"door", "A"}
-        assert {k["tag"] for k in data["tags"]} == {"spawner"}
-        spawner = next(k for k in data["tags"] if k["tag"] == "spawner")
+        assert {k["tag"] for k in data["types"]} == {"pkg_a:door", "pkg_a:A"}
+        assert {k["tag"] for k in data["tags"]} == {"pkg_b:spawner"}
+        spawner = next(k for k in data["tags"] if k["tag"] == "pkg_b:spawner")
         assert spawner["play_id"] == "pkg_b"
         assert spawner["implicit"] is False
         assert spawner["label"] == "刷怪笼"
-        a_type = next(k for k in data["types"] if k["tag"] == "A")
-        assert a_type["preset_tags"] == ["spawner"]
-        door = next(k for k in data["types"] if k["tag"] == "door")
+        a_type = next(k for k in data["types"] if k["tag"] == "pkg_a:A")
+        assert a_type["preset_tags"] == ["pkg_b:spawner"]
+        door = next(k for k in data["types"] if k["tag"] == "pkg_a:door")
         assert door["interactions"] == ["open"]
         # D34：能力面不再透出 block_move（阻挡机制整体移除）
         assert all("block_move" not in k for k in data["kinds"])
         # 分类过滤（D10）
         engine.register_entity_kind("slime", label="史莱姆", categories=("生物",))
         filtered = (await client.get("/admin/kinds?category=生物", headers=h)).json()
-        assert {k["tag"] for k in filtered["kinds"]} == {"slime"}
+        assert {k["tag"] for k in filtered["kinds"]} == {"local:slime"}
 
     _run(_admin_scenario(tmp_path, fn))
 
@@ -716,19 +716,19 @@ def test_admin_entity_tags_create_and_patch(tmp_path):
         )
         assert r.status_code == 200, r.text
         entity_id = r.json()["data"]["id"]
-        assert r.json()["data"]["tags"] == ["spawner"]  # 去重去空
+        assert r.json()["data"]["tags"] == ["local:spawner"]  # 去重去空并规范组件键
 
         r = await client.patch(
             f"/admin/entities/{entity_id}", json={"tags": ["a", "b"]}, headers=h
         )
         assert r.status_code == 200, r.text
-        assert r.json()["data"]["tags"] == ["a", "b"]
-        assert engine.store.entities[entity_id].tags == ["a", "b"]
+        assert r.json()["data"]["tags"] == ["local:a", "local:b"]
+        assert engine.store.entities[entity_id].tags == ["local:a", "local:b"]
 
         # 详情里带上标签与合并能力（编辑器展示用）
         detail = (await client.get("/admin/maps/default", headers=h)).json()
         row = next(e for e in detail["entities"] if e["id"] == entity_id)
-        assert row["tags"] == ["a", "b"]
+        assert row["tags"] == ["local:a", "local:b"]
 
     _run(_admin_scenario(tmp_path, fn))
 

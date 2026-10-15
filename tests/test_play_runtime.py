@@ -238,7 +238,9 @@ def test_world_activation_filter(tmp_path):
         await loader.load_all()
         try:
             # 默认世界 play_ids 空 = 全部激活 → 商贩可 talk
-            merchant = [e for e in engine.list_entities() if e.kind == "merchant"][0]
+            merchant = [
+                e for e in engine.list_entities() if e.kind == "local:merchant"
+            ][0]
             player = await engine.place_entity("player", "default", 0, 0, name="小明")
             result = await engine.interact(player.id, merchant.id, "talk")
             assert "阿福" in result.text

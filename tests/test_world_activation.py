@@ -309,7 +309,7 @@ def test_kind_actions_follow_world(tmp_path):
             caps = engine.capabilities(wall)
             assert caps["interactions"] == []
             assert caps["active_tags"] == []
-            assert caps["inactive_tags"] == ["wall"]
+            assert caps["inactive_tags"] == ["pkg_wall:wall"]
             with pytest.raises(WorldError, match="没有"):
                 await engine.interact(player.id, wall.id, "knock")
         finally:

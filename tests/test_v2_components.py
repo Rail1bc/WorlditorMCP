@@ -127,6 +127,31 @@ def test_component_write_primitives_are_dispatchable():
         assert name not in OVERRIDABLE_PRIMITIVES
 
 
+# ---------- D41-a：组件声明与裸名解析 ----------
+
+
+def test_d41_component_keys_resolve_and_coexist(tmp_path):
+    async def fn():
+        engine = WorldEngine(WorldStore(tmp_path / "world.db"))
+        await engine.initialize()
+        await seed_test_world(engine)
+        try:
+            engine.register_entity_tag("merchant", play_id="pkg_a")
+            merchant = await engine.place_entity("merchant", "default", 0, 0)
+            assert merchant.kind == "pkg_a:merchant"
+            assert engine.entity_tags(merchant) == ["pkg_a:merchant"]
+
+            engine.register_entity_tag("merchant", play_id="pkg_b")
+            with pytest.raises(WorldError, match="多个声明者"):
+                await engine.place_entity("merchant", "default", 0, 1)
+            qualified = await engine.place_entity("pkg_b:merchant", "default", 0, 1)
+            assert qualified.kind == "pkg_b:merchant"
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
 # ---------- 已移除面（D34 / D37 / D42）：防止静默回归 ----------
 
 
@@ -280,7 +305,9 @@ def test_item_type_is_now_a_component_declaration(tmp_path):
                 label="苹果",
                 fields=[{"name": "heal", "label": "回复", "type": "int", "default": 3}],
             )
-            row = next(k for k in api.list_kinds() if k["tag"] == "apple")
+            row = next(
+                k for k in api.list_kinds() if k["tag"] == "worlditor_play_food:apple"
+            )
             assert row["label"] == "苹果"
             assert [f["name"] for f in row["fields"]] == ["heal"]
             assert row["play_id"] == "worlditor_play_food"  # 归属仍在（卸载可清）

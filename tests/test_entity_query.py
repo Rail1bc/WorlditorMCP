@@ -103,7 +103,7 @@ def test_query_respects_world_activation(tmp_path):
             )
             # 能力面：标签在该世界不活跃（D21）
             caps = engine.capabilities(entity)
-            assert "poisoned" in caps["inactive_tags"]
+            assert "pkg_poison:poisoned" in caps["inactive_tags"]
             # 查询面：能力不存在 → 不匹配（与 available_actions 同源）
             assert engine.query_entities(tags=["poisoned"]) == []
             assert _ids(engine.query_entities(exclude_tags=["poisoned"])) == {entity.id}
@@ -143,7 +143,9 @@ def test_query_deactivated_play_tag_does_not_match(tmp_path):
             assert _ids(engine.query_entities(tags=["merchant"])) == {merchant.id}
             # 真卸载（purge）：归属记忆清掉 → 标签回到"无声明者的纯数据"
             await loader.uninstall("worlditor_play_demo")
-            assert _ids(engine.query_entities(tags=["merchant"])) == {merchant.id}
+            assert _ids(
+                engine.query_entities(tags=["worlditor_play_demo:merchant"])
+            ) == {merchant.id}
         finally:
             await engine.terminate()
 

@@ -341,7 +341,7 @@ def test_copy_map_preserves_entity_tags(tmp_path):
             await engine.copy_map("m1", "m1_copy", with_entities=True)
             copied = engine.list_entities(map_id="m1_copy")
             assert len(copied) == 1
-            assert copied[0].tags == ["spawner", "strong"]
+            assert copied[0].tags == ["local:spawner", "local:strong"]
             assert copied[0].tags == source.tags
             assert copied[0].id != source.id  # 是新实体，不是同一个
         finally:
@@ -894,13 +894,13 @@ def test_identity_entity_kind_is_locked(tmp_path):
             await _world_with_two_maps(engine)
             npc = await engine.place_entity("merchant", "m1", 0, 0, name="NPC")
             await engine.update_entity(npc.id, kind="sign")
-            assert npc.kind == "sign"
+            assert npc.kind == "local:sign"
             # 绑了账户的实体也能改 kind（D42 前会拒绝）——kind 不再是判据
             player = await engine.place_entity(
                 "player", "m1", 0, 1, name="小明", user_id="acct_1"
             )
             await engine.update_entity(player.id, kind="statue")
-            assert player.kind == "statue"
+            assert player.kind == "local:statue"
             # **但红线仍在**：绑账户的实体依然不能被 remove（判据是 core:account）
             with pytest.raises(WorldError, match="绑定了账户"):
                 await engine.remove_entity(player.id)

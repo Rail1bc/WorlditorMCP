@@ -250,7 +250,7 @@ async def _buy_apple(
     api: WorlditorPlayAPI, req: InteractionRequest
 ) -> InteractionResult:
     """买苹果：命令式 API 写法（D12：无 effects，handler 直接调原语）。"""
-    if req.target is None or req.target.kind != "merchant":
+    if req.target is None or req.target.kind != "local:merchant":
         return InteractionResult(text="这里没有卖苹果的。")
     gold = await api.get_data(req.entity_id, _GOLD, component=_STAT) or 0
     price = _SHOP.get(APPLE_ITEM, {}).get("price", 5)
@@ -269,7 +269,7 @@ async def _buy_megaphone(
     api: WorlditorPlayAPI, req: InteractionRequest
 ) -> InteractionResult:
     """买喇叭：命令式 API 写法（A1：两种写法演示）。"""
-    if req.target is None or req.target.kind != "merchant":
+    if req.target is None or req.target.kind != "local:merchant":
         return InteractionResult(text="这里没有卖喇叭的。")
     gold = await api.get_data(req.entity_id, _GOLD, component=_STAT) or 0
     price = _SHOP.get(MEGAPHONE_ITEM, {}).get("price", 10)
@@ -305,7 +305,7 @@ async def _open(api: WorlditorPlayAPI, req: InteractionRequest) -> InteractionRe
     原实现靠 ``set_state(block_move=False)`` 解除阻挡——D33 起玩法包不得写
     ``core:``，且 D34 已整体移除阻挡机制，所以这里退化为一次普通的组件写。
     """
-    if req.target is None or req.target.kind != "door":
+    if req.target is None or req.target.kind != "local:door":
         return InteractionResult(text="这不是一扇能开的门。")
     if req.target.component(_DOOR).get("open"):
         return InteractionResult(text="木门已经开着呢。")
@@ -342,7 +342,7 @@ async def _eat(api: WorlditorPlayAPI, req: InteractionRequest) -> InteractionRes
 async def _on_tick(api: WorlditorPlayAPI, dt: float) -> None:
     """演示 tick 状态机：告示牌定期更新"张贴时间"。"""
     for entity in api.list_entities():
-        if entity.kind == "sign":
+        if entity.kind == "local:sign":
             await api.set_data(
                 entity.id, "last_updated", time.strftime("%H:%M:%S"), component=_SIGN
             )
@@ -352,7 +352,7 @@ async def _on_entity_enter(
     api: WorlditorPlayAPI, entity, map_id: str, row: int, col: int
 ) -> None:
     """演示事件驱动行为：进入迷雾区域发自定义事件（说话下沉后，M2/D1）。"""
-    if row >= FOREST_ROW and entity.kind == "player":
+    if row >= FOREST_ROW and entity.kind == "local:player":
         await api.emit(
             "fog_enter",
             {"entity_id": entity.id, "row": row, "text": "雾越来越浓，你几乎看不清三米以外的东西……"},
@@ -366,7 +366,7 @@ async def _on_world_edited(api: WorlditorPlayAPI, what) -> None:
         entity = api.get_entity(what["entity_id"])
         if (
             entity is not None
-            and entity.kind == "player"
+            and entity.kind == "local:player"
             and _GOLD not in entity.component(_STAT)
         ):
             await api.set_data(entity.id, _GOLD, 100, component=_STAT)

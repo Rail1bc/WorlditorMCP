@@ -134,13 +134,13 @@ def test_snapshot_and_auth(tmp_path):
         resp = await client.get("/state", headers=h)
         data = resp.json()
         assert len(data["locations"]) == 41
-        assert any(e["kind"] == "merchant" for e in data["entities"])
+        assert any(e["kind"] == "local:merchant" for e in data["entities"])
         # D28：快照带全局变更号/tick，实体各自带 revision（客户端增量游标）
         assert data["revision"] == engine.revision > 0
         assert data["tick"] == engine.tick
         assert all(e["revision"] > 0 for e in data["entities"])
         # scene（商贩视角；无玩家在场 → peers 为空）
-        merchant = [e for e in data["entities"] if e["kind"] == "merchant"][0]
+        merchant = [e for e in data["entities"] if e["kind"] == "local:merchant"][0]
         resp = await client.get(
             "/scene", params={"entity_id": merchant["id"]}, headers=h
         )
@@ -288,7 +288,7 @@ def test_scene_actions_with_demo(tmp_path):
         read = (await client.get("/auth/read-token")).json()["token"]["token"]
         h = _auth(read)
         state = (await client.get("/state", headers=h)).json()
-        for kind in ("merchant", "sign", "door"):
+        for kind in ("local:merchant", "local:sign", "local:door"):
             entity = next(e for e in state["entities"] if e["kind"] == kind)
             resp = await client.get(
                 "/scene", params={"entity_id": entity["id"]}, headers=h
@@ -302,7 +302,7 @@ def test_scene_actions_with_demo(tmp_path):
         resp = await client.get("/scene", headers=_auth(info.token))
         peers = resp.json()["peers"]
         merchant_peer = next(
-            (p for p in peers if p["entity"]["kind"] == "merchant"), None
+            (p for p in peers if p["entity"]["kind"] == "local:merchant"), None
         )
         assert merchant_peer is not None
         action_names = {a["action"] for a in merchant_peer["actions"]}

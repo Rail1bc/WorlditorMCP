@@ -284,16 +284,18 @@ def test_kind_fields_and_merge(tmp_path):
             )
             api.add_kind_fields("monster", [{"name": "poison", "type": "bool"}])
             api.add_category_fields("生物", [{"name": "aggro", "type": "bool"}])
-            fields = engine.effective_fields("monster")
+            fields = engine.effective_fields("pkg_a:monster")
             assert {f["name"] for f in fields} == {"hp", "poison", "aggro"}
             assert next(f for f in fields if f["name"] == "hp")["default"] == 10
             # 分类字段对同分类其他 kind 生效
             api.register_entity_kind("slime", label="史莱姆", categories=("生物",))
-            assert {f["name"] for f in engine.effective_fields("slime")} == {"aggro"}
+            assert {f["name"] for f in engine.effective_fields("pkg_a:slime")} == {
+                "aggro"
+            }
             # list_kinds 过滤
             kinds = engine.list_kinds(category="生物")
-            assert {k["kind"] for k in kinds} == {"monster", "slime"}
-            assert "monster" in [k["kind"] for k in engine.list_kinds()]
+            assert {k["kind"] for k in kinds} == {"pkg_a:monster", "pkg_a:slime"}
+            assert "pkg_a:monster" in [k["kind"] for k in engine.list_kinds()]
             # 非法字段类型报错
             with pytest.raises(WorldError, match="字段类型"):
                 api.register_entity_kind("bad", fields=[{"name": "x", "type": "weird"}])
@@ -326,11 +328,15 @@ def test_component_declaration_fields_replaces_item_fields(tmp_path):
             )
             api.register_entity_tag("megaphone", label="喇叭")
             api.add_tag_fields("megaphone", [{"name": "price", "type": "int"}])
-            row = next(k for k in api.list_kinds() if k["tag"] == "sword")
+            row = next(k for k in api.list_kinds() if k["tag"] == "pkg_a:sword")
             assert row["fields"][0]["name"] == "atk"
             # add_tag_fields 落内存注册表，且记了归属（卸载可清）
-            assert "price" in {f.field["name"] for f in engine._tag_fields["megaphone"]}  # noqa: SLF001
-            assert {f.play_id for f in engine._tag_fields["megaphone"]} == {"pkg_a"}
+            assert "price" in {
+                f.field["name"] for f in engine._tag_fields["pkg_a:megaphone"]
+            }  # noqa: SLF001
+            assert {f.play_id for f in engine._tag_fields["pkg_a:megaphone"]} == {
+                "pkg_a"
+            }
         finally:
             await engine.terminate()
 

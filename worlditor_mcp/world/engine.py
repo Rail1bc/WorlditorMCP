@@ -397,6 +397,16 @@ def _clean_required(value: object, what: str) -> str:
     return value.strip()
 
 
+def _clean_component_name(value: object, what: str = "组件名") -> str:
+    """校验一个组件名或组件键，不把坏输入静默降级为 ``local:``。"""
+    name = _clean_required(value, what)
+    if ":" in name:
+        source, bare = name.split(":", 1)
+        if not source or not bare or ":" in bare:
+            raise WorldError(f"{what}必须是 source:name")
+    return name
+
+
 def _clean_tag_list(value: object, what: str) -> tuple[str, ...]:
     """标签筛选参数校验（D26：**不静默丢弃**——非字符串/空串直接报错）。
 
@@ -700,6 +710,50 @@ class WorldEngine:
     #   - `use_action` → interaction 名；`on_item_used` → 玩法包自定义事件
     # 见 DESIGN §12.8 / D37。
 
+    def declare_component(
+        self,
+        name: str,
+        *,
+        interactions: tuple[str, ...] = (),
+        label: str = "",
+        play_id: str = "",
+        fields: list[dict] | None = None,
+        categories: tuple[str, ...] = (),
+        implicit: bool = False,
+    ) -> str:
+        """声明一个组件；来源进入键，注册不再覆盖其它来源的同名组件。"""
+        name = _clean_component_name(name)
+        if ":" in name:
+            source, bare = name.split(":", 1)
+            if play_id and source != play_id:
+                raise WorldError("组件声明的 source 必须是调用玩法包自身")
+            if source == "core":
+                raise WorldError("玩法包不能声明 core: 组件")
+            key = name
+        else:
+            key = f"{play_id or 'local'}:{name}"
+        self._register_tag(
+            key,
+            interactions=interactions,
+            label=label,
+            play_id=play_id
+            or (key.split(":", 1)[0] if key.split(":", 1)[0] != "local" else ""),
+            fields=fields,
+            categories=categories,
+            implicit=implicit,
+        )
+        return key
+
+    def _resolve_component_key(self, name: str) -> str:
+        """按 D41 在写入/查询边界把裸名解析为稳定组件键。"""
+        name = _clean_component_name(name, "组件名")
+        if ":" in name:
+            return name
+        candidates = [key for key in self._tag_specs if key.split(":", 1)[1] == name]
+        if len(candidates) > 1:
+            raise WorldError(f"组件名有多个声明者：{name}（请使用完整键）")
+        return candidates[0] if candidates else f"local:{name}"
+
     def register_entity_kind(
         self,
         kind: str,
@@ -710,24 +764,9 @@ class WorldEngine:
         fields: list[dict] | None = None,
         categories: tuple[str, ...] = (),
         tags: tuple[str, ...] | list[str] = (),
-    ) -> None:
-        """注册实体类型（D18：**就是注册一条隐式同名标签** + 一组预设标签）。
-
-        v0.5 起 kind 退化为"预设的标志位"：它自身贡献一条名为 kind 的标签
-        （``implicit=True``），再通过 ``tags`` 声明该类型**预设**的额外标签
-        （"类型 A = {A, C}"）。老代码（只传 kind）行为完全不变——能力解析时
-        基底 kind 本来就会作为标签参与并集。
-
-        Args:
-            interactions: 默认可用的动作名（与全局注册表取并集）。
-            label: 文案（B1）；也是放置实体时未给名字的默认名。
-            play_id: 声明者（能力面按世界激活过滤，D21）。
-            fields: 字段 schema（D9，UI 通用渲染）。
-            categories: 分类标签（D10，宽松）。
-            tags: 该类型**预设**的额外标签（D18）。
-        """
-        kind = _clean_required(kind, "kind")
-        self._register_tag(
+    ) -> str:
+        """旧名别名：声明组件，并保留旧调用点的预设组件参数。"""
+        key = self.declare_component(
             kind,
             interactions=interactions,
             label=label,
@@ -736,9 +775,12 @@ class WorldEngine:
             categories=categories,
             implicit=True,
         )
-        if kind in self._type_tags or tags:
-            self._type_tags[kind] = parse_tags(tags)
+        if tags:
+            self._type_tags[key] = tuple(
+                self._resolve_component_key(t) for t in parse_tags(tags)
+            )
             self._invalidate_spec_cache()
+        return key
 
     def register_entity_type(
         self,
@@ -776,15 +818,13 @@ class WorldEngine:
         categories: tuple[str, ...] = (),
     ) -> None:
         """注册一条标签（D18：能力由标签承载；与类型共用一个命名空间）。"""
-        tag = _clean_required(tag, "标签名")
-        self._register_tag(
+        self.declare_component(
             tag,
             interactions=interactions,
             label=label,
             play_id=play_id,
             fields=fields,
             categories=categories,
-            implicit=False,
         )
 
     def _register_tag(
@@ -803,7 +843,7 @@ class WorldEngine:
         ):
             raise WorldError("interactions 必须是动作名列表")
         self._tag_specs[tag] = TagSpec(
-            tag=tag,
+            key=tag,
             interactions=tuple(interactions),
             label=str(label or ""),
             play_id=play_id,
@@ -828,7 +868,7 @@ class WorldEngine:
         这就是 v0.4 之前的 ``add_kind_fields``——语义随 D18 扩张：以前只影响
         ``kind`` 恰好等于该名字的实体，现在影响所有带该标签的实体（含实例标签）。
         """
-        tag = _clean_required(tag, "标签名")
+        tag = self._resolve_component_key(tag)
         if tag not in self._tag_specs:
             raise WorldError(f"标签（类型）未注册：{tag}")
         self._tag_fields.setdefault(tag, []).extend(
@@ -863,6 +903,7 @@ class WorldEngine:
         merged: dict[str, dict] = {}
         categories: list[str] = []
         for tag in tags:
+            tag = self._resolve_component_key(tag)
             spec = self._tag_specs.get(tag)
             if spec is None:
                 continue  # 未注册标签：无行为贡献（D19/R6）
@@ -890,9 +931,12 @@ class WorldEngine:
                 continue
             out.append(
                 {
-                    "kind": tag,  # 兼容旧字段名（= 标签名）
+                    "kind": tag,  # 兼容旧字段名（现在是完整组件键）
                     "tag": tag,
-                    "label": spec.label or tag,
+                    "key": spec.key,
+                    "source": spec.source,
+                    "name": spec.name,
+                    "label": spec.label or spec.name,
                     "interactions": list(spec.interactions),
                     "fields": self.effective_fields(tag),
                     "categories": list(spec.categories),
@@ -910,9 +954,11 @@ class WorldEngine:
         self._spec_cache.clear()
 
     def entity_tags(self, entity: Entity) -> list[str]:
-        """实体有效标签 = 基底 kind + 类型预设标签 + 实例 tags（去重保序）。"""
+        """实体有效组件键 = 基底键 + 预设键 + 实例键（去重保序）。"""
+        kind = self._resolve_component_key(entity.kind)
+        preset = self._type_tags.get(kind, ())
         return parse_tags(
-            [entity.kind, *self._type_tags.get(entity.kind, ()), *entity.tags]
+            [kind, *preset, *[self._resolve_component_key(t) for t in entity.tags]]
         )
 
     def _entity_specs(self, entity: Entity) -> tuple[TagSpec, ...]:
@@ -1574,10 +1620,10 @@ class WorldEngine:
         的区分现在由**存储位置**天然承担（本地实体模板落 `templates` 表、
         包注册的模板在 `_play_templates` 内存表，前者本就不受影响）。
         """
-        self._tag_specs = {
-            k: v for k, v in self._tag_specs.items() if v.play_id != play_id
-        }
         if purge:
+            self._tag_specs = {
+                k: v for k, v in self._tag_specs.items() if v.source != play_id
+            }
             self._tag_owner = {k: v for k, v in self._tag_owner.items() if v != play_id}
         self._type_tags = {
             k: v for k, v in self._type_tags.items() if k in self._tag_specs
@@ -2039,8 +2085,13 @@ class WorldEngine:
             当前为内存全表线性扫描（几千实体 = 微秒级）；若实体规模上万，
             在 store 加"标签 → 实体 id"倒排索引即可，本接口不变（见 GAPS G38）。
         """
-        required = _clean_tag_list(tags, "tags")
-        excluded = _clean_tag_list(exclude_tags, "exclude_tags")
+        required = tuple(
+            self._resolve_component_key(t) for t in _clean_tag_list(tags, "tags")
+        )
+        excluded = tuple(
+            self._resolve_component_key(t)
+            for t in _clean_tag_list(exclude_tags, "exclude_tags")
+        )
         if map_id is not None:
             map_id = self._map_arg(map_id)
             if map_id not in self.store.maps:
@@ -2530,7 +2581,8 @@ class WorldEngine:
         """
         async with self._lock:
             has_pos = self._resolve_new_position(map_id, row, col)
-            kind = _clean_required(kind, "kind")
+            kind = self._resolve_component_key(kind)
+            resolved_tags = [self._resolve_component_key(t) for t in parse_tags(tags)]
             spec = self._tag_specs.get(kind)
             if name is None or not str(name).strip():
                 name = (spec.label if spec and spec.label else kind) if spec else kind
@@ -2552,7 +2604,7 @@ class WorldEngine:
                 kind=kind,
                 components=payload,
                 last_active_ts=self._now_ts(),
-                tags=parse_tags(tags),
+                tags=resolved_tags,
             )
             await self.store.save_entity(entity)
             await self._emit(
@@ -3346,7 +3398,7 @@ class WorldEngine:
                 # `kind` 只是个标签。**连带修掉一个实测到的洞**：原检查只拦
                 # "身份实体改走"，不拦"普通实体改成 player"，而后者会让实体
                 # 立刻变成 `remove_entity` 删不掉的东西（编辑器里点一下类型就锁死）。
-                entity.kind = _clean_required(kind, "类型")
+                entity.kind = self._resolve_component_key(_clean_required(kind, "类型"))
             if components is not _UNSET:
                 entity.components = _clean_components(components)
             if name is not _UNSET or desc is not _UNSET:
@@ -3369,7 +3421,7 @@ class WorldEngine:
             if tags is not _UNSET:
                 if tags is not None and not isinstance(tags, (list, tuple)):
                     raise WorldError("tags 必须是标签数组")
-                entity.tags = parse_tags(tags)
+                entity.tags = [self._resolve_component_key(t) for t in parse_tags(tags)]
             await self.store.save_entity(entity)
             await self._emit("on_entity_changed", entity, {"edited": True})
             return entity

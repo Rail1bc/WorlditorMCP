@@ -72,7 +72,7 @@ def test_register_and_login_without_map(tmp_path):
         relogin = await identity.login("管理员", "pass123")
         assert relogin.entity_id != ""
         entity = engine.get_entity(relogin.entity_id)
-        assert entity is not None and entity.kind == "player"
+        assert entity is not None and entity.kind == "local:player"
         assert entity.user_id is not None
 
     _run(
@@ -97,7 +97,7 @@ def test_register_human_open(tmp_path):
         assert info.tier == "play" and info.kind == "player"
         assert info.username == "小明"
         entity = identity._engine.get_entity(info.entity_id)
-        assert entity is not None and entity.kind == "player"
+        assert entity is not None and entity.kind == "local:player"
         assert entity.user_id is not None
         assert entity.pos_key() == ("default", 0, 0)  # 出生点
         # 重复用户名
@@ -212,7 +212,7 @@ def test_register_agent(tmp_path):
         info = await identity.register_agent("探索者")
         assert info.tier == "play" and info.kind == "player"
         entity = identity._engine.get_entity(info.entity_id)
-        assert entity is not None and entity.kind == "player"
+        assert entity is not None and entity.kind == "local:player"
         assert entity.name == "探索者"  # 不再加 "AI·" 前缀（人类与 agent 不区分）
         # 关闭自助注册
         identity.allow_agent_register = False

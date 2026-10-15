@@ -35,6 +35,25 @@ class WorlditorPlayAPI:
 
     # ---------- 注册 ----------
 
+    def declare_component(
+        self,
+        name: str,
+        *,
+        interactions: tuple[str, ...] = (),
+        label: str | None = None,
+        fields: list[dict] | None = None,
+        categories: tuple[str, ...] = (),
+    ) -> None:
+        """声明本玩法包拥有的组件；来源由 API 实例自动填入。"""
+        self._engine.declare_component(
+            name,
+            interactions=interactions,
+            label=label or "",
+            play_id=self.play_id,
+            fields=fields,
+            categories=categories,
+        )
+
     def register_entity_kind(
         self,
         kind: str,
