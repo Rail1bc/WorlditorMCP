@@ -56,6 +56,7 @@ from .model import (
     DEFAULT_EVENT_PHASE,
     DIRECTIONS,
     EVENT_PHASES,
+    PRINCIPAL_EVENTS,
     WORLD_EVENTS,
     ConnectionPath,
     Entity,
@@ -63,6 +64,7 @@ from .model import (
     InteractionResult,
     Location,
     MenuButton,
+    Principal,
     ScenePath,
     SceneView,
     ShortCircuit,
@@ -204,6 +206,9 @@ class _ToolBinding:
     params: dict[str, str] = field(
         default_factory=dict
     )  # 参数名 -> string/integer/number/boolean
+    # 这个工具要不要"身体"（D46）：默认 True（老包假设 api.caller() 一定有值）。
+    # 自举类工具（创建第一具化身、选角色）必须显式 False，否则永远调不到。
+    requires_entity: bool = True
 
 
 @dataclass
@@ -624,7 +629,6 @@ class WorldEngine:
         self._event_bindings: dict[str, list[_EventBinding]] = {
             e: [] for e in WORLD_EVENTS
         }
-        self._ui_components: dict[str, str] = {}
         self._ui_hooks: dict[tuple[str, str], list[_UiHookBinding]] = {}
         # D9/D41 字段设施：**按组件分组**的追加字段声明（组件自身字段在 spec.fields）
         # （v2 / D37：原 `_item_fields` 已随物品移除；D41：`_category_fields` 已删）
@@ -1313,11 +1317,18 @@ class WorldEngine:
         *,
         description: str = "",
         params: dict[str, str] | None = None,
+        requires_entity: bool = True,
         play_id: str = "",
     ) -> None:
         """注册 MCP 工具（G2：handler(api, ctx, **args)，身份经 api.caller()）。
 
         同名工具冲突**报错拒绝**（D2，避免静默替换）。
+
+        Args:
+            requires_entity: 该工具是否要求调用者有化身（D46）——默认 ``True``
+                （老包都假设 ``api.caller()`` 有值，改默认值会在运行期炸）。
+                "创建第一具化身"这类**自举**工具必须显式传 ``False``，
+                否则玩家永远调不到它（没有化身 → 被挡 → 更没化身）。
         """
         name = _clean_required(name, "工具名")
         if name in self._tools:
@@ -1336,6 +1347,7 @@ class WorldEngine:
             handler=handler,
             description=str(description or ""),
             params=params,
+            requires_entity=bool(requires_entity),
         )
         self._sync_tool_add(name)
 
@@ -1347,6 +1359,7 @@ class WorldEngine:
                 "play_id": b.play_id,
                 "description": b.description,
                 "params": dict(b.params),
+                "requires_entity": b.requires_entity,
             }
             for name, b in sorted(self._tools.items())
         ]
@@ -1809,15 +1822,6 @@ class WorldEngine:
             )
         return phase
 
-    def register_ui_component(
-        self, name: str, web_entry: str, *, play_id: str = ""
-    ) -> None:
-        """注册自定义界面组件（B9；WebUI 落地）。"""
-        name = _clean_required(name, "组件名")
-        if play_id:
-            name = f"{play_id}.{name}"
-        self._ui_components[name] = _clean_required(web_entry, "组件入口")
-
     def register_ui_hook(
         self,
         block_kind: str,
@@ -1872,11 +1876,6 @@ class WorldEngine:
             self._event_bindings[event] = [
                 b for b in self._event_bindings[event] if b.play_id != play_id
             ]
-        self._ui_components = {
-            k: v
-            for k, v in self._ui_components.items()
-            if not k.startswith(f"{play_id}.")
-        }
         self._ui_hooks = {
             k: [b for b in v if b.play_id != play_id]
             for k, v in self._ui_hooks.items()
@@ -2022,6 +2021,23 @@ class WorldEngine:
         """
         async with self._lock:  # 入口自持锁（可重入）；锁外调用亦安全
             await self._emit(event, data, log=log)
+
+    async def emit_principal_event(
+        self, event: str, *, account_id: str, username: str = ""
+    ) -> None:
+        """发主体生命周期事件（D47；**只给身份服务用**，玩法包拿不到这条入口）。
+
+        主体 = 可登录的账户，**不是实体**：它不绑位置、不属于任何世界，所以
+        ``_binding_active`` 不会拿它做世界激活过滤（订阅者全都能收到）。
+
+        Raises:
+            WorldError: 事件名不在 ``PRINCIPAL_EVENTS`` 内（防手滑发出"半个"事件）。
+        """
+        if event not in PRINCIPAL_EVENTS:
+            raise WorldError(
+                f"不是主体生命周期事件：{event}（可用：{'/'.join(PRINCIPAL_EVENTS)}）"
+            )
+        await self._emit(event, Principal(account_id=account_id, username=username))
 
     async def _emit(self, event: str, *args: Any, log: bool = False) -> None:
         """分发事件给订阅者（串行 + 异常隔离），默认不写世界日志。
@@ -2195,6 +2211,11 @@ class WorldEngine:
             payload["entity"] = args[0].to_dict()
         elif event == "on_world_edited":
             payload["what"] = args[0]
+        elif event in PRINCIPAL_EVENTS:
+            # 主体生命周期（D47）：**不推 SSE**（返回 None 即不广播）——它的内容是
+            # "谁登录了"，广播出去等于把主体名册发给每个订阅者。玩法包要反应就
+            # 订阅事件（内核内的通道），不经过公开的只读出口。
+            return None
         else:
             # 自定义事件（G8）：数据原样透传（单参 dict 展开为 data）
             payload["data"] = args[0] if len(args) == 1 else list(args)
@@ -2968,8 +2989,7 @@ class WorldEngine:
           不为每个实体补发 `place_entity` 事件。
 
         Args:
-            map_data: 地图定义（``{id, name, description?, timezone?, spawn_row?,
-                spawn_col?, visible?}``）。
+            map_data: 地图定义（``{id, name, description?, timezone?, visible?}``）。
             locations: 地块列表（``{row, col, name, description?, connections?}``）。
             entities: 实体列表（``{row?, col?, name?, desc?, kind?, tags?,
                 components?}``）。
@@ -3142,15 +3162,25 @@ class WorldEngine:
             )
 
     def identity_entity_of(self, account_id: str):
-        """账户绑定的实体（`core:account.user_id == account_id`；无则 None）。
+        """账户绑定的**第一具**化身（无则 None）。D46 起一个主体可以有多具。
 
-        名字保留（调用方是身份服务与账户页），但它找的是**账户绑定**而不是"身份"
-        ——D42 之后内核没有身份这个概念。
+        新代码请用 ``entities_of_account``（全部化身）——这个方法只为"只想要一个
+        代表"的展示场景保留，顺序 = 存储载入序，**没有语义**（别拿它当"主角色"）。
         """
         for entity in self.store.entities.values():
             if entity.user_id == account_id:
                 return entity
         return None
+
+    def entities_of_account(self, account_id: str) -> list[Entity]:
+        """该主体的**全部化身**（``core:account.user_id == account_id``；D46）。
+
+        内核唯一按账户找实体的入口：注销级联、账户页展示、D14 保护都走它。
+        **与位置无关**（下线/不在世界上的化身同样算数）——这正是 v2/D36 那个
+        "用 ``list_entities()`` 按账户找实体 → 下线玩家被当成没有实体 → 又造一具"
+        的坑的修法：直接扫 ``store.entities``，绕开"在不在世界上"这个维度。
+        """
+        return [e for e in self.store.entities.values() if e.user_id == account_id]
 
     async def move(
         self, entity_id: str, direction: str, *, path: int | None = None
@@ -3501,6 +3531,110 @@ class WorldEngine:
             await self._emit(
                 "on_entity_changed", entity, {"fields": {CORE_PERCEPTION: clean}}
             )
+
+    async def set_acting_entity(self, token: str, entity_id: str) -> None:
+        """写"这份凭据以哪具实体行动"（D46；唯一调用方 = ``api.act_as``）。
+
+        存**凭据行**（``tokens.entity_id``）而不是账户行：一个主体可以同时在多台
+        设备/多个客户端上玩，各指各的化身；写账户行会让多端互相踩（方案 D-a）。
+
+        **不校验归属**：内核不知道"谁有哪些化身"（roster 归玩法包，D46）。调用方
+        （玩法包）必须先用自己的名单确认这具实体属于当前主体，**绝不能**把客户端
+        传来的 entity_id 原样交上来。
+
+        Args:
+            token: 当前请求的凭据（``api.act_as`` 从连接上下文取）。
+            entity_id: 目标实体 id；空串 = 解除指向（回到"没有化身"）。
+
+        Raises:
+            WorldError: 实体不存在 / 凭据已失效。
+        """
+        async with self._lock:
+            entity_id = str(entity_id or "")
+            if entity_id and entity_id not in self.store.entities:
+                raise WorldError(f"实体不存在：{entity_id}")
+            if not await self.store.set_token_entity(token, entity_id):
+                raise WorldError("凭据已失效，无法切换行动实体")
+
+    async def claim_avatar(self, entity_id: str, account_id: str) -> None:
+        """把某具实体登记为某主体的化身（写 ``core:account``）——**唯一写入入口**（D46）。
+
+        与 ``set_perception`` / ``clear_position`` 同一种做法（D33：``core:`` 玩法包
+        写不了 → 内核给窄口，规则不放宽、能力不丢失）。为什么内核必须拥有这个写入
+        点：``core:account`` 是 **D14 红线**（绑账户的实体玩法包不可删）的判据，
+        让包自由写等于让包自己决定"什么不可删"。走这里写进去的化身一律受保护。
+
+        语义：
+        - 只能认领给 ``account_id`` 这个主体（调用方从连接上下文取当前主体，
+          **不接受客户端指定的账户 id**——否则可以替别人认领/抢注）；
+        - 已属于**同一**主体 → 幂等无操作；已属于**别人** → 报错（不改绑）；
+        - 一旦认领，账户注销会级联删它（``entities_of_account``），
+          ``remove_entity`` / ``delete_map`` / ``delete_location`` / ``copy_map``
+          四处都会拒绝。
+
+        Raises:
+            WorldError: 实体不存在 / 没有主体（空 account_id）/ 已属于另一个主体。
+        """
+        if not str(account_id or ""):
+            raise WorldError("没有主体上下文，无法认领化身（围观凭据不能认领）")
+        async with self._lock:
+            entity = self._require_entity(entity_id)
+            owner = entity.user_id
+            if owner == account_id:
+                return  # 幂等：本来就是我的
+            if owner is not None:
+                raise WorldError(
+                    "这具实体已经属于另一个主体，不能改绑（先经账户注销通道释放）"
+                )
+            entity.components = {
+                **entity.components,
+                CORE_ACCOUNT: {"user_id": str(account_id)},
+            }
+            await self.store.save_entity(entity)
+            await self._emit(
+                "on_entity_changed",
+                entity,
+                {"fields": {CORE_ACCOUNT: {"user_id": str(account_id)}}},
+            )
+
+    async def release_avatar(self, entity_id: str, account_id: str) -> int:
+        """**退掉自己的化身**：摘掉 ``core:account`` 绑定——``claim_avatar`` 的反向（D46）。
+
+        为什么必须有这条通道：D14 让"绑了账户的实体"谁都删不掉，这是对的
+        （防 token 悬空、防别人把你的身体删了）——但**本人想删掉自己多余的化身**
+        时它同样拦着。于是把"解绑"这一步显式化，而不是给玩法包开一个删除后门：
+
+        - 只允许解绑**属于 ``account_id``** 的实体（别人的化身一律拒绝——D14 对
+          别人依然完全有效，包仍然删不掉任何一个不属于本次调用主体的化身）；
+        - 顺手清空**指向它的凭据指针**（``tokens.entity_id``）——否则"解绑 + 删除"
+          之后会留下悬空指针，玩家下次请求拿着一个不存在的实体 id；
+        - **不删实体**：调用方随后自己 ``remove_entity``（那时它不绑账户了，
+          D14 不再拦）。两步分开是为了让"解绑"在事件流里留下痕迹。
+
+        Returns:
+            被清空指针的凭据数（0 = 本来没有凭据指着它）。
+
+        Raises:
+            WorldError: 实体不存在 / 没绑账户 / 绑的是**别人**的账户 / 空 account_id。
+        """
+        if not str(account_id or ""):
+            raise WorldError("没有主体上下文，无法退掉化身")
+        async with self._lock:
+            entity = self._require_entity(entity_id)
+            owner = entity.user_id
+            if owner is None:
+                raise WorldError("这具实体没有绑定账户，不需要解绑")
+            if owner != account_id:
+                raise WorldError("只能退掉自己的化身（这具属于另一个主体，D14）")
+            entity.components = {
+                k: v for k, v in entity.components.items() if k != CORE_ACCOUNT
+            }
+            await self.store.save_entity(entity)
+            cleared = await self.store.clear_token_entities(entity_id)
+            await self._emit(
+                "on_entity_changed", entity, {"components_removed": [CORE_ACCOUNT]}
+            )
+            return cleared
 
     # ---------- 移动辅助 ----------
 
@@ -3918,13 +4052,14 @@ class WorldEngine:
         *,
         description: str | None = None,
         timezone: str | None = None,
-        spawn_row: int = 0,
-        spawn_col: int = 0,
         visible: str = "public",
         world_id: str | None = None,
         folder_id: str | None = None,
     ) -> WorldMap:
-        """新建地图（id 唯一；visible = public/private，G1 可见性）。"""
+        """新建地图（id 唯一；visible = public/private，G1 可见性）。
+
+        ⚠ **没有"出生点"参数**（D45）：内核不指定"人从哪来"——落点是玩法包的事。
+        """
         async with self._lock:
             map_id = _clean_required(map_id, "地图 id")
             name = _clean_required(name, "地图名称")
@@ -3932,7 +4067,6 @@ class WorldEngine:
                 raise WorldError(f"地图已存在：{map_id}")
             if visible not in ("public", "private"):
                 raise WorldError("visible 必须是 public 或 private")
-            _check_pos(spawn_row, spawn_col)
             m = parse_map(
                 {
                     "id": map_id,
@@ -3941,8 +4075,6 @@ class WorldEngine:
                     if description
                     else None,
                     "timezone": timezone,
-                    "spawn_row": spawn_row,
-                    "spawn_col": spawn_col,
                     "visible": visible,
                 }
             )
@@ -4018,8 +4150,6 @@ class WorldEngine:
                     if src.description
                     else None,
                     "timezone": src.timezone,
-                    "spawn_row": src.spawn_row,
-                    "spawn_col": src.spawn_col,
                     "visible": src.visible,
                 }
             )
@@ -4089,10 +4219,13 @@ class WorldEngine:
     # ---------- 地图体检（纯数据检查，无玩法语义；管理端治理视图数据源） ----------
 
     def lint_map(self, map_id: str) -> dict[str, Any]:
-        """单张地图体检：死连接 / 出生点落空 / 实体悬空 / 孤立地块 / 无世界归属。
+        """单张地图体检：死连接 / 实体悬空 / 孤立地块 / 无世界归属。
 
         只报"作者看不出来、但运行时有后果"的问题——运行时对死引用是**静默剔除**，
         所以体检是唯一能提前告知的通道。
+
+        ⚠ **没有"出生点落空"这一项**（D45 已删除）：内核不存在出生点，也就没有
+        "新玩家会落在哪、那格在不在"这个问题——它是玩法包自己的落点策略的事。
         """
         m = self.store.maps.get(map_id)
         if m is None:
@@ -4188,15 +4321,6 @@ class WorldEngine:
 
         if not locs:
             add("warn", "empty_map", f"地图「{m.name}」还没有任何地块", map_id=map_id)
-        elif (map_id, m.spawn_row, m.spawn_col) not in self.store.loc_by_pos:
-            add(
-                "error",
-                "spawn_missing",
-                f"出生点 ({m.spawn_row}, {m.spawn_col}) 没有地块，新玩家会落空",
-                map_id=map_id,
-                row=m.spawn_row,
-                col=m.spawn_col,
-            )
 
         for e in entities:
             # D36：位置是可选组件——**不在场不是"悬空"**。上面的 `e.map_id == map_id`
@@ -4374,8 +4498,6 @@ class WorldEngine:
         name: object = _UNSET,
         description: object = _UNSET,
         timezone: object = _UNSET,
-        spawn_row: object = _UNSET,
-        spawn_col: object = _UNSET,
         visible: object = _UNSET,
     ) -> WorldMap:
         """更新地图属性（``timezone=None`` 显式清空为本地时区；visible 见 G1）。"""
@@ -4397,11 +4519,6 @@ class WorldEngine:
                     if str(timezone).strip()
                     else None
                 )
-            if spawn_row is not _UNSET or spawn_col is not _UNSET:
-                sr = m.spawn_row if spawn_row is _UNSET else spawn_row
-                sc = m.spawn_col if spawn_col is _UNSET else spawn_col
-                _check_pos(sr, sc)
-                m.spawn_row, m.spawn_col = sr, sc
             if visible is not _UNSET:
                 if visible not in ("public", "private"):
                     raise WorldError("visible 必须是 public 或 private")

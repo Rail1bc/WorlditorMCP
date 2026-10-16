@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from play_fixtures import install_demo_play  # noqa: E402
-from world_fixtures import seed_test_world  # noqa: E402
+from world_fixtures import give_avatar, seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine  # noqa: E402
 from worlditor_mcp.world.identity import IdentityService  # noqa: E402
@@ -46,6 +46,8 @@ async def _make_world(tmp_path: Path):
     await loader.load_all(None)
     identity = IdentityService(engine, auth_mode="open")
     info = await identity.register_agent("测试探针")
+    # D45/D46：注册不建实体，"以玩家身份调工具"要先有化身（造 → 认领 → 指过去）
+    await give_avatar(engine, info, name="测试探针")
     return engine, identity, info
 
 

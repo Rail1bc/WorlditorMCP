@@ -184,10 +184,6 @@ class WorlditorPlayAPI:
             play_id=self.play_id,
         )
 
-    def register_ui_component(self, name: str, web_entry: str) -> None:
-        """注册自定义界面组件（B9；WebUI 落地）。"""
-        self._engine.register_ui_component(name, web_entry, play_id=self.play_id)
-
     def register_ui_hook(self, block_kind: str, position: str, provider) -> None:
         """向已有界面块注入子块（B9：before/after/replace；渲染落地）。"""
         self._engine.register_ui_hook(
@@ -304,6 +300,25 @@ class WorlditorPlayAPI:
     def get_location(self, map_id: str, row: int, col: int):
         """地块快照（**深拷贝**：改了不影响运行中的世界，见 G51）。"""
         return copy.deepcopy(self._engine.get_location(map_id, row, col))
+
+    def list_locations(self, map_id: str | None = None) -> list:
+        """地块清单（只读，**深拷贝**，G51）；给 ``map_id`` 时只列该图。
+
+        为什么玩法包需要它：**"人从哪来"是玩法的事**（D45）——内核不再有出生点，
+        想把人放进世界的包必须自己看得见地块（挑第一块、挑带某组件的"入口"地块、
+        挑自己内容里写的那块）。没有这个只读出口，"落点自定"就只能靠猜坐标。
+        """
+        return copy.deepcopy(
+            [
+                loc
+                for loc in self._engine.list_locations()
+                if map_id is None or loc.map_id == map_id
+            ]
+        )
+
+    def list_maps(self) -> list:
+        """地图清单（只读，**深拷贝**，G51）；按 id 排序（稳定，便于做确定性选择）。"""
+        return sorted(copy.deepcopy(self._engine.list_maps()), key=lambda m: m.id)
 
     def get_map(self, map_id: str):
         """地图快照（**深拷贝**，同 get_location）。"""
@@ -533,25 +548,125 @@ class WorlditorPlayAPI:
         *,
         description: str = "",
         params: dict[str, str] | None = None,
+        requires_entity: bool = True,
     ) -> None:
         """注册 MCP 工具：handler(api, ctx, **args)，返回 str 或 {text, ui}。
 
         同名工具冲突**报错拒绝**（D2）；参数类型限
         string/integer/number/boolean/array（G11；FastMCP schema 生成）。
+
+        Args:
+            requires_entity: 该工具是否要求调用者有化身（D46）——默认 ``True``。
+                **自举工具必须显式传 ``False``**：玩家还没有角色时，正是要靠
+                这类工具创建第一具化身（默认 True 会把自举路径整个挡死）。
         """
         self._engine.register_tool(
             name,
             handler,
             description=description,
             params=params,
+            requires_entity=requires_entity,
             play_id=self.play_id,
         )
 
     def caller(self) -> str | None:
-        """当前调用者实体 id（MCP 工具 handler 内有效；无身份返回 None）。"""
+        """当前调用者**行动实体** id；没有化身/无身份 → ``None``（D46）。
+
+        "没有化身"是合法常态（新注册的凭据、还没选角色的玩家），**不是错误**——
+        要靠身体的工具请让内核挡（``register_tool(requires_entity=True)``，默认），
+        自己不必写"先判断 None 再报错"。
+        """
         from ..mcp import _caller_entity
 
         return _caller_entity.get()
+
+    def caller_principal(self) -> str | None:
+        """当前调用者的**主体**（账户）id；围观凭据 → ``None``（D46）。
+
+        这是**稳定的键**：同一个主体无论换了几具化身、重登几次都不变，适合做
+        roster 的索引；而 ``caller()`` 是"这次以哪具化身行动"，会跟着切换变。
+        """
+        from ..mcp import _caller_principal
+
+        return _caller_principal.get()
+
+    def caller_name(self) -> str:
+        """当前调用者的主体显示名（没设过 → 空串；只用于文案）。"""
+        from ..mcp import _caller_name
+
+        return _caller_name.get()
+
+    async def act_as(self, entity_id: str | None) -> None:
+        """把**当前凭据**的行动实体指向某具实体（``None`` = 解除指向）——D46 窄口。
+
+        范式与 ``set_perception`` / ``clear_position`` 相同：玩法包写不了
+        ``tokens.entity_id``（那是内核记账），但"我换操作另一具化身了"本来就是
+        玩法包的正当能力，所以给一道**受控入口**——规则不放宽，能力不丢失。
+        写的是**凭据行**，所以多端各自记各自的，互不干扰（方案 D-a）。
+
+        ⚠ **安全边界（必须由调用方承担）**：内核**不校验**这具实体是不是调用者的。
+        玩法包必须先用自己的 roster 判断归属（"这具是我的吗"），**绝不能**把客户端
+        传来的 entity_id 原样交给它——那等于让任何人操控任何实体。内核只记账，
+        因为"谁有哪些化身"这个问题内核没有答案（D46：roster 归玩法包）。
+
+        Raises:
+            WorldError: 实体不存在 / 没有连接上下文（进程内直调）/ 凭据已失效。
+        """
+        from ..mcp import _caller_entity, _caller_token
+
+        token = _caller_token.get()
+        if not token:
+            raise WorldError(
+                "act_as 需要连接上下文（本次调用没有凭据）——"
+                "它记的是「这份凭据以哪具实体行动」，进程内直调时无从记起"
+            )
+        await self._engine.set_acting_entity(token, str(entity_id or ""))
+        # 同一次 handler 内后续读取要立刻看到新值（否则"切完再问我是谁"还是旧的）
+        _caller_entity.set(str(entity_id or "") or None)
+
+    async def claim_avatar(self, entity_id: str) -> None:
+        """把某具实体**登记为当前主体的化身**——写 ``core:account`` 的唯一入口（D46）。
+
+        玩法包写不了 ``core:``（D33），但"造一具属于某人的化身"是玩法的核心动作，
+        所以内核给这道窄口（同 ``set_perception``）。语义：
+
+        - 写 ``core:account.user_id = 当前主体``；该实体从此受 **D14 保护**
+          （``remove_entity`` / ``delete_map`` / ``delete_location`` / ``copy_map``
+          四处都拒绝对它动手），账户注销时也会被级联清理；
+        - **只能认领给"自己"**（当前请求的主体）——不能替别人认领，内核不接受
+          客户端指定的账户 id；
+        - 围观（read）凭据没有主体 → 报错。
+
+        Raises:
+            WorldError: 没有主体上下文（围观凭据 / 进程内直调）/ 实体不存在 /
+                该实体已属于另一个主体。
+        """
+        from ..mcp import _caller_principal
+
+        account_id = _caller_principal.get() or ""
+        await self._engine.claim_avatar(entity_id, account_id)
+
+    async def release_avatar(self, entity_id: str) -> int:
+        """**退掉自己的化身**：摘掉 ``core:account`` 绑定（``claim_avatar`` 的反向）。
+
+        用途：玩家要删掉自己多余的化身。D14 让"绑了账户的实体"谁都删不掉，
+        所以必须先经这里解绑，之后 ``remove_entity`` 才走得通（**两步都留着**，
+        让"解绑"在事件流里有痕迹）。
+
+        边界（内核强制）：
+        - 只能退**当前主体自己**的化身——别人的化身一律拒绝，包仍然删不掉它们；
+        - 顺手清空指向它的凭据指针（不然解绑+删除会留下悬空指针）。
+
+        Returns:
+            被清空指针的凭据数。
+
+        Raises:
+            WorldError: 没有主体上下文 / 实体不存在 / 没绑账户 / 绑定的是别人。
+        """
+        from ..mcp import _caller_principal
+
+        account_id = _caller_principal.get() or ""
+        return await self._engine.release_avatar(entity_id, account_id)
 
     def register_view(
         self,

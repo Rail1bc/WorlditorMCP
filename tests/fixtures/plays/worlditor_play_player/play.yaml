@@ -1,0 +1,11 @@
+name: worlditor_play_player
+display_name: 玩家（化身管理）
+version: 0.1.0
+author: worlditor
+description: >-
+  参考玩家包：主体（账户）与化身的关系全在这里——创建 / 切换 / 退掉化身、
+  roster 查询、落点策略。内核只保留"这次以哪具实体行动"与"这具实体属于哪个
+  主体"两本账（D45–D47），"玩家是什么"由本包回答。
+requires:
+  worlditor: ">=0.7.3"
+  plays: []

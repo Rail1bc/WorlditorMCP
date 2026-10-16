@@ -4,13 +4,17 @@
 ``{text, ui}``（D12：无 effects；ui 可选）——agent 消费 ``text``，WebUI
 渲染 ``ui``，一次实现两端复用。
 
-连接身份验证（token → 实体）：
+连接身份验证（token → 主体 + 行动实体）：
 - HTTP（streamable HTTP）：认证中间件校验 ``Authorization: Bearer <token>``，
-  把 ``{entity_id, tier}`` 注入每个 JSON-RPC 请求的 ``params._meta``，
-  工具经 ``ctx.request_context.meta`` 读取（read 档无实体 → 工具不可用）。
+  把 ``{entity_id, tier, account_id, username}`` 注入每个 JSON-RPC 请求的
+  ``params._meta``，工具经 ``ctx.request_context.meta`` 读取。
+- **``entity_id`` 可以为空**（D45/D46）：它只表示"这次请求以哪具实体行动"，
+  为空 = 这个主体还没有化身（或还没选定）。要不要身体由工具自己声明
+  （``register_tool(requires_entity=…)``，默认 True）——"创建第一具化身"这类
+  自举工具必须显式声明 ``False``，否则连自举都调不到。
 
 工具集：全部由玩法包 register_tool 动态注册（M2 起内核无内置工具）——
-handler(api, ctx, **args)，身份经 api.caller() 读取（HTTP 经请求 _meta 注入）。
+handler(api, ctx, **args)，身份经 api.caller() / api.caller_principal() 读取。
 """
 
 from __future__ import annotations
@@ -33,10 +37,31 @@ logger = logging.getLogger("worlditor")
 # MCP 工具返回：结构化 JSON 字符串（ensure_ascii=False，LLM/UI 双端消费）
 _META_ENTITY_KEY = "worlditor_entity_id"
 _META_TIER_KEY = "worlditor_tier"
+_META_ACCOUNT_KEY = "worlditor_account_id"
+_META_USERNAME_KEY = "worlditor_username"
+_META_TOKEN_KEY = "worlditor_token"
 
 # 当前调用者实体 id（MCP 动态工具 wrapper 注入；api.caller() 读取）
+# 没有化身时是 **None**（不是空串）——"没有角色"是一个正常状态，不是"没认证"。
 _caller_entity: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "worlditor_caller_entity", default=None
+)
+
+# 当前调用者的主体（账户）id；围观凭据没有主体 → None
+_caller_principal: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "worlditor_caller_principal", default=None
+)
+
+# 当前调用者的主体显示名（只用于文案；没有 → None）
+_caller_name: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "worlditor_caller_name", default=""
+)
+
+# 本次调用用的**凭据串**（HTTP 中间件注入 _meta；进程内直调为空串 = 无凭据）。
+# 只给 `api.act_as` 用——它要写"这份凭据以哪具实体行动"（tokens.entity_id），
+# 而这件事必须知道是哪份凭据（多端各自记各自的，方案 D-a）。
+_caller_token: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "worlditor_caller_token", default=""
 )
 
 # 玩法包工具参数类型 → Python 注解（FastMCP schema 生成；G11 含 array）
@@ -50,7 +75,7 @@ _TYPE_MAP = {
 
 
 class McpAuthError(Exception):
-    """MCP 连接/身份错误。"""
+    """MCP 连接/身份错误（**已不再用于"没有化身"**——那是正常状态，D45/D46）。"""
 
 
 def _result(payload: dict) -> str:
@@ -58,28 +83,48 @@ def _result(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _meta_of(ctx: Context) -> Any:
+    """请求 _meta（HTTP 中间件注入）；不在请求内时 None。"""
+    try:
+        return ctx.request_context.meta if ctx.request_context else None
+    except ValueError:  # Context 不在请求内（进程内 call_tool 等场景）
+        return None
+
+
 def _tier_of(ctx: Context) -> str:
     """连接凭据档位（HTTP 经 _meta 注入；进程内直调等场景为空串 = 不校验）。"""
-    meta = None
-    try:
-        meta = ctx.request_context.meta if ctx.request_context else None
-    except ValueError:  # Context 不在请求内
-        meta = None
-    tier = getattr(meta, _META_TIER_KEY, None)
+    tier = getattr(_meta_of(ctx), _META_TIER_KEY, None)
     return tier if isinstance(tier, str) else ""
 
 
 def _entity_id(ctx: Context) -> str:
-    """从连接身份解析实体 id（HTTP 读 _meta；无请求上下文时不可用）。"""
-    meta = None
-    try:
-        meta = ctx.request_context.meta if ctx.request_context else None
-    except ValueError:  # Context 不在请求内（进程内 call_tool 等场景）
-        meta = None
-    entity_id = getattr(meta, _META_ENTITY_KEY, None)
-    if not entity_id:
-        raise McpAuthError("连接未认证或凭据只能围观，无法执行动作")
-    return entity_id
+    """这次连接**以哪具实体行动**；没有化身 → 空串。
+
+    ⚠ 空值**不是认证失败**（D45/D46）：新注册的凭据本来就没有化身，"我还没有
+    角色"是合法常态。以前这里直接抛 ``McpAuthError``（文案"连接未认证或凭据
+    只能围观"），于是零包安装下玩家连"创建角色"的工具都调不到——自举路径整个
+    断掉。现在由工具自己声明要不要身体（``register_tool(requires_entity=…)``）。
+    """
+    entity_id = getattr(_meta_of(ctx), _META_ENTITY_KEY, None)
+    return entity_id if isinstance(entity_id, str) else ""
+
+
+def _principal_id(ctx: Context) -> str:
+    """这次连接的主体（账户）id；围观凭据没有主体 → 空串。"""
+    account_id = getattr(_meta_of(ctx), _META_ACCOUNT_KEY, None)
+    return account_id if isinstance(account_id, str) else ""
+
+
+def _username_of(ctx: Context) -> str:
+    """这次连接的主体显示名（没设过 → 空串）。"""
+    username = getattr(_meta_of(ctx), _META_USERNAME_KEY, None)
+    return username if isinstance(username, str) else ""
+
+
+def _token_of(ctx: Context) -> str:
+    """这次连接用的凭据串（进程内直调 → 空串；只有 ``api.act_as`` 需要它）。"""
+    token = getattr(_meta_of(ctx), _META_TOKEN_KEY, None)
+    return token if isinstance(token, str) else ""
 
 
 def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
@@ -106,10 +151,22 @@ def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
             return _result(
                 {"text": "围观（read）凭据不能执行动作：请用玩家身份登录后再试。"}
             )
-        try:
-            entity_id = _entity_id(ctx)
-        except McpAuthError as e:
-            return _result({"text": str(e)})
+        entity_id = _entity_id(ctx)
+        # 需要身体的工具（默认）：没有化身 → 明说"你还没有角色"，并指出出路。
+        # 自举工具（requires_entity=False）跳过这道闸——否则"创建第一具化身"
+        # 这件事本身就没法调用（R8：没有化身是合法常态）。
+        if binding.requires_entity and not entity_id:
+            if _meta_of(ctx) is None:
+                # 根本没有"这次连接是谁"这回事（进程内直调 / Context 不在请求内）：
+                # 与"有连接、只是还没有化身"必须分开说，否则用户会照着错的
+                # 那条提示去查（旧文案就是把这句用在两种情况上）。
+                return _result({"text": "连接未认证或凭据只能围观，无法执行动作"})
+            return _result(
+                {
+                    "text": "你还没有角色，暂时做不了这个动作："
+                    "先创建一具化身（用玩法包提供的角色创建工具），再回来试。"
+                }
+            )
         # 世界激活过滤（D15/v0.3.0）：工具所属玩法包在**调用者所在世界**未启用
         # → 该能力在这个世界不存在（而不是"调用出错"）
         if not engine.play_active_for_entity(entity_id, binding.play_id):
@@ -121,7 +178,10 @@ def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
                     "这个能力在本世界不可用：换个世界，或让管理员在世界设置里启用。"
                 }
             )
-        token = _caller_entity.set(entity_id)
+        token = _caller_entity.set(entity_id or None)
+        principal_token = _caller_principal.set(_principal_id(ctx) or None)
+        name_token = _caller_name.set(_username_of(ctx))
+        caller_token = _caller_token.set(_token_of(ctx))
         try:
             # 引擎锁内执行（DESIGN §2.4：handler 锁内执行；任务级可重入）
             result = await engine.invoke_locked(binding.handler, api, ctx, **kwargs)
@@ -138,6 +198,9 @@ def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
             return _result({"text": "工具执行出错，请稍后再试"})
         finally:
             _caller_entity.reset(token)
+            _caller_principal.reset(principal_token)
+            _caller_name.reset(name_token)
+            _caller_token.reset(caller_token)
         if isinstance(result, str):
             return _result({"text": result})
         if isinstance(result, dict):

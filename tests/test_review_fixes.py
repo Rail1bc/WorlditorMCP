@@ -280,7 +280,7 @@ def test_admin_bad_int_returns_400_not_500(tmp_path):
         for method, path, body in (
             ("GET", "/admin/accounts?page=abc", None),
             ("GET", "/admin/accounts?page_size=x", None),
-            ("POST", "/admin/maps", {"id": "m1", "name": "图", "spawn_row": "x"}),
+            # ⚠ POST /admin/maps 已无整数参数（D45 删掉了出生点），故不在此列
             ("POST", "/admin/locations", {"map_id": "m1", "row": "x", "col": 0}),
             ("POST", "/admin/invite-codes", {"count": "x"}),
         ):

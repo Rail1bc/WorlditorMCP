@@ -13,9 +13,13 @@ import json
 
 import httpx
 from play_fixtures import install_demo_play  # noqa: E402
-from world_fixtures import install_demo_world, seed_test_world  # noqa: E402
+from world_fixtures import (  # noqa: E402
+    give_avatar,
+    install_demo_world,
+    seed_test_world,
+)
 
-from worlditor_mcp.world.engine import WorldEngine  # noqa: E402
+from worlditor_mcp.world.engine import WorldEngine, WorldError  # noqa: E402
 from worlditor_mcp.world.identity import IdentityService  # noqa: E402
 from worlditor_mcp.world.mcp import build_mcp_server  # noqa: E402
 from worlditor_mcp.world.mcp.http import build_http_app  # noqa: E402
@@ -154,6 +158,52 @@ def test_snapshot_and_auth(tmp_path):
         assert data["peers"] == []
 
     _run(_scenario(tmp_path, fn, world="demo"))
+
+
+def test_scene_without_avatar_is_a_state_not_an_error(tmp_path):
+    """**"还没有角色"是 200 空态，不是 400/500**（D45/D46 的 P0 验收）。
+
+    D45 之前新注册的玩家必定有实体，所以 `/scene` 只可能"缺参数"或"实体不存在"；
+    现在"没有化身"是**默认状态**，客户端要能区分三种情况：
+    ① 你还没有角色（去创建）② 有角色但它不在世界上（下线）③ 这个实体真的不存在。
+    前两种都必须是 200 + `reason`，否则玩家端只会看到一个 500 空壳。
+    """
+
+    async def fn(client, identity, engine, loader, app):
+        info = await identity.register_human("小明", "pass123")
+        assert info.entity_id == ""
+        resp = await client.get("/scene", headers=_auth(info.token))
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["reason"] == "no_avatar" and data["entity"] is None
+        assert data["peers"] == [] and data["scene"] is None
+        assert "还没有角色" in data["text"]
+
+        # 有化身但**不在世界上**（下线）：200 + not_in_world，实体照常返回
+        avatar = await give_avatar(engine, info, name="小明")
+        await engine.clear_position(avatar.id)
+        resp = await client.get(
+            "/scene", params={"entity_id": avatar.id}, headers=_auth(info.token)
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["reason"] == "not_in_world" and data["scene"] is None
+        assert data["entity"]["id"] == avatar.id
+
+        # 实体真的不存在 → 404（与上面两种情况分得开）
+        resp = await client.get(
+            "/scene", params={"entity_id": "nope"}, headers=_auth(info.token)
+        )
+        assert resp.status_code == 404
+
+        # 兜底处理器本身：WorldError → **409 JSON**（业务错误，不是 500 空壳）
+        from worlditor_mcp.world.mcp.http import _world_error
+
+        fallback = await _world_error(None, WorldError("实体不在任何地块：x"))
+        assert fallback.status_code == 409
+        assert "不在任何地块" in fallback.body.decode("utf-8")
+
+    _run(_scenario(tmp_path, fn, world="test"))
 
 
 def test_events_auth(tmp_path):
@@ -303,8 +353,10 @@ def test_scene_actions_with_demo(tmp_path):
             assert resp.status_code == 200
             assert resp.json()["scene"]["player_id"] == entity["id"]
             assert resp.json()["peers"] == []
-        # 玩家注册后 scene 自己能看到广场实体 actions
+        # 玩家有了化身之后：scene 自己能看到广场实体 actions
+        # （D45/D46：注册不建实体，化身要显式造 + 认领 + 把凭据指过去）
         info = await identity.register_human("小明", "pass123")
+        await give_avatar(engine, info, name="小明")
         resp = await client.get("/scene", headers=_auth(info.token))
         peers = resp.json()["peers"]
         merchant_peer = next(
@@ -375,6 +427,8 @@ def test_mcp_http_end_to_end(tmp_path):
         import uvicorn
 
         info = await identity.register_agent("探针")
+        # D45/D46：注册不建实体——工具要"我是…"就得先有化身
+        await give_avatar(engine, info, name="探针")
         port = 18999
         server = uvicorn.Server(
             uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")

@@ -275,11 +275,13 @@
     等于逃逸世界过滤）；管理端建图即归属当前世界 + 孤儿地图一键归属
   - 测试：`tests/test_world_activation.py`（工具/视图端到端 + 原语/kind/ui_hook）
 - **仍留**（新的观察项，非本缺口）：
-  - `world_list` / `world_travel` 跨世界传送未实现（设计见 DESIGN §3.0）
-  - 出生点不区分世界（`_spawn_pos` 取首张地图；等于"新玩家总进第一个世界"）
+  - `world_list` / `world_travel` 跨世界传送未实现（设计见 DESIGN §3.0；⚠ D45 起
+    "传到目标世界出生点"这句作废——出生点已不存在，改成"传送到指定地图/地块"）
+  - ~~出生点不区分世界（`_spawn_pos` 取首张地图）~~ → **✅ 随 D45 整体消失**：
+    内核不再有出生点、不再诞生角色（v0.8.0），"人从哪来"归玩法包
   - 世界间的**数据可见性**：`/state` 仍返回全部可见地图（可见性 G1 过滤），
     未按世界做数据边界
-  - 跨包服务仍全局（服务是包与包之间的约定，不是世界内能力面）
+  - 跨包服务仍全局（服务是包与包之间的约定，不是世界内能力面）→ **另记 G62**
 
 ---
 
@@ -400,10 +402,11 @@
 - **触发**：CORE_AUDIT §4 末尾"审查中发现但未处置的次要点"散落无人跟进
 - **条目**：
   - ✅ **已修（v0.7.0）**：管理端多处裸 `int()` → 传非数字直接 **500**（不是 400）。
-    点：`admin.py` 的 `page`/`page_size`/`row`/`col`/`to_row`/`to_col`/`spawn_row`/
-    `spawn_col`/`count`（`_accounts`、`_location_upsert`、`_location_move`、
-    `_connection_update`、`_map_create`、`_map_update`、`_entity_create`、
-    `_template_apply`）。**改法**：新增 `admin.py:_as_int(value, name, default)` 助手，
+    点：`admin.py` 的 `page`/`page_size`/`row`/`col`/`to_row`/`to_col`/`count`
+    （`_accounts`、`_location_upsert`、`_location_move`、`_connection_update`、
+    `_map_create`、`_map_update`、`_entity_create`、`_template_apply`）。
+    ⚠ 原列表里还有 `spawn_row` / `spawn_col` 两处——**已随 D45 删除**（v0.8.0）。
+    **改法**：新增 `admin.py:_as_int(value, name, default)` 助手，
     20 处 `int(x or 0)` 全部改走它 → `HTTPException(400, "…必须是整数：…")`；
     回归测试 `tests/test_review_fixes.py::test_admin_bad_int_returns_400_not_500`。
   - ✅ **已修（v0.7.0）**：`HTTPException` 在本版本 Starlette 下渲染成**纯文本**，
@@ -420,8 +423,8 @@
   - `?token=` 会进访问日志（SSE 的硬需求，不能删）——至少文档化 + 建议反代过滤
   - 停用玩法包不清理 `sys.modules` 残留（同名包换目录重载时可能拿到旧模块）
   - **局部更新语义不完整**（v0.5.2 审计补充）：
-    - `PATCH /admin/maps/{id}` 只给 `spawn_row` 会把 `spawn_col` 重置为 0
-      （与 docstring"未提供的字段不变"矛盾；前端总发两个值，直连 API 必踩）
+    - ~~`PATCH /admin/maps/{id}` 只给 `spawn_row` 会把 `spawn_col` 重置为 0~~
+      → **✅ 随 D45 消失**（v0.8.0：出生点两个字段整体删除，不再有这对参数）
     - `POST /admin/connections` 的 `enabled`/`paths` 实际都是必填（`admin.py` 恒传
       `data.get(...)`，缺省 None 被当"显式给值"）→ 只改一个方向不可行
     - `POST /admin/locations`（upsert）不带 `description` 会**清空**整段分时段描述
@@ -531,8 +534,9 @@
 - **现象**：`primary` 为 null 时侧栏仍按 `primary || {row:0,col:0}` 渲染，但保存
   逻辑读 `primary.value.row` → 空图首次打开、或删掉选中地块后点该按钮，Vue 把
   异步异常吞进 console，界面毫无反馈（坐标还显示成 (0,0)）。
-- **修复**：`primary` 在 `loadDetail` 后必有具体坐标（初次打开落出生点）；删格后
-  **保留该格坐标**（面板原地变"在此新建地块"，可直接重建）；保存前再做一次
+- **修复**：`primary` 在 `loadDetail` 后必有具体坐标（**D45 前是"落出生点"，现在落
+  "该图坐标序最小的地块"**——出生点已从内核删除，编辑器只需要一个确定存在的格子）；
+  删格后**保留该格坐标**（面板原地变"在此新建地块"，可直接重建）；保存前再做一次
   空值兜底并给出可见错误。
 - **回归**：`tests/test_editor_integrity.py::test_editor_keeps_a_concrete_coordinate`
   + E2E「删格后保留坐标 / 在原地重建」。
@@ -552,19 +556,12 @@
 - **商贩购买非原子**：`interaction/main.py` 先扣金再 `bag_add`，背包满时钱花了货
   没到（错误还被吞成"交互执行出错"）。修法：先 `bag_add` 成功再扣金，或失败回滚。
 - **`_bag_take` 只从第一格扣**：同一物品跨多格（30+30）取 50 会误报"数量不足"。
-- **`_ui_components` 是只写不读的死注册表 → v0.7.0 已统一文档口径（不再宣称可用）**：
-  `register_ui_component(name, web_entry)` 把 `"<play_id>.<name>" → url` 存进
-  `engine._ui_components`（`engine.py:555/1544-1551`），但**既无 list 方法、也无任何
-  HTTP 端点**暴露它，且**零调用者**。配套的 `UiBlock(kind="custom")`（结构
-  `{"component": "ns.name", "props": …, "fallback_text": …}`）前端
-  `UiBlockRenderer.vue:57-60` **只渲染 `fallback_text`**，`component`/`props` 一个字节
-  都不读（旧注释写着"组件加载 v4.2"，v4.2 从没来）——所以包作者照文档做自定义界面，
-  只会看到那句降级文本，**无报错、无日志、也无法自救**。
-  **处置（v0.7.0）**：DESIGN §4.1 / PLAY_DEV §4 已标注"预留未实现"，`model.py` 的
-  kind 说明同步标注；**不实现**——`register_view` 的 provider 已能做自定义界面组件的
-  全部事情（同一套组件协议），`custom` 的唯一额外价值是"在 UiBlock 树里**内联**一个
-  自定义组件"，而该场景目前**没有真实需求**（ui_hook 能注入内核认识的 kind，但不是
-  任意 Vue 组件）。真需要时再实现，代价一样（注册表出口 + 前端一个分支 + 降级路径）。
+- **`_ui_components` 是只写不读的死注册表**：旧 API 将 `"<play_id>.<name>" → url` 存入注册表，
+  但没有读取者、HTTP 出口或渲染消费方；`UiBlock(kind="custom")` 前端只显示
+  `fallback_text`。**处置（本轮）**：已删除 `WorlditorPlayAPI.register_ui_component`、
+  引擎对应注册方法/状态及卸载清理分支，公开文档只保留 `register_view` 与 `register_ui_hook`。
+  `custom` UiBlock 的 fallback 数据结构仍保留，作为协议输入的降级表示；若未来需要在 UiBlock
+  树内联自定义 Vue 组件，再以完整的注册、读取、传输和渲染链路重新设计。
 - **引擎命名/注释漂移**：`available_actions` 注释仍写"kind 声明 ∪ 全局注册表"、
   `model.py` 注释仍写"优先于 kind spec 的 block_move"（D18 后应说"标签"）。
 
@@ -1131,12 +1128,14 @@
   回归测试 `tests/test_mcp_tool_notifications.py` 3 条（进程内真会话：声明 +
   注册后收到通知 + 移除后收到通知 + 无会话空操作）。
 
-### G57 重构遗留的死代码——✅ 已清（v0.7.3）
+### G57 重构遗留的死代码——✅ 已清（v0.7.3；本轮复核）
 - `engine._package_states`（D44 换解析器后的孤儿）、`store.next_revision`（D28 单事务
   改造残留）、`identity.TOKEN_TIERS`（0 引用）、`engine.effective_fields_for`
   （"跨组件摊平"的最后一块，D41 就该删；用到它的那条断言改成 `fields_by_component`
-  的分组断言）。
-- 全仓库仍无 TODO/FIXME/HACK 标记；AST + grep 双证无其它未引用符号。
+  的分组断言）已于 v0.7.3 清理。
+- 本轮继续删除 `WorlditorPlayAPI.register_ui_component`、`WorldEngine.register_ui_component`、
+  `_ui_components` 及其卸载清理代码（原 G35 只写不读注册表）。
+- 全仓库仍无 TODO/FIXME/HACK 标记；AST + grep 双证未发现其它可无损删除的运行时符号。
 
 ### G17 私有地图可见性：**已修**（本节更正 2026-09-24 的复核）
 - `/scene` 现在走 `engine.can_observe_entity()`（`mcp/http.py:289`，不可观察 → 404），
@@ -1150,5 +1149,104 @@
   "交互动作冲突：x（已由 pkg 注册）"，实测）。G35 首条"无冲突检查 → 后者静默顶掉前者"
   已过期；该条其余小项（`demo_world` 续跑分支、`_ui_components` 死注册表、
   注释里的 kind 口径）中，注释口径已在本轮统一，其余见 G35 原文与 G50/G51。
+
+---
+
+## 本轮审查新增暂缓项（无行为整改）
+
+### G58 认证端点抗滥用：暂缓
+- **范围**：登录、注册、agent 注册、公开 read-token 目前没有失败退避、速率限制、
+  账户锁定、read-token 配额或 TTL；不存在账户的登录路径也未做等成本密码校验。
+- **原因**：这是公网安全策略与部署模型决策，不是无副作用修复；内存限流、代理限流、
+  多 worker 共享状态和错误文案都需要先定口径。
+- **触发条件**：准备公网长期运行、开放注册或接入不受信任用户时处理。建议方案：按用户名/IP
+  失败计数与指数退避，统一认证错误文案，read-token 配额或 TTL，并补启动配置防呆。
+- **当前缓解**：生产建议 `auth_mode=invite`，管理端口保持本机监听，并在反向代理增加限流。
+
+### G59 玩法包间名字级契约：暂缓
+- **范围**：组件键已有 namespace，但事件名、共享字段、KV key、UiBlock kind、工具名和服务
+  参数仍主要依靠文档/约定，加载器只理解包级 `requires.plays`。
+- **原因**：`provides/consumes` 会改变包元数据、加载校验、冲突与兼容策略，必须先选定声明
+  粒度、版本规则和“悬空消费”是错误还是警告；当前首个玩法包可按 PLAY_DEV 约定开发。
+- **触发条件**：出现多个真实包需要共享契约、或需要第三方生态兼容检查时处理。
+- **建议方案**：在 `play.yaml` 声明 `provides` / `consumes`，加载期校验并在管理端展示归属与消费关系。
+
+### G60 不可信玩法包隔离：暂缓
+- **范围**：玩法包 Python 代码在服务进程内导入执行；同步 `setup()` 无可中断超时，包可影响进程
+  资源与启动过程。
+- **原因**：线程/子进程/独立 venv 或容器隔离都会改变部署模型和 API 语义，不能作为无副作用修复。
+- **触发条件**：允许非管理员上传包、面向公共市场分发包、或需要不同依赖版本共存时处理。
+- **当前口径**：玩法包安装等同于授予管理员代码执行权限；`setup()` 应避免阻塞，内容导入使用
+  `import_bundle`；不同包依赖的 pip 版本必须由宿主环境统一管理。
+
+### G61 世界模板激活过滤：暂缓（既有 G52）
+- **范围**：实体模板列表目前不按调用者所在世界的激活玩法包过滤，只有全局包停用/卸载才改变可见性。
+- **原因**：模板是管理/内容治理资源，是否属于世界能力面尚未定稿；直接过滤可能影响跨世界复用与管理端编辑。
+- **触发条件**：真实玩法包需要按世界隔离模板，或管理端出现错误模板可见性问题时处理。
+- **建议方案**：明确模板是全局资源还是世界资源；若按世界过滤，为 API 和管理端增加 caller/world 上下文并补回归测试。
+
+### G62 跨包服务调用没有世界过滤（D45 之后从"观察"升级为"要处理"）
+- **范围**：`call_service` 只查"服务存在 + 提供方已加载"（`engine.py:call_service`），**不看调用方所在世界**。
+  而**激活是世界级**的（D15）：某世界没启用提供方，调用方照样调得到它的服务。
+- **为什么现在要紧**：D45 之后"玩家包"天然是**中心件**（roster / 化身管理），
+  而 `requires.plays` 是**全局包级**的（依赖未启用 → 依赖者加载失败；disable/uninstall 被依赖者挡住）。
+  两个机制叠起来 = 玩家包成了单点故障，且跨世界串味。
+- **当前缓解**（已写进 `docs/PLAY_DEV.md` §14）：**默认零依赖**（只读 `api.caller()`）；
+  要"我的全部化身"才用 `list_services()` 探测 + `call_service` 软依赖；硬依赖只留给
+  "没有玩家包就没有意义"的包。
+- **建议方案**：`call_service` 补一道世界判定（提供方在该世界未启用 → 报错/回落），
+  与工具面/原语面/视图面的口径统一。**属语义变更，需与包作者约定**（会打断"跨世界复用同一个包实例"的用法）。
+
+### G63 `/state` 把所有人的 `core:account` 一起发出去
+- **范围**：`/state` 的实体投影含全部组件，其中 `core:account.user_id` 是**账户 id**；
+  任何能读 `/state` 的凭据（含 `read` 围观档）都能看到**每个在场实体的账户 id**；
+  `/scene` 的 `peers` 同理。
+- **为什么是问题**：账户 id 是管理端 `PATCH/DELETE /admin/accounts/{id}` 的路径参数——
+  虽然那些端点另有 admin 校验（拿到 id 也不能越权），但它把"谁是谁"暴露给了所有人，
+  而玩家端根本不需要这个字段（要判断"是不是人"只需布尔）。
+- **建议方案**：`/state` / `/scene` 输出前把 `core:account` 投影成 `{"bound": true}`
+  （或直接摘掉），管理端端点仍返回完整值。**属输出契约变更**，需前端与文档同步。
+- **状态**：待决策（v0.8.0 审查发现，本轮未改——不在玩家模型方案范围内）
+
+### G64 第一个玩法包（内置玩家包）落地清单：守卫迁移 / 夹具合一 / 文档表述
+
+- **状态**：方向已定（DESIGN **D48**：玩家包内置、"玩家在地图上行动"留给第二个包），
+  **未开工**。本条只登记"落地时必须一起做"的清单——不做的话会出现"文档与守卫盯着另一个副本"，
+  而且**不报错**。
+- **迁移清单**：
+  1. **源码只能有一份**：`tests/fixtures/plays/worlditor_play_player/` →
+     `worlditor_mcp/builtin_plays/worlditor_play_player/`。夹具侧不再留副本：
+     `tests/play_fixtures.py:471` 的 `install_player_play()` 现在是从夹具目录**复制**
+     （`shutil.copytree`，`_REFERENCE_PLAYER` = 夹具路径）——改成复制内置目录即可，
+     但**两份目录不能并存**（并存的结局是改了一份、跑的是另一份）。
+  2. **两条守卫的扫描目标**（最容易漏的静默失守点）：
+     `tests/test_web_view_styles.py:23` 与 `tests/test_version_consistency.py:50`
+     都硬编码扫 `tests/fixtures/plays/*/web/*.js`——内置包的 `web/view.js` 必须进扫描集，
+     否则"视图样式约定"与"版本串一致"两处**同时**不再覆盖玩家包。
+  3. **文档表述**：`DESIGN.md` §0 一句话定位 / §1 架构图旁注 / §6 标题与正文 / §9 的 D31 行，
+     加上 `README.md:8` 与 `README.md:144`——从"内置只剩世界内容包 ×1"改成
+     "1 世界内容包 + 1 玩家包（D48）"；`docs/PLAY_DEV.md` §12"参考实现"一节要写清
+     "内置玩家包"与"夹具参考包"的新关系（口径变化：仓库重新有了一个内置行为包，
+     但它**是按玩法切的**，不是 D31 废弃的那种"一个内核机制一个包"）。
+  4. **`uninstall` 语义**：内置包只可停用（`PlayLoader.uninstall` 已拒），
+     管理端文案与 `PLAY_DEV` 要说清"内置包升级 = 随内核发版，不提供 zip 热更"。
+  5. **版本串**：内置包的 `clientInfo.version` 与 `play.yaml` 的 `version` 随内核 bump
+     （`test_version_consistency` 的口径是"扫到的组件版本必须等于 `worlditor_mcp.__version__`"）。
+  6. **空安装体验**：内置玩家包上线后，全新安装的玩家端**终于有一个 tab**（G39 残留 #4 收敛）；
+     顺带确认 G39 残留 #2 那句"仓库不再有内置官方玩法示例"要改口径。
+  7. **`.gitignore` 的 `data/`（已修，v0.8.0）**：裸 `data/` 会**连带忽略包内的 `data/` 目录**，
+     而 `data/` 正是 `PLAY_DEV` §2 约定的包内数据文件位置——参考玩家包的
+     `data/spawn.json` 就这么被静默漏掉（`git add` 不报错，只是文件永远不在库里）。
+     已把规则收紧为 `/data/`（只锚定根目录的运行时数据目录）；内置化时要再确认一遍
+     `builtin_plays/<包>/data/*` 真的进了库。
+- **前置（都属"开发之前"）**：
+  - **惰性接管** —— ✅ 已随 v0.8.0 落地（`PLAY_DEV` §14.4 第 5 点 + 参考实现 `_resume()` +
+    回归 `test_player_package.py::test_relogin_resumes_avatar_lazily`）。
+  - **视图组件 `callTool` 样板** —— ❌ 未做：每个视图手抄 ~60 行会话管理、硬编码 `/world/mcp`
+    （与 `VITE_WORLD_API` 独立域部署矛盾）、`_sessionId` 永不过期（会话失效只能整页刷新）——
+    见 G36"玩法包视图硬编码 `/world/mcp`"那条。玩家包是第一个"真要用"的视图，建议同批处理。
+- **顺带（不在本条范围）**：G62（`call_service` 无世界过滤 + `requires.plays` 全局）与
+  G63（`/state` 泄露 `core:account.user_id`）——玩家包内置后更容易被别的包硬依赖，
+  这两条的影响面会跟着变大（D48 的"默认零依赖"口径正是为了拖住这件事）。
 
 

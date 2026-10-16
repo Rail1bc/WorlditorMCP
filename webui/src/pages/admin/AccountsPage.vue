@@ -49,12 +49,14 @@
             </td>
             <td>{{ fmtTime(a.created_ts) }}</td>
             <td>
-              <template v-if="a.entity">
-                {{ entityName(a.entity) }}
-                <span class="dim"
-                  >（{{ contentComponents(a.entity).join("、") || "无内容组件" }} ·
-                  {{ positionLabel(a.entity) }}）</span
-                >
+              <template v-if="a.entities?.length">
+                <div v-for="e in a.entities" :key="e.id">
+                  {{ entityName(e) }}
+                  <span class="dim"
+                    >（{{ contentComponents(e).join("、") || "无内容组件" }} ·
+                    {{ positionLabel(e) }}）</span
+                  >
+                </div>
               </template>
               <span v-else class="dim">—</span>
             </td>
@@ -103,7 +105,9 @@
               <td><code class="token" :title="t.token">{{ t.token.slice(0, 12) }}…</code></td>
               <td>{{ t.tier }}</td>
               <td>{{ t.kind }}</td>
-              <td class="dim">{{ t.entity_id.slice(0, 8) }}…</td>
+              <td class="dim">
+                {{ t.entity_id ? `${t.entity_id.slice(0, 8)}…` : "（没有化身）" }}
+              </td>
               <td class="ops">
                 <button class="btn btn-danger" @click="revokeToken(t.token)">吊销</button>
               </td>

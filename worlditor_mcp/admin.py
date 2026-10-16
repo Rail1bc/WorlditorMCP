@@ -73,6 +73,11 @@ async def _http_error(request: Request, exc: HTTPException) -> JSONResponse:
     return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
 
 
+async def _world_error(request: Request, exc: Exception) -> JSONResponse:
+    """``WorldError`` → **409 JSON**（业务错误，与玩家端口同一口径）。"""
+    return JSONResponse({"error": str(exc)}, status_code=409)
+
+
 def _ok(data: Any = None) -> JSONResponse:
     return JSONResponse({"ok": True, **({} if data is None else {"data": data})})
 
@@ -345,8 +350,9 @@ async def _folder_delete(request: Request) -> Response:
 async def _accounts(request: Request) -> Response:
     """账户检索（q 用户名子串 / role 过滤 / 分页 / 排序）+ 凭据与邀请码概览。
 
-    账户行附带：创建时间、关联玩家实体（名称/位置/最近活跃）、未吊销
+    账户行附带：创建时间、**该主体的全部化身**（名称/位置/最近活跃）、未吊销
     凭据数——对应管理端「账户管理」页的复杂检索与管理（v0.1.12）。
+    D46：化身的数量是 0 / 1 / N，所以这里是列表（见 ``search_accounts``）。
     """
     _require_admin(request)
     params = request.query_params
@@ -383,7 +389,7 @@ async def _account_tokens(request: Request) -> Response:
 
 
 async def _account_delete(request: Request) -> Response:
-    """永久注销账户（删账户 + 吊销凭据 + 删除玩家实体，不可恢复）。"""
+    """永久注销账户（删账户 + 吊销凭据 + 删除该主体的全部化身，不可恢复）。"""
     _require_admin(request)
     try:
         await _identity(request).delete_account(request.path_params["account_id"])
@@ -448,8 +454,6 @@ async def _maps_list(request: Request) -> Response:
                 "name": m.name,
                 "description": m.description.to_dict() if m.description else None,
                 "timezone": m.timezone,
-                "spawn_row": m.spawn_row,
-                "spawn_col": m.spawn_col,
                 "visible": m.visible,
                 "world_id": engine.map_world(m.id),
                 "folder_id": engine.store.map_folder.get(m.id),
@@ -485,8 +489,6 @@ async def _map_detail(request: Request) -> Response:
                 "name": m.name,
                 "description": m.description.to_dict() if m.description else None,
                 "timezone": m.timezone,
-                "spawn_row": m.spawn_row,
-                "spawn_col": m.spawn_col,
                 "visible": m.visible,
                 "world_id": engine.map_world(map_id),
                 "folder_id": engine.store.map_folder.get(map_id),
@@ -641,8 +643,6 @@ async def _map_create(request: Request) -> Response:
             str(data.get("name") or ""),
             description=data.get("description"),
             timezone=data.get("timezone"),
-            spawn_row=_as_int(data.get("spawn_row"), "spawn_row"),
-            spawn_col=_as_int(data.get("spawn_col"), "spawn_col"),
             visible=str(data.get("visible") or "public"),
             world_id=data.get("world_id"),
             folder_id=data.get("folder_id"),
@@ -660,9 +660,6 @@ async def _map_update(request: Request) -> Response:
     for key in ("name", "description", "timezone", "visible"):
         if key in data:
             want[key] = data[key]
-    if data.get("spawn_row") is not None or data.get("spawn_col") is not None:
-        want["spawn_row"] = _as_int(data.get("spawn_row"), "spawn_row")
-        want["spawn_col"] = _as_int(data.get("spawn_col"), "spawn_col")
     try:
         m = await _engine(request).update_map(request.path_params["map_id"], **want)
     except WorldError as e:
@@ -1066,7 +1063,13 @@ def build_admin_app(
                 )
             )
             public_exact = ("/",)
-    app = Starlette(routes=routes, exception_handlers={HTTPException: _http_error})
+    app = Starlette(
+        routes=routes,
+        # HTTPException → 4xx JSON；WorldError → **409 JSON**（业务错误，不是 500）。
+        # 管理端点大多自己 try/except 转 `_err()`，但漏掉的那条路径不该变成
+        # 一屏 500 空壳——玩家端口已按同一口径接（见 mcp/http.py::_world_error）。
+        exception_handlers={HTTPException: _http_error, WorldError: _world_error},
+    )
     app.state.world_engine = engine
     app.state.world_identity = identity
     app.state.world_loader = loader

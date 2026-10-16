@@ -59,6 +59,13 @@ def test_public_api_is_documented():
     assert not missing, f"这些 API 没有出现在 PLAY_DEV.md：{missing}"
 
 
+def test_unimplemented_ui_component_registration_stays_removed():
+    """无消费者的旧自定义组件注册路径不得重新暴露。"""
+
+    assert "register_ui_component" not in _public_methods()
+    assert not hasattr(WorlditorPlayAPI, "register_ui_component")
+
+
 def test_docs_use_current_entity_projection():
     """实体投影是 5 键；旧形态不得作为现状出现。"""
 

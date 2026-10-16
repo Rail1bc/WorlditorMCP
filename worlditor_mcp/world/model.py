@@ -317,14 +317,16 @@ class WorldMap:
 
     visible（G1）：public = 所有人可见；private = 仅该图上有自己那个实体
     的玩家（+admin）可见——家地图/对局地图用 private 隐藏内容。
+
+    ⚠ **没有"出生点"**（D45）：原 ``spawn_row`` / ``spawn_col`` 两个字段已删除。
+    内核不指定"新角色落在哪"——落点是**玩法包**的事（它自己挑地块再
+    ``place_entity`` / ``move_entity``），内核连"新角色"这个概念都没有。
     """
 
     id: str
     name: str
     description: TextSchedule | None = None
     timezone: str | None = None
-    spawn_row: int = 0
-    spawn_col: int = 0
     visible: str = "public"
 
 
@@ -471,8 +473,6 @@ def map_to_dict(m: WorldMap) -> dict[str, Any]:
         "name": m.name,
         "description": m.description.to_dict() if m.description else None,
         "timezone": m.timezone,
-        "spawn_row": m.spawn_row,
-        "spawn_col": m.spawn_col,
         "visible": m.visible,
     }
 
@@ -493,17 +493,11 @@ def parse_map(value: Any) -> WorldMap:
     if value.get("description") is not None:
         description = parse_text_schedule(value.get("description"))
     tz = value.get("timezone")
-    spawn_row = value.get("spawn_row", 0)
-    spawn_col = value.get("spawn_col", 0)
-    if not _is_int(spawn_row) or not _is_int(spawn_col):
-        raise ValueError("出生点必须是整数坐标")
     return WorldMap(
         id=id_,
         name=name.strip(),
         description=description,
         timezone=str(tz) if isinstance(tz, str) and tz else None,
-        spawn_row=spawn_row,
-        spawn_col=spawn_col,
         visible=value.get("visible", "public")
         if value.get("visible") in ("public", "private")
         else "public",
@@ -982,9 +976,8 @@ class UiBlock:
     custom。character 与 custom 的结构数据放 ``data``：
     - character: {"avatar": str, "attrs": [{"label", "value"}]}（角色卡）
     - custom: {"component": "namespace.name", "props": {...},
-      "fallback_text": "..."}——⚠️ **预留未实现**：前端渲染器当前只显示
-      fallback_text，``component`` / ``props`` 无人消费；``register_ui_component``
-      也是只写不读的注册表（无 list、无 HTTP 出口）。要自定义界面请用
+      "fallback_text": "..."}——**仅保留 fallback 数据结构**：前端渲染器当前只显示
+      fallback_text，``component`` / ``props`` 无人消费。要自定义界面请用
       ``register_view``（provider 组件）；要往块里加内容用 ``register_ui_hook``。
     blocks 为子块（B9 界面钩子注入点；内核渲染时按序展开）。
     """
@@ -1009,6 +1002,22 @@ class UiBlock:
             "data": self.data,
             "blocks": [b.to_dict() for b in self.blocks],
         }
+
+
+@dataclass
+class Principal:
+    """**主体**（可登录的账户）——**不是实体**（D46/D47）。
+
+    主体有哪些化身是**玩法包**的事；内核只在主体生命周期事件里把它原样递过去，
+    让包能按稳定的键去清/建自己的 roster。``username`` 是显示名（与 ``accounts``
+    表同一份数据），``account_id`` 才是键。
+    """
+
+    account_id: str
+    username: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"account_id": self.account_id, "username": self.username}
 
 
 @dataclass
@@ -1057,6 +1066,7 @@ class ShortCircuit:
 #   on_entity_removed: (api, entity)
 #   on_entity_changed: (api, entity, changed)
 #   on_world_edited:   (api, what)
+#   on_principal_login / _logout / _deleted: (api, principal)   principal = Principal
 # （原 `on_item_used` 已随 D37 移除——物品不在内核，"用了一个东西"由玩法包发自定义事件）
 WORLD_EVENTS: tuple[str, ...] = (
     "on_tick",
@@ -1066,6 +1076,18 @@ WORLD_EVENTS: tuple[str, ...] = (
     "on_entity_removed",
     "on_entity_changed",
     "on_world_edited",
+)
+
+# 主体生命周期事件（D47；7 → 10）。**主体 = 可登录的账户，不是实体**：
+#   on_principal_login:   登录成功（凭据已发；玩法包可据此"让化身入场"/记住选中项）
+#   on_principal_logout:  一份凭据被吊销（玩法包可据此"让化身离场"）
+#   on_principal_deleted: 账户永久注销（内核已删该主体的全部化身，玩法包清自己的 roster）
+# 三条都**不做世界激活过滤**（主体不绑位置、不属于任何世界）也**不推 SSE**
+# （"谁登录了"广播给所有订阅者 = 把名册发给每个玩家）。
+PRINCIPAL_EVENTS: tuple[str, ...] = (
+    "on_principal_login",
+    "on_principal_logout",
+    "on_principal_deleted",
 )
 
 # 事件执行的阶段（D27：跨包顺序声明化，不再依赖"包加载序"这个隐式事实）。

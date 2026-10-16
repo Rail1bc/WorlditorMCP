@@ -425,16 +425,12 @@ def test_map_parse_and_round_trip():
             "name": "主世界",
             "description": schedule("示例小镇。"),
             "timezone": "Asia/Shanghai",
-            "spawn_row": 1,
-            "spawn_col": 2,
         }
     )
-    assert (m.id, m.name, m.timezone, m.spawn_row, m.spawn_col) == (
+    assert (m.id, m.name, m.timezone) == (
         "default",
         "主世界",
         "Asia/Shanghai",
-        1,
-        2,
     )
     m2 = parse_map(map_to_dict(m))
     assert m == m2
@@ -442,7 +438,7 @@ def test_map_parse_and_round_trip():
 
 def test_map_defaults():
     m = parse_map({"id": "default", "name": "主世界"})
-    assert m.timezone is None and (m.spawn_row, m.spawn_col) == (0, 0)
+    assert m.timezone is None and m.visible == "public"
 
 
 def test_map_rejects_bad_input():
@@ -450,8 +446,11 @@ def test_map_rejects_bad_input():
         parse_map({"id": "", "name": "主世界"})
     with pytest.raises(ValueError):
         parse_map({"id": "default", "name": "  "})
-    with pytest.raises(ValueError):
-        parse_map({"id": "default", "name": "主世界", "spawn_row": "x", "spawn_col": 0})
+    # D45：地图定义里的 `spawn_row` / `spawn_col` 已被内核删除。老内容文件里
+    # 还带着它们时必须**照常解析**（内容包不该因为内核删了个概念就装不上），
+    # 但解析结果里不能有这个字段——"内核不存在出生点"是硬事实。
+    m = parse_map({"id": "default", "name": "主世界", "spawn_row": 9, "spawn_col": 9})
+    assert m.id == "default" and not hasattr(m, "spawn_row")
 
 
 def test_construct_slot_defaults():

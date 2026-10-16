@@ -16,7 +16,11 @@ __pycache__/
 .venv/
 venv/
 .env
-data/
+# 运行时数据目录（根目录的 ./data：world.db / plays/ 所在处）。
+# ⚠ 必须写成 `/data/`（锚定根）：裸 `data/` 会**连带忽略玩法包内的 `data/`**——
+# 而 `data/` 正是 PLAY_DEV §2 约定的包内数据文件位置（参考玩家包的
+# `data/spawn.json` 就这么被静默忽略过）。
+/data/
 .smoke_data/
 
 # WebUI 前端（依赖不提交；构建产物 webui/dist 提交——服务内置托管需要随发行）

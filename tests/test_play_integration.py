@@ -202,7 +202,10 @@ def test_demo_door_does_not_block_and_enter_forest(tmp_path):
 
     async def fn(engine: WorldEngine, loader: PlayLoader):
         await loader.load_all()
-        player = await engine.place_entity("player", "default", 2, 0, name="小明")
+        player = await engine.place_entity(None, "default", 2, 0, name="小明")
+        # D45：内核不再按 kind="player" 造人，也不再有 `local:player` 标记组件。
+        # 夹具包判"这是不是人"看**账户绑定**（D42）——所以这里显式认领。
+        await engine.claim_avatar(player.id, "acct-test")
         door = [e for e in engine.list_entities() if e.has_component("local:door")][0]
         assert door.pos_key() == ("default", 3, 0)
         assert door.component("local:door") == {"open": False}

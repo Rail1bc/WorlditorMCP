@@ -145,8 +145,12 @@ def test_map_visibility_state_filter(tmp_path):
         hb = {"Authorization": f"Bearer {b.token}"}
         state = (await client.get("/state", headers=hb)).json()
         assert {m["id"] for m in state["maps"]} == {"default"}
-        # 玩家 A 传送进家 → 在场可见
-        await engine.move_entity(b.entity_id, "home_a", 0, 0)
+        # 玩家 A 传送进家 → 在场可见（D45/D46：化身要显式造 + 认领，
+        # 注册本身不会再产生实体；再把这份凭据指向它 = 玩法包 act_as 的那一步）
+        avatar = await engine.place_entity(None, "default", 0, 0, name="bob")
+        await engine.claim_avatar(avatar.id, b.account_id)
+        await engine.set_acting_entity(b.token, avatar.id)
+        await engine.move_entity(avatar.id, "home_a", 0, 0)
         state = (await client.get("/state", headers=hb)).json()
         assert {m["id"] for m in state["maps"]} == {"default", "home_a"}
         home = next(m for m in state["maps"] if m["id"] == "home_a")
@@ -175,7 +179,7 @@ def test_map_visibility_state_filter(tmp_path):
         )
         assert forbidden.status_code == 404
         allowed_scene = await client.get(
-            "/scene?entity_id=" + b.entity_id,
+            "/scene?entity_id=" + avatar.id,
             headers=hb,
         )
         assert allowed_scene.status_code == 200

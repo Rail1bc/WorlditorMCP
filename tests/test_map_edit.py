@@ -135,14 +135,12 @@ def test_map_crud(tmp_path):
             "dungeon",
             "地下城",
             description=schedule("幽暗的地牢。"),
-            spawn_row=1,
-            spawn_col=1,
         )
         assert engine.get_map("dungeon") is m
         with pytest.raises(WorldError, match="已存在"):
             await engine.create_map("dungeon", "重复")
-        await engine.update_map("dungeon", name="深渊", spawn_row=2, spawn_col=3)
-        assert m.name == "深渊" and (m.spawn_row, m.spawn_col) == (2, 3)
+        await engine.update_map("dungeon", name="深渊")
+        assert m.name == "深渊"
         with pytest.raises(WorldError, match="不存在"):
             await engine.update_map("nope", name="x")
 

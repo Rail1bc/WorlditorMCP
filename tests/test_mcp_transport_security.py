@@ -10,6 +10,7 @@ http421"）。修复 = 显式传入 transport_security（默认关闭 Host 校�
 from __future__ import annotations
 
 import asyncio
+import itertools
 import socket
 
 import httpx
@@ -21,6 +22,10 @@ from worlditor_mcp.world.mcp import build_mcp_server, build_transport_security
 from worlditor_mcp.world.mcp.http import build_http_app
 from worlditor_mcp.world.play import PlayLoader
 from worlditor_mcp.world.store import WorldStore
+
+# 同一个 tmp_path 上会连开多次库（白名单用例两轮）——D46 起 agent 名称是**唯一
+# 主体键**，重名会被拒（旧行为是每次注册多一具幽灵，想重名也拦不住）。
+_PROBE_SEQ = itertools.count(1)
 
 _INIT = {
     "jsonrpc": "2.0",
@@ -95,7 +100,7 @@ async def _probe(tmp_path, host_header: str, *, allowed_hosts=None, origin=None)
     mcp = build_mcp_server(engine, allowed_hosts=allowed_hosts)
     engine.attach_mcp(mcp)
     app = build_http_app(mcp, identity, engine=engine, loader=loader)
-    info = await identity.register_agent("探针")
+    info = await identity.register_agent(f"探针{next(_PROBE_SEQ)}")
     port = _free_port()
     server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")

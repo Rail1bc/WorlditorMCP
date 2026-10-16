@@ -21,7 +21,7 @@ from pathlib import Path
 import httpx
 import pytest
 from play_fixtures import install_demo_play, install_probe_play
-from world_fixtures import seed_test_world
+from world_fixtures import give_avatar, seed_test_world
 
 from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.identity import IdentityService
@@ -115,7 +115,9 @@ def test_tools_and_views_follow_world_activation(tmp_path):
         engine.attach_mcp(mcp)
         app = build_http_app(mcp, identity, engine=engine, loader=loader)
         player = await identity.register_agent("世界探针")
-        assert player.entity_id, "玩家应有实体（测试世界已铺地图）"
+        # D45/D46：注册不建实体——以玩家身份调工具前先给一具化身
+        # （造 → 认领 → 指过去；这正是玩法包做的事）
+        await give_avatar(engine, player, name="世界探针")
 
         port = _free_port()
         server = uvicorn_server(app, port)
@@ -183,11 +185,12 @@ def test_views_filter_uses_caller_world_not_default(tmp_path):
             await engine.create_world(
                 "world_b", "乙世界", play_ids=["worlditor_play_demo"]
             )
-            await engine.create_map("m_b", "乙世界地图", spawn_row=0, spawn_col=0)
+            await engine.create_map("m_b", "乙世界地图")
             await engine.create_location("m_b", 0, 0, "乙世界广场")
             await engine.assign_map("m_b", "world_b")
             player = await identity.register_agent("世界探针")
-            await engine.move_entity(player.entity_id, "m_b", 0, 0)
+            avatar = await give_avatar(engine, player, name="世界探针")
+            await engine.move_entity(avatar.id, "m_b", 0, 0)
 
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://play"

@@ -28,18 +28,18 @@
 | 方法 | 路径 | 档位 | 说明 |
 |---|---|---|---|
 | POST/GET/DELETE | `/world/mcp` | play / admin | MCP streamable HTTP（工具调用入口；`read` 档在工具入口被拒） |
-| GET | `/state` | read / play / admin | 全量快照：`{revision, tick, maps, locations, entities}`，按 G1 可见性过滤 private 地图；`revision`/`tick` = 变更游标（D28，实体各自也带）。**`entities[]` = 组件形态**（表结构 v11）：`{id, components, last_active_ts, revision, changed_tick}`——**没有顶层 `name` / `desc` / `user_id`，也没有 `kind` / `tags` / `map_id` / `row` / `col`**（能力 = 带没带那个组件，D41；位置在 `core:position` 里，D36，**不在投影里**）。名字/描述在 `components["core:info"]`、账户绑定在 `components["core:account"]`；读名字用 `components["core:info"]["name"]`，**缺失兜底 `id` 前 8 位**（DESIGN §12.4）。⚠ `/state` **不做隐身过滤**（G12 尾巴：只挡私有地图，不挡 `invisible` 实体） |
-| GET | `/scene?entity_id=` | read / play / admin | 单实体场景 `{entity, scene, peers}`（含动作菜单；`entity_id` 缺省 = 调用者自己）。`entity` / `peers` 的实体形态同 `/state`（组件里放名字，无顶层 `name` / `desc` / `user_id`） |
-| GET | `/events` | play / admin | SSE 事件流（`?token=` 支持） |
-| GET | `/views` | 免认证 | 视图清单 `{views: [{key,title,icon,play_id}]}`；**带凭据时按调用者所在世界过滤**（D15） |
-| GET | `/meta` | 免认证 | `{"mode":"play","authenticated":bool}`（前端模式识别 + **连接身份状态**）。带有效凭据时补 `tier` / `entity_id` / `username`；无凭据或凭据解析不出 → `authenticated:false`（仍 200，登录页要用它判断端口模式）。前端启动时若本地存有 token 而这里是 `false`，就清掉凭据回登录页——否则删库/吊销后界面停在打不开任何东西的空壳上 |
-| POST | `/auth/register` | 免认证 | 人类注册（`{username, password, invite_code?, admin_key?}`） |
+| GET | `/state` | read / play / admin | 全量快照：`{revision, tick, maps, locations, entities}`，按 G1 可见性过滤 private 地图；`revision`/`tick` = 变更游标（D28，实体各自也带）。**`entities[]` = 组件形态**（表结构 v12）：`{id, components, last_active_ts, revision, changed_tick}`——**没有顶层 `name` / `desc` / `user_id`，也没有 `kind` / `tags` / `map_id` / `row` / `col`**（能力 = 带没带那个组件，D41；位置在 `core:position` 里，D36，**不在投影里**）。名字/描述在 `components["core:info"]`、账户绑定在 `components["core:account"]`；读名字用 `components["core:info"]["name"]`，**缺失兜底 `id` 前 8 位**（DESIGN §12.4）。⚠ `/state` **不做隐身过滤**（G12 尾巴：只挡私有地图，不挡 `invisible` 实体），也**不过滤 `core:account`**（能读到别人的账户 id，见 GAPS G63）。地图对象**没有** `spawn_row` / `spawn_col`（D45） |
+| GET | `/scene?entity_id=` | read / play / admin | 单实体场景 `{entity, scene, peers}`（含动作菜单；`entity_id` 缺省 = 调用者自己）。`entity` / `peers` 的实体形态同 `/state`（组件里放名字，无顶层 `name` / `desc` / `user_id`）。**D45/D46：没有化身是 200 空态**——`{entity: null, scene: null, peers: [], reason: "no_avatar", text: "你还没有角色…"}`；实体不在世界上（下线 / 收在容器里）同样是 200，`reason: "not_in_world"` 而 `entity` 照常返回 |
+| GET | `/events` | play / admin | SSE 事件流（`?token=` 支持）。⚠ 主体生命周期事件（登录/登出/注销）**不推 SSE**（D47：那等于把主体名册发给每个订阅者） |
+| GET | `/views` | 免认证 | 视图清单 `{views: [{key,title,icon,play_id}]}`；**带凭据且有行动实体时按调用者所在世界过滤**（D15）；**没有化身时不过滤**（D46 / R9：否则"创建角色"的入口会跟着消失，人被困死在门口） |
+| GET | `/meta` | 免认证 | `{"mode":"play","authenticated":bool}`（前端模式识别 + **连接身份状态**）。带有效凭据时补 `tier` / `entity_id` / `username` / `principal`（`principal` = 主体账户 id，**稳定的键**；`entity_id` 可能为空 = 还没有化身，D46）；无凭据或凭据解析不出 → `authenticated:false`（仍 200，登录页要用它判断端口模式）。前端启动时若本地存有 token 而这里是 `false`，就清掉凭据回登录页——否则删库/吊销后界面停在打不开任何东西的空壳上 |
+| POST | `/auth/register` | 免认证 | 人类注册（`{username, password, invite_code?, admin_key?}`）→ 账户 + 凭据（**不建实体**，D45：返回的 `token.entity_id` 是空串，"我以哪具化身行动"由玩法包定） |
 | POST | `/auth/login` | 免认证 | 人类登录 → `{"ok":true,"token":{…}}` |
 | POST | `/auth/agent-register` | 免认证 | agent/脚本无密码自助注册（`{"name": "…"}`，按 `AUTH_MODE` / `ALLOW_AGENT_REGISTER` 判定） |
 | GET | `/auth/read-token` | 免认证 | 围观凭据（仅 `AUTH_MODE=open`） |
 | POST | `/auth/logout` | 本人凭据 | 吊销当前 token |
 | POST | `/auth/change-password` | 本人凭据 | 改密（改后旧凭据失效） |
-| POST | `/auth/delete-account` | 本人凭据 | 永久注销（级联吊销凭据 + 删除玩家实体，不可恢复） |
+| POST | `/auth/delete-account` | 本人凭据 | 永久注销（级联吊销凭据 + **删除该主体的全部化身** + 发 `on_principal_deleted`，不可恢复） |
 | GET | `/plays/{play_id}/web/{path}` | read / play / admin | 玩法包 `web/` 资源（视图 / 管理页组件；仅限本包目录） |
 
 ## 2. 管理端口（6289）
@@ -83,13 +83,13 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/admin/maps` | 全部地图（含 world_id / folder_id / sort / 地块数 / 实体数 / visible） |
-| POST | `/admin/maps` | 新建（`{id, name, description?, timezone?, spawn_row?, spawn_col?, visible?}`） |
+| POST | `/admin/maps` | 新建（`{id, name, description?, timezone?, visible?, world_id?, folder_id?}`）。**没有 `spawn_row` / `spawn_col`**（D45：内核不存在出生点，落点是玩法包的事） |
 | GET | `/admin/maps/{map_id}` | 详情：`{map, locations, entities}`；`entities[].capabilities` = 合并能力（D19，按世界过滤后的真相）。**实体形态同 `/state`**（名字在 `components["core:info"]`，无顶层 `name` / `desc` / `user_id`）。⚠ 这是**地图视角**：按 `core:position` 裁，**不在世界上的实体不在结果里**（要它们用 `GET /admin/entities`） |
-| PATCH | `/admin/maps/{map_id}` | 元数据局部更新；⚠ `spawn_row` / `spawn_col` **需成对提供**（只给其一，另一个按 0 落库） |
+| PATCH | `/admin/maps/{map_id}` | 元数据局部更新（`{name?, description?, timezone?, visible?}`；body 未提供的字段不变，`description=null` 清空）。**没有出生点字段**（D45） |
 | DELETE | `/admin/maps/{map_id}` | 删除（图上还有**绑定了账户**的实体 → 拒绝，G2 / D42） |
 | POST | `/admin/maps/{map_id}/copy` | 复制另存（`{new_id, name?, world_id?, folder_id?, with_entities}`；**绑定了账户的实体永不复制**，D42） |
 | POST | `/admin/maps/{map_id}/move` | 搬家（`{world_id?, folder_id?, sort?}`；跨世界自动落世界根） |
-| GET | `/admin/lint[?map_id=][&world_id=]` | 地图体检（死连接 / 孤立地块 / 出生点落空 / 实体悬空 / 未归属世界 / 空图，错误+提示两级） |
+| GET | `/admin/lint[?map_id=][&world_id=]` | 地图体检（死连接 / 孤立地块 / 实体悬空 / 未归属世界 / 空图，错误+提示两级）。⚠ **`spawn_missing` 已随 D45 删除**——内核没有出生点，也就没有"落空" |
 | POST | `/admin/locations` | 建/改地块（`{map_id, row, col, name, description?}`；`description` 缺省 = **清空**；文案必须是结构化 JSON，纯文本 → 400） |
 | DELETE | `/admin/locations` | 删地块（请求体 `{map_id, row, col}`；**绑定了账户的实体**在场 → 拒绝，D42） |
 | POST | `/admin/locations/move` | 原子移动地块（`{map_id, row, col, to_row, to_col}`：自身坐标 + 全图指向它的连接 + 其上实体） |
@@ -109,7 +109,7 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/admin/accounts?q=&role=&page=&page_size=&sort=` | 账户检索（分页；`sort` 默认 `created_desc`） |
+| GET | `/admin/accounts?q=&role=&page=&page_size=&sort=` | 账户检索（分页；`sort` 默认 `created_desc`）。每行带 `entities`（**该主体的全部化身**，0/1/N；D46）与 `token_count` |
 | PATCH / DELETE | `/admin/accounts/{account_id}` | 改角色（改后吊销旧凭据）/ 删除账户 |
 | GET | `/admin/accounts/{account_id}/tokens` | 该账户的凭据列表 |
 | DELETE | `/admin/tokens/{token}` | 吊销单个凭据 |
@@ -157,11 +157,16 @@ curl -s -X POST http://127.0.0.1:6288/world/mcp \
 - **错误体统一 JSON**：所有 `HTTPException`（401 / 403 / 404 …）与业务失败
   （400）都返回 `{"error": "…"}`——v0.7.0 前 Starlette 默认把前者渲染成**纯文本**，
   客户端统一按 JSON 解析会崩（已修，见 `GAPS.md` G26）。
+- **`WorldError` → 409 JSON**（v0.8.0）：内核业务错误（"地块不存在"、"实体不在任何地块"、
+  "你还没有角色"）此前会穿成 **500** 空壳。D36 让"不在世界上"合法、D45 之后它更是默认
+  状态，所以必须能明确回答。409 的含义是"请求本身合法，当前世界状态让它做不了"。
 - 数值参数（`row` / `col` / `page` / `count` …）传非数字 → **400**
   `{"error": "…必须是整数：…"}`（v0.7.0 前是 500；G26 已修）。
 - `?token=` 会进日志（SSE 的硬需求），公网部署请让反代过滤该 query。
 - `/state` 是**全量快照**（按 G1 地图可见性过滤），不做隐身实体过滤；
   隐身过滤目前只作用于感知工具与 `/scene`（见 `GAPS.md` G12 尾巴）。
+  ⚠ 它**也不过滤 `core:account`**——每个在场实体都把 `user_id` 带给所有能读 `/state` 的人
+  （见 `GAPS.md` G63）。
 - **增量刷新（D28）**：`/state` 顶部与每个实体都带 `revision`（全局单调写序号）
   与 `changed_tick`（tick 窗口）；SSE 事件 payload 也带全局 `revision`/`tick`。
   客户端缓存失效判定：`revision` 没变 = 世界没写盘；单实体用 `entity.revision`

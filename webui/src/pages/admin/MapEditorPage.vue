@@ -128,13 +128,6 @@
             </select>
           </label>
           <label class="field">
-            出生点
-            <span class="pos-inputs">
-              <input v-model.number="meta.spawn_row" type="number" /> ×
-              <input v-model.number="meta.spawn_col" type="number" />
-            </span>
-          </label>
-          <label class="field">
             时区
             <input v-model="meta.timezone" placeholder="Asia/Shanghai" />
           </label>
@@ -176,7 +169,7 @@ const TABS = [
 const mapId = ref("");
 const tab = ref("map");
 const worldId = ref("");
-const meta = reactive({ name: "", visible: "public", spawn_row: 0, spawn_col: 0, timezone: "" });
+const meta = reactive({ name: "", visible: "public", timezone: "" });
 const locations = ref([]);
 const entities = ref([]);
 const templates = ref([]);
@@ -219,6 +212,17 @@ function tileAtKey(key) {
   return locations.value.find((l) => l.row === row && l.col === col) || null;
 }
 
+/** 初次打开/切图时的首选格：该图**坐标序最小**的地块；空图退回 (0,0)。
+ *
+ * D45：原先是地图的"出生点"字段，该概念已从内核删除（内核不指定人从哪来）。
+ * 这里要的只是"编辑器开在哪个格子上"，与玩法无关——挑一个确定存在的格子即可。
+ */
+function firstTile() {
+  if (!locations.value.length) return { row: 0, col: 0 };
+  const [best] = [...locations.value].sort((a, b) => a.row - b.row || a.col - b.col);
+  return { row: best.row, col: best.col };
+}
+
 function syncFromHash() {
   const parts = location.hash.replace(/^#/, "").split("/").filter(Boolean);
   // Router segments are URI encoded so map ids may contain spaces, slashes, etc.
@@ -231,7 +235,7 @@ function syncFromHash() {
   const next = parts[3] || "map";
   tab.value = TABS.some((t) => t.key === next) ? next : "map";
   // "#/admin/maps/{map}/{tab}/{row}/{col}"：全局实体页的「定位」跳过来时带的选中格。
-  // 只认**数字**（半截/非数字一律当没带，落到出生点，而不是静默选中 (0,0)）。
+  // 只认**数字**（半截/非数字一律当没带，落到首选地块，而不是静默选中 (0,0)）。
   const row = Number(parts[4]);
   const col = Number(parts[5]);
   pendingCell.value =
@@ -240,7 +244,7 @@ function syncFromHash() {
       : null;
 }
 
-/** 应用地址栏带来的选中格（压过"落到出生点"的兜底）。 */
+/** 应用地址栏带来的选中格（压过"落到首选地块"的兜底）。 */
 function applyPendingCell() {
   if (!pendingCell.value) return;
   const { row, col } = pendingCell.value;
@@ -266,8 +270,6 @@ async function loadDetail() {
     Object.assign(meta, {
       name: data.map.name,
       visible: data.map.visible,
-      spawn_row: data.map.spawn_row,
-      spawn_col: data.map.spawn_col,
       timezone: data.map.timezone || "",
     });
     worldId.value = data.map.world_id || "";
@@ -282,13 +284,12 @@ async function loadDetail() {
     templates.value = tmpl.templates || [];
     maps.value = mapList.maps || [];
     // 选中格：侧栏（地块面板）始终按一个**具体坐标**工作，所以 primary 不能是
-    // null——初次打开落到该图出生点，切图时同理（v0.5.2 之前初次打开 primary 为
-    // null，而面板按 `primary || {row:0,col:0}` 渲染 → 点"在此新建地块"会读
-    // null.row 抛异常，界面毫无提示）。坐标已失效（如刚被删）也保留坐标，
-    // 就地重建即可。
-    primary.value = primary.value
-      ? { ...primary.value }
-      : { row: Number(meta.spawn_row) || 0, col: Number(meta.spawn_col) || 0 };
+    // null——初次打开落到该图**坐标序最小的地块**，切图时同理（v0.5.2 之前初次
+    // 打开 primary 为 null，而面板按 `primary || {row:0,col:0}` 渲染 → 点"在此
+    // 新建地块"会读 null.row 抛异常，界面毫无提示）。坐标已失效（如刚被删）也
+    // 保留坐标，就地重建即可；空图没有任何地块可落 → 退回 (0,0)。
+    // D45：这里原来落的是地图的"出生点"，该概念已从内核删除。
+    primary.value = primary.value ? { ...primary.value } : firstTile();
     // 地址栏带了具体格子（从全局实体页「定位」过来）→ 以它为准
     applyPendingCell();
   } catch (e) {
@@ -745,8 +746,6 @@ async function saveMeta() {
     await apiPatch(`/admin/maps/${mapId.value}`, {
       name: meta.name,
       visible: meta.visible,
-      spawn_row: meta.spawn_row,
-      spawn_col: meta.spawn_col,
       timezone: meta.timezone || null,
     });
     await loadDetail();
@@ -928,14 +927,6 @@ onMounted(async () => {
   background: var(--bg);
   color: var(--text);
   font-size: 13px;
-}
-.pos-inputs {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-.pos-inputs input {
-  width: 70px;
 }
 .dim {
   color: var(--text-dim);

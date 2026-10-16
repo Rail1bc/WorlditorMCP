@@ -89,7 +89,11 @@ def test_field_form_fails_closed_on_bad_json():
 
 
 def test_editor_keeps_a_concrete_coordinate():
-    """地块面板始终有具体坐标：初次打开落到出生点，删格后保留该格坐标。"""
+    """地块面板始终有具体坐标：初次打开落到该图首块地块，删格后保留该格坐标。
+
+    （D45 之前这句写的是"落到出生点"——出生点已从内核删除，编辑器改为挑
+    坐标序最小的地块：它只需要一个**确定存在**的格子，与玩法无关。）
+    """
     text = _read(_ADMIN / "MapEditorPage.vue")
     # 保存路径用局部 pos（不是 primary.value.row——null 时会抛）
     assert "const pos = primary.value;" in text

@@ -1,5 +1,84 @@
 # Changelog
 
+## v0.8.0（2026-10-18）
+
+**玩家模型落地：内核不诞生角色、不存在出生点、不标记"谁是玩家"；面板从"注册即落地"改为"玩法包管化身"。**
+（⚠ **破坏性**：表结构 **v11 → v12**（`maps` 去掉 `spawn_row` / `spawn_col`），且注册/登录**不再创建实体**。
+按 D13 无迁移——**删掉 `world.db` 重建**，旧库启动时会被明确拒绝并指名该删哪个文件。）
+
+### 变更（内核：只留通道，不留玩法）
+
+- **出生点概念整体删除（D45）**：`WorldMap.spawn_row` / `spawn_col`、`create_map` / `update_map` /
+  `copy_map` 的 spawn 参数、`lint_map` 的 `spawn_missing` 检查、管理端 `POST/PATCH /admin/maps`
+  的两个字段、地图编辑器的"出生点"输入与内容文件里的 spawn 键**全部删除**。
+  `maps` 表两列进**禁列名单**（旧库拒绝启动，消息指出该删哪个文件）。
+  连带清掉一个真实故障：地图存在但出生格没有地块时 `POST /auth/register` 直接 **500**。
+- **内核不创建任何实体（D45 / R2）**：`IdentityService._materialize()` 及 `_spawn_pos()` 删除，
+  `register_human` / `register_agent` / `login` **只产出凭据**；`token.entity_id` 为空是**合法常态**。
+  `store.save_registration_bundle` → `save_auth_bundle`（不再有实体参数，邀请码消费失败时显式回滚）。
+- **不再有"这是玩家"的内核标记（D45 / R3）**：`place_entity("player", …)` 调用点归零；
+  `local:player` 整个消失——"是不是人"一律读 `core:account`（D42 早已如此判定）。
+- **"没有化身"不再等于"没认证"（R8）**：`_entity_id()` 不再对空值抛 `McpAuthError`；
+  `api.caller()` 无化身时返回 `None`。工具新增 `register_tool(..., requires_entity=True)`（默认 True，
+  保持老包语义），**自举工具显式声明 `False`**——否则"创建第一具化身"会被"需要化身"挡死。
+  提示文案分流：无请求上下文 = "连接未认证"；有连接但无化身 = "你还没有角色，先创建一具"。
+- **`WorldError` → 409 JSON**（玩家端口）：不再是 500 空壳。"实体不在任何地块"从 D36 的边缘状态
+  变成默认状态，`/scene` 必须能明确回答而不是炸栈。
+- **agent 也有主体记录（D46 / 方案 D-c）**：无密码自助注册同样建账户行（`password_hash` 为空 →
+  永远登不进来、也改不出密码），于是 agent 有**稳定的主体键**，重名会被拒（旧行为是"每次注册
+  多一具幽灵"）。
+
+### 新增（玩法包）
+
+- **两本账的两个窄口（D46）**：`api.act_as(entity_id)` 写"**这份凭据**以哪具实体行动"
+  （存凭据行 → 多端各记各的，方案 D-a）；`api.claim_avatar(entity_id)` 写 `core:account`
+  ——**化身归属的唯一入口**（与 `set_perception` / `clear_position` 同范式：规则不放宽，能力不丢失）。
+  还有反向的 `api.release_avatar(entity_id)`：只能退**自己的**化身，顺手清空指向它的凭据指针，
+  之后 `remove_entity` 才走得通（D14 保护的是**别人**的化身，本人要删得显式解绑、留痕）。
+- **主体上下文**：`api.caller_principal()`（稳定主体键）/ `api.caller_name()`；`/meta` 返回 `principal`。
+- **`api.list_locations(map_id=None)` / `api.list_maps()`**：只读、深拷贝（G51）——"落点自定"要
+  先看得见地块与地图，否则只能靠猜坐标。
+- **主体生命周期事件（D47，内核事件 7 → 10）**：`on_principal_login` / `on_principal_logout` /
+  `on_principal_deleted`，handler 收 `Principal`（`account_id` / `username`）。三条都**不做世界
+  激活过滤**（主体不绑位置）也**不推 SSE**（"谁登录了"广播给所有订阅者 = 把名册发给每个玩家）。
+  账户注销时内核先按 `entities_of_account` 删**全部化身**再发事件（两层保险，避免孤儿）。
+- **`entities_of_account(account_id)`**：内核按账户找化身的唯一入口（与位置无关）；
+  `identity_entity_of`（单具）保留为"只想要一个代表"的展示口径。账户检索返回 `entities` 列表
+  （0 / 1 / N），管理端账户页相应改为逐具显示。
+- **参考玩家包 `worlditor_play_player`**（`tests/fixtures/plays/`；⚠ 方向已定要**内置**，见文档段的
+  **D48**——尚未落地）：roster 从内核账本派生（`query_entities(where=…)` 按 `core:account` 筛，
+  不另维护名单）、创建 / 切换 / 退掉化身、落点自定（自己的 `data/spawn.json` → 退回坐标序最小的
+  地块）、对外三个服务 `avatars_of` / `active_avatar` / `switch_to`。五个刻意的示范点写在模块
+  docstring 里。其中第 5 点是**续玩只能"惰性接管"**（`_resume()`）：`api.act_as()` 写的是**凭据**
+  指针，而凭据上下文**只在 MCP 工具 handler 里**存在——`on_principal_login` / `on_tick` 这些回调里
+  调用会抛"需要连接上下文"；而登录签发的**新凭据** `entity_id` 从空开始（D-a 的固有代价）。
+  于是接管落在**读侧自举工具**上：`caller()` 已指向自己的化身就不动 → 本包 KV 记的那具 →
+  只有**一具**就直接接上 → **多具且无记忆不猜**（交给 `player_switch`）。代价如实记：
+  **别的包的工具不认"上次那具"**（内核没有名单就不可能替包选），客户端要先调一次玩家包的
+  读侧工具——内置 WebUI 的视图挂载已经这么做。
+
+### 文档
+
+- `DESIGN.md`：新增 **D45**（出生点删除 / 内核不诞生角色）、**D46**（两本账与三个窄口）、
+  **D47**（主体生命周期事件）；§3.0 / §4.3.2 / D36 / D42 的措辞随之校正，表结构更新到 **v12**。
+  另加 **D48**（第一个玩法包 = **玩家包内置**，"玩家在地图上行动"留给第二个包；**规划中，未开工**）
+  ——局部反转 D31：D31 废弃内置包的理由是"按**内核机制**逐项切 + 包间契约无表示"，玩家包是按
+  **玩法角色**切的，对外只有三个名字级服务（§14.3），正是 G39 缺的那个样本；§6 同步标注"规划中"。
+- `docs/PLAY_DEV.md`：新增「玩家包契约」章节（主体与化身、`requires_entity` 的默认与自举、
+  软依赖锚点的三档写法、`requires.plays` 与"按世界启停"的坑）；**§14.4 第 5 点**写清
+  "登录后接着玩**只能**做成惰性接管"（`act_as` 只在工具上下文可用），§4 身份与 §9 的
+  `on_principal_login` 示例同步加注。
+- `docs/PLAYER_MODEL_PLAN.md`：方案文档标记为**已落地**（P0–P4 全部完成）。
+- `GAPS.md`：G15 / G26 / G36 相关条目校正；新增 G62（跨包服务调用无世界过滤）、
+  G63（`/state` 暴露他人 `core:account`）、**G64**（第一个内置行为包的落地清单：守卫扫描目标
+  迁移 / 夹具与内置包合一 / 文档表述，以及"视图 `callTool` 样板"这个前置）。
+
+### 工程
+
+- **`.gitignore` 的 `data/` 收紧成 `/data/`**：裸 `data/` 会连带忽略**玩法包内**的 `data/`
+  目录，而那是 `PLAY_DEV` §2 约定的包内数据文件位置——参考玩家包的 `data/spawn.json`
+  差点静默不入库（`git add` 不报错，只是那个文件永远不在库里，包照跑、内容缺失）。
+
 ## v0.7.3（2026-10-16）
 
 **玩法包开发可用性：文档校正 + 安装一致性 + 多文件包 + 单事务内容导入 + 只读快照 + 工具清单通知。**

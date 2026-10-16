@@ -29,10 +29,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 
+from ..engine import WorldError
 from ..identity import IdentityError, IdentityService, TokenInfo
 
 _META_ENTITY_KEY = "worlditor_entity_id"
 _META_TIER_KEY = "worlditor_tier"
+_META_ACCOUNT_KEY = "worlditor_account_id"
+_META_USERNAME_KEY = "worlditor_username"
+_META_TOKEN_KEY = "worlditor_token"
 _SCOPE_IDENTITY_KEY = "worlditor_identity"
 
 
@@ -43,6 +47,20 @@ async def _http_error(request: Request, exc: HTTPException) -> JSONResponse:
     客户端统一按 JSON 解析时会崩（403/404 都走这条）。
     """
     return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+
+
+async def _world_error(request: Request, exc: Exception) -> JSONResponse:
+    """``WorldError`` → **409 JSON**（可读文案），不再是 500。
+
+    这些是**业务错误**（"地块不存在"、"实体不在任何地块"、"你还没有角色"），
+    不是服务端故障。挂上它之前它们会穿到 Starlette 变成一屏 500——而 D36 让
+    "实体不在世界上"成了合法状态、D45 之后它更是**默认状态**（新注册的凭据没有
+    化身），所以"读一个不在世界上的实体"必须给出明确答复而不是 500。
+
+    状态码取 409：请求本身合法，是**当前世界状态**让它做不了（不是没权限、不是
+    找不到 URL）。文案原样透出（内核 WorldError 的消息本来就是写给用户看的）。
+    """
+    return JSONResponse({"error": str(exc)}, status_code=409)
 
 
 # 公共路径（免认证）：自助注册类端点（B13 自助注册不依赖管理员）
@@ -170,6 +188,12 @@ def _inject_into_request(obj: Any, info: Any) -> bool:
     """把身份写进单个 JSON-RPC 请求对象的 ``params._meta``；返回是否有改动。
 
     ``params`` 不是对象时不动（与单请求路径的老行为一致：无参数请求原样放行）。
+
+    注入 5 个字段：行动实体（**可为空**）、档位、主体 id、主体显示名、凭据串。
+    ``worlditor_token`` 在这里是**服务端内部的句柄**：``api.act_as`` 要写"这份
+    凭据以哪具实体行动"，而 MCP 的会话任务与 HTTP 请求不在同一个 contextvar 上下文
+    里，只有随消息走的 ``_meta`` 能可靠送达。它只存在服务端（客户端发的 ``_meta``
+    会被这里**覆盖**，响应里也不回显）。
     """
     if not isinstance(obj, dict):
         return False
@@ -181,6 +205,11 @@ def _inject_into_request(obj: Any, info: Any) -> bool:
         meta = {}
     meta[_META_ENTITY_KEY] = info.entity_id
     meta[_META_TIER_KEY] = info.tier
+    # 后三个字段用 getattr 取：老调用方/测试桩可能只有前两个（鸭子类型），
+    # 缺了就等于"没有主体"——不该因此炸掉整个请求注入。
+    meta[_META_ACCOUNT_KEY] = getattr(info, "account_id", None) or ""
+    meta[_META_USERNAME_KEY] = getattr(info, "username", None) or ""
+    meta[_META_TOKEN_KEY] = getattr(info, "token", "") or ""
     params["_meta"] = meta
     return True
 
@@ -233,6 +262,9 @@ def meta_payload(mode: str, info: TokenInfo | None) -> dict:
         payload["tier"] = info.tier
         payload["entity_id"] = info.entity_id
         payload["username"] = info.username or ""
+        # D46：主体（账户）id 是**稳定的键**（换化身、重登都不变），前端与玩法包
+        # 用它做自己 roster 的索引；entity_id 只是"这次以哪具行动"，可能为空。
+        payload["principal"] = info.account_id or ""
     return payload
 
 
@@ -275,6 +307,12 @@ async def _state(request: Request) -> Response:
 
 
 async def _scene(request: Request) -> Response:
+    """单实体场景快照（``entity_id`` 缺省 = 调用者自己）。
+
+    D45/D46：**"还没有角色"是 200 + 明确的空态**，不是 400/500——新注册的凭据
+    本来就没有化身，客户端要能区分"你还没角色"（去创建）与"这个实体不存在"
+    （真的错了）。这两种情况下 ``scene`` 都是 null，``reason`` 给出机器可读的原因。
+    """
     _require_tier(_identity_of(request.scope), ("read", "play", "admin"))
     engine = request.app.state.world_engine
     info = _identity_of(request.scope)
@@ -282,12 +320,45 @@ async def _scene(request: Request) -> Response:
         info.entity_id if info else ""
     )
     if not entity_id:
-        raise HTTPException(400, "缺少 entity_id")
+        return JSONResponse(
+            {
+                "entity": None,
+                "scene": None,
+                "peers": [],
+                "reason": "no_avatar",
+                "text": "你还没有角色：先去创建一个，再回来看这里。",
+            }
+        )
     entity = engine.get_entity(entity_id)
     if entity is None:
         raise HTTPException(404, f"实体不存在：{entity_id}")
-    if not engine.can_observe_entity(entity.id, info.entity_id, info.tier):
+    # **问自己永远看得见**（包括"我不在世界上了"这个答案）：观察权限是拿来挡
+    # 别人的；对自己套用它，"你下线了"会变成 404「场景不存在」——客户端分不出
+    # 这两种情况（而 D45 之后"没有化身/不在世界上"是常态，更要说清楚）。
+    mine = bool(info and entity.id == info.entity_id)
+    if not mine and not engine.can_observe_entity(entity.id, info.entity_id, info.tier):
         raise HTTPException(404, "场景不存在")
+    if not entity.has_position():
+        # D36：位置是可选组件，缺失 = 不在世界上（下线 / 收在容器里）。
+        # 这不是错误，但也没有"当前地块"可讲——给出明确状态，而不是让
+        # require_position() 抛 WorldError（那会变成一屏 500）。
+        return JSONResponse(
+            {
+                "entity": {
+                    **entity.to_dict(),
+                    "actions": [
+                        a.to_dict()
+                        for a in engine.list_actions(
+                            entity.id, viewer_id=info.entity_id, tier=info.tier
+                        )
+                    ],
+                },
+                "scene": None,
+                "peers": [],
+                "reason": "not_in_world",
+                "text": f"「{entity.name}」现在不在世界上（不在任何地块）。",
+            }
+        )
     scene = engine._build_scene(entity)
     peers = [
         p
@@ -362,6 +433,12 @@ async def _auth_body(request: Request) -> dict:
 
 
 def _identity_error_response(exc: Exception) -> Response:
+    """身份类端点的错误 → 400（``IdentityError`` 与存储层 ``WorldError`` 共用）。
+
+    ``WorldError`` 也要接：注册时的邀请码消费在存储层的事务里（并发抢同一个码
+    → rowcount≠1 → 回滚并抛 WorldError）。只接 ``IdentityError`` 的话，这条
+    真实路径会以 **500** 的形式回给用户（"邀请码已被用掉"变成"服务器错误"）。
+    """
     return JSONResponse({"error": str(exc)}, status_code=400)
 
 
@@ -375,7 +452,7 @@ async def _register(request: Request) -> Response:
             invite_code=data.get("invite_code"),
             admin_key=data.get("admin_key"),
         )
-    except IdentityError as e:
+    except (IdentityError, WorldError) as e:
         return _identity_error_response(e)
     return JSONResponse({"ok": True, "token": info.to_dict()})
 
@@ -387,7 +464,7 @@ async def _login(request: Request) -> Response:
         info = await identity.login(
             str(data.get("username") or ""), str(data.get("password") or "")
         )
-    except IdentityError as e:
+    except (IdentityError, WorldError) as e:
         return _identity_error_response(e)
     return JSONResponse({"ok": True, "token": info.to_dict()})
 
@@ -399,7 +476,7 @@ async def _agent_register(request: Request) -> Response:
         info = await identity.register_agent(
             str(data.get("name") or ""), invite_code=data.get("invite_code")
         )
-    except IdentityError as e:
+    except (IdentityError, WorldError) as e:
         return _identity_error_response(e)
     return JSONResponse({"ok": True, "token": info.to_dict()})
 
@@ -408,7 +485,7 @@ async def _read_token(request: Request) -> Response:
     identity: IdentityService = request.app.state.world_identity
     try:
         info = await identity.create_read_token()
-    except IdentityError as e:
+    except (IdentityError, WorldError) as e:
         return _identity_error_response(e)
     return JSONResponse({"ok": True, "token": info.to_dict()})
 
@@ -428,7 +505,7 @@ async def _delete_account(request: Request) -> Response:
         return _identity_error_response(IdentityError("无效的凭据"))
     try:
         await identity.delete_own_account(info.token)
-    except IdentityError as e:
+    except (IdentityError, WorldError) as e:
         return _identity_error_response(e)
     return JSONResponse({"ok": True})
 
@@ -444,7 +521,7 @@ async def _change_password(request: Request) -> Response:
             str(data.get("old_password") or ""),
             str(data.get("new_password") or ""),
         )
-    except IdentityError as e:
+    except (IdentityError, WorldError) as e:
         return _identity_error_response(e)
     return JSONResponse({"ok": True})
 
@@ -455,6 +532,12 @@ async def _views(request: Request) -> Response:
     登录页也要用（决定是否显示"无视图"提示），故不做档位限制。
     D15/v0.3.0：已登录时按**调用者所在世界**过滤——该世界未启用的玩法包，
     它的视图 tab 不出现（与工具面过滤同一套判断）。
+
+    D46（R9 自举路径）：**没有行动实体时不过滤**。此时
+    ``play_active_for_entity("")`` 会回落到**默认世界**，于是"玩家在别的世界"
+    就等于"什么视图都看不到"——包括"创建角色"的那个入口，人被困死在门口。
+    宁可多显示几个 tab（点了会因为世界未启用而不可用，那是可理解的），
+    也不能让唯一的出路消失。围观（read）凭据同理。
     """
     engine = request.app.state.world_engine
     info = _identity_of(request.scope)
@@ -462,7 +545,8 @@ async def _views(request: Request) -> Response:
     views = [
         v
         for v in engine.list_views()
-        if engine.play_active_for_entity(entity_id, v.get("play_id", ""))
+        if not entity_id
+        or engine.play_active_for_entity(entity_id, v.get("play_id", ""))
     ]
     return JSONResponse({"views": views})
 
@@ -564,7 +648,11 @@ def build_http_app(
     app = Starlette(
         routes=routes,
         lifespan=combined_lifespan,
-        exception_handlers={HTTPException: _http_error},
+        # HTTPException → 4xx JSON；WorldError → **409 JSON**（业务错误，不是 500）。
+        # 后者在本版本变成必需：D36 让"实体不在世界上"合法、D45 之后"新凭据没有
+        # 化身"更是默认状态，而 `_build_scene` 这条路径会对它抛 WorldError——
+        # 不接就是一个 500 空壳，客户端连"你还没有角色"都读不到。
+        exception_handlers={HTTPException: _http_error, WorldError: _world_error},
     )
     app.state.world_engine = engine
     app.state.world_identity = identity

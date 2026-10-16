@@ -47,12 +47,27 @@ def _scenario(db_path, fn, **kwargs):
 # ---------- 本人注销 ----------
 
 
+async def _avatar(
+    engine, account_id: str, *, name: str = "化身", row: int = 0, col: int = 0
+):
+    """造一具属于某账户的化身（D45/D46：内核不诞生角色，**玩法包才是发起方**）。
+
+    测试里直接调内核原语 + 窄口：``place_entity``（造实体）→ ``claim_avatar``
+    （认领给该账户，写 ``core:account``，从此受 D14 保护）。
+    """
+    entity = await engine.place_entity(None, "default", row, col, name=name)
+    await engine.claim_avatar(entity.id, account_id)
+    return entity
+
+
 def test_delete_own_account(tmp_path):
-    """本人注销：账户 + 全部凭据 + 玩家实体删除；用户名可重新注册。"""
+    """本人注销：账户 + 全部凭据 + **全部化身**删除；用户名可重新注册。"""
 
     async def fn(engine, identity):
         info = await identity.register_human("小明", "pass123")
-        entity_id = info.entity_id
+        assert info.entity_id == ""  # D45：注册不建实体
+        entity = await _avatar(engine, info.account_id, name="小明")
+        entity_id = entity.id
         # 再登录一次（login 本身会吊销旧凭据——验证与新凭据一并吊销）
         info2 = await identity.login("小明", "pass123")
         assert identity.resolve(info.token) is None  # login 吊销旧凭据
@@ -80,42 +95,46 @@ def test_delete_own_account_read_tier_rejected(tmp_path):
     _run(_scenario(tmp_path / "world.db", fn))
 
 
-def test_offline_player_keeps_the_same_entity(tmp_path):
-    """下线的玩家登录回来**还是同一个实体**（D36 的默认值坑）。
+def test_offline_avatar_still_counts_as_mine(tmp_path):
+    """ "按账户找化身"与**位置无关**（D36 的默认值坑；D46 起改由 ``entities_of_account`` 承担）。
 
-    "按账户找实体"与**位置无关**。但 `list_entities()` 从 v2 第 1d 期起默认只返回
-    "在世界上"的实体——照它找，一个下线的玩家会被判成"没有实体"，`login()` 于是
-    `_materialize()` **又造一个玩家实体**：同一账户两个身份化实体，旧的成孤儿
-    （仍绑着账户、仍不可被 `remove_entity` 删），账户页则显示成"没有实体"。
+    `list_entities()` 从 v2 第 1d 期起默认只返回"在世界上"的实体——照它找，一个
+    下线的化身会被判成"没有化身"，然后**再补造一具**：同一账户多出一个孤儿
+    （仍绑着账户、仍不可被 `remove_entity` 删），账户页则显示成"没有化身"。
 
     这类"默认值改了、调用点没跟着改"的读点不会报错，只会悄悄多出一个实体——
-    所以要有一条断言盯着**实体数量**。
+    所以要有一条断言盯住**数量**与**跨位置的一致性**。
     """
 
     async def fn(engine, identity):
         info = await identity.register_human("小明", "pass123")
-        entity_id = info.entity_id
+        first = await _avatar(engine, info.account_id, name="小明", row=0, col=0)
+        second = await _avatar(engine, info.account_id, name="小明二号", row=0, col=1)
+
+        # 下线其中一具：位置组件被摘掉（玩法包走 api.clear_position）
+        await engine.clear_position(second.id)
+        assert engine.get_entity(second.id).pos_key() is None
+        assert second.id not in {e.id for e in engine.list_entities()}  # 默认查不到
+
+        # 但"是不是我的化身"与位置无关：两具都要在
+        mine = {e.id for e in engine.entities_of_account(info.account_id)}
+        assert mine == {first.id, second.id}
+
+        # 登录**不补造实体**（D45）：这里只发凭据，化身由玩法包管理
         before = set(engine.store.entities)
-
-        # 下线：位置组件被摘掉（玩法包走 api.clear_position）
-        await engine.clear_position(entity_id)
-        assert engine.get_entity(entity_id).pos_key() is None
-        assert entity_id not in {e.id for e in engine.list_entities()}  # 默认查不到
-
-        # 重新登录：仍然是同一个实体，不新造
         again = await identity.login("小明", "pass123")
-        assert again.entity_id == entity_id
-        assert set(engine.store.entities) == before, "登录不该凭空多出一个玩家实体"
+        assert again.entity_id == ""
+        assert set(engine.store.entities) == before, "登录不该凭空多出一个实体"
 
-        # 账户检索也要看得到它（离线 ≠ 没有实体）
+        # 账户检索也要看得到两具（含下线那具）
         page = identity.search_accounts(q="小明")
         row = next(a for a in page["accounts"] if a["username"] == "小明")
-        assert row["entity"] is not None
-        assert row["entity"]["id"] == entity_id
+        assert {e["id"] for e in row["entities"]} == {first.id, second.id}
 
-        # 注销仍然级联到它（走 identity_entity_of，与位置无关）
+        # 注销级联到**全部**化身（与位置无关）
         await identity.delete_account(info.account_id)
-        assert engine.get_entity(entity_id) is None
+        assert engine.get_entity(first.id) is None
+        assert engine.get_entity(second.id) is None
 
     _run(_scenario(tmp_path / "world.db", fn))
 
@@ -124,20 +143,23 @@ def test_offline_player_keeps_the_same_entity(tmp_path):
 
 
 def test_admin_delete_account(tmp_path):
-    """管理员删除账户（含管理员）；事件触发（on_entity_removed）。"""
+    """管理员删除账户（含管理员）；事件触发（on_entity_removed，逐个化身）。"""
 
     async def fn(engine, identity):
         admin = await identity.register_human("管理员", "pass123", admin_key="sekret")
         player = await identity.register_human("小明", "pass123")
+        one = await _avatar(engine, player.account_id, name="小明", row=0, col=0)
+        two = await _avatar(engine, player.account_id, name="小明二号", row=0, col=1)
         removed = []
         engine.register_world_event(
             "on_entity_removed", lambda api, e: removed.append(e.id)
         )
         await identity.delete_account(player.account_id)
         assert engine.store.get_account(player.account_id) is None
-        assert engine.get_entity(player.entity_id) is None
+        assert engine.get_entity(one.id) is None
+        assert engine.get_entity(two.id) is None
         assert identity.resolve(player.token) is None
-        assert removed == [player.entity_id]
+        assert sorted(removed) == sorted([one.id, two.id])
         # 管理员也能删自己（注销闭环）
         await identity.delete_account(admin.account_id)
         assert engine.store.get_account(admin.account_id) is None
@@ -323,27 +345,71 @@ def test_http_admin_invite_revoke(tmp_path):
 def test_remove_account_bound_entity_protected(tmp_path):
     """remove_entity 拒绝**绑定了账户**的实体；delete_account_entity 为受控通道。
 
-    D42：判据从 `kind == "player"` 换成 `core:account`——所以这里额外验证
-    "kind=player 但没绑账户也能删"（旧判据会白挡）。
+    D42：判据是 `core:account`（**不是**"身份"）——所以这里额外验证
+    "没绑账户的同名实体照样能删"（代理判据会白挡）。
+    D46：化身怎么来的？**玩法包认领**（``claim_avatar``）——内核自己不造。
     """
 
     async def fn(engine, identity):
         info = await identity.register_human("小明", "pass123")
+        entity = await _avatar(engine, info.account_id, name="小明")
         with pytest.raises(WorldError, match="绑定了账户"):
-            await engine.remove_entity(info.entity_id)
-        assert engine.get_entity(info.entity_id) is not None
+            await engine.remove_entity(entity.id)
+        assert engine.get_entity(entity.id) is not None
         # 受控通道（身份服务）
         from worlditor_mcp.world import WorldError as WE
 
-        await engine.delete_account_entity(info.entity_id)
-        assert engine.get_entity(info.entity_id) is None
+        await engine.delete_account_entity(entity.id)
+        assert engine.get_entity(entity.id) is None
         # 没绑账户的实体走受控通道 → 拒绝
         wolf = await engine.place_entity("wolf", "default", 0, 0, name="狼")
         with pytest.raises(WE, match="只支持绑定了账户"):
             await engine.delete_account_entity(wolf.id)
-        # kind=player 但没绑账户 → 普通实体，可以被 remove
+        # 没绑账户 → 普通实体，可以被 remove（D14 保护的是"绑了账户的"）
         loose = await engine.place_entity("player", "default", 0, 1, name="野玩家")
         await engine.remove_entity(loose.id)
         assert engine.get_entity(loose.id) is None
+
+    _run(_scenario(tmp_path / "world.db", fn))
+
+
+def test_release_avatar_is_the_owner_channel(tmp_path):
+    """**退掉自己的化身**：只能退自己的；退掉后 D14 不再拦；指针被清空（D46）。
+
+    这条通道的存在理由：D14 让"绑账户的实体"谁都删不掉——包括**本人想删掉自己
+    多余的化身**时。所以内核给一道owner-scoped 的解绑窄口，而不是给玩法包开
+    删除后门：解绑 → 序列化指针清空 → 才允许 remove。
+    """
+
+    async def fn(engine, identity):
+        mine = await identity.register_human("小明", "pass123")
+        other = await identity.register_human("小红", "pass123")
+        my_avatar = await _avatar(engine, mine.account_id, name="小明")
+        other_avatar = await _avatar(engine, other.account_id, name="小红", col=1)
+
+        # 别人的化身：退不掉（D14 对别人依然完全有效）
+        with pytest.raises(WorldError, match="只能退掉自己"):
+            await engine.release_avatar(other_avatar.id, mine.account_id)
+        # 没有主体 → 退不掉
+        with pytest.raises(WorldError, match="没有主体"):
+            await engine.release_avatar(my_avatar.id, "")
+        # 没绑账户的 → 不需要解绑
+        loose = await engine.place_entity(None, "default", -1, 0, name="路人")
+        with pytest.raises(WorldError, match="没有绑定账户"):
+            await engine.release_avatar(loose.id, mine.account_id)
+
+        # 自己的：解绑 → 指针被清 → 可以删
+        await engine.store.set_token_entity(mine.token, my_avatar.id)
+        cleared = await engine.release_avatar(my_avatar.id, mine.account_id)
+        assert cleared == 1, "指向它的凭据指针必须一起清掉（否则留下悬空实体 id）"
+        assert engine.store.get_token(mine.token).entity_id == ""
+        assert engine.get_entity(my_avatar.id).user_id is None
+        await engine.remove_entity(my_avatar.id)  # 不再被 D14 拦
+        assert engine.get_entity(my_avatar.id) is None
+        # 已经解绑的再退一次 → 报"没有绑定账户"（幂等语义：第二次是空操作式报错）
+        spare = await _avatar(engine, mine.account_id, name="小明三号", col=-1)
+        await engine.release_avatar(spare.id, mine.account_id)
+        with pytest.raises(WorldError, match="没有绑定账户"):
+            await engine.release_avatar(spare.id, mine.account_id)
 
     _run(_scenario(tmp_path / "world.db", fn))

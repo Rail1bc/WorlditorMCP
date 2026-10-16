@@ -15,7 +15,7 @@ import httpx
 import pytest
 import uvicorn
 from play_fixtures import install_demo_play
-from world_fixtures import seed_test_world
+from world_fixtures import give_avatar, seed_test_world
 
 from worlditor_mcp.world.engine import WorldEngine
 from worlditor_mcp.world.identity import IdentityService
@@ -107,6 +107,8 @@ def test_read_tier_rejected_play_tier_allowed(tmp_path):
         read = await identity.create_read_token()
         player = await identity.register_agent("探针")
         assert read.tier == "read" and player.tier == "play"
+        # D45/D46：play 档要有化身才调得动"需要身体"的工具（造 → 认领 → 指过去）
+        await give_avatar(engine, player, name="探针")
 
         port = _free_port()
         server = uvicorn.Server(

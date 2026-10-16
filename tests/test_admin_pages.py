@@ -455,6 +455,9 @@ async def _accounts_search_body(admin_client, identity):
     # 再登录一次：login 会**吊销旧凭据**（identity.login 的既定语义），
     # 所以 user1 名下始终只有一份有效凭据——token_count 反映的是未吊销数。
     await identity.login("user1", "pass123")
+    # D46：注册**不建实体**，化身由玩法包认领（测试里直接走内核原语 + 窄口）
+    avatar = await identity._engine.place_entity(None, "default", 0, 0, name="user1")
+    await identity._engine.claim_avatar(avatar.id, u1.account_id)
     h = {"Authorization": f"Bearer {admin_token}"}
     # q 过滤
     resp = await admin_client.get("/admin/accounts?q=user", headers=h)
@@ -478,13 +481,14 @@ async def _accounts_search_body(admin_client, identity):
     # 两页正好覆盖两个账户（谁在第一页按注册时间倒序，别把顺序写死）
     rows = page1["accounts"] + page2["accounts"]
     assert {a["username"] for a in rows} == {"user1", "user2"}
-    # 凭据明细（user1 登录一次 → 一份有效凭据）与绑定实体
-    # （D41：实体投影没有 kind / tags——判能力看 `local:player` 组件）
+    # 凭据明细（user1 登录一次 → 一份有效凭据）与化身清单
+    # （D46：一个主体可以有 0/1/N 具化身 → `entities` 是列表；
+    #   D45：不再有 `local:player` 这种"内核产的玩家标记"，判据是 core:account）
     row = next(a for a in rows if a["username"] == "user1")
     assert row["token_count"] == 1
-    assert row["entity"] is not None
-    assert "local:player" in row["entity"]["components"]
-    assert "kind" not in row["entity"] and "tags" not in row["entity"]
+    assert [e["id"] for e in row["entities"]] == [avatar.id]
+    assert "core:account" in row["entities"][0]["components"]
+    assert "kind" not in row["entities"][0] and "tags" not in row["entities"][0]
     assert row["created_ts"] > 0
     # tokens 端点（只列未吊销凭据，完整 token 供吊销）
     resp = await admin_client.get(f"/admin/accounts/{u1.account_id}/tokens", headers=h)

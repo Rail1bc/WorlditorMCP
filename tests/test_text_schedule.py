@@ -297,7 +297,7 @@ def test_demo_world_uses_structured_descriptions():
 # v0.1.0 `v4store._seed_world` 写进去的那一行（原样抄自 git show v0.1.0）
 _LEGACY_SEED = (
     "INSERT OR REPLACE INTO maps(id, name, description_json, timezone,"
-    " spawn_row, spawn_col, visible) VALUES(?, ?, ?, ?, 0, 0, 'public')",
+    " visible) VALUES(?, ?, ?, ?, 'public')",
     (
         "default",
         "主世界",
@@ -419,8 +419,8 @@ def test_corrupt_json_column_is_reported_as_such(tmp_path):
     """列里根本不是合法 JSON（截断/手改坏了）→ 说"不是合法 JSON"，不是栈。"""
     db = _poison(
         tmp_path,
-        "INSERT INTO maps(id, name, description_json, timezone, spawn_row,"
-        " spawn_col, visible) VALUES('default', '主世界', ?, NULL, 0, 0, 'public')",
+        "INSERT INTO maps(id, name, description_json, timezone, visible)"
+        " VALUES('default', '主世界', ?, NULL, 'public')",
         ('{"periods": [{"start": "00:00"',),
     )
     with pytest.raises(IncompatibleDataError) as err:

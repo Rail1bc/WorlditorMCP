@@ -8,7 +8,11 @@
   的数据直接导入（不经 PlayLoader），得到原来的演示世界（41 地块、小镇广场、
   商贩·阿福…）。适合断言真实地名/实体的测试。
 
-两者都幂等：已存在的地图/地块跳过。
+再加一个身份侧的通用动作 ``give_avatar``：D45/D46 之后**注册不再产生实体**，
+凡是"以玩家身份做事"（调工具 / 看视图 / 看 /state）的测试都要显式给一具化身
+——那正是玩法包要做的事（造 → 认领 → 指过去）。
+
+铺法都幂等：已存在的地图/地块跳过。
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ _DIRECTIONS = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
 async def seed_test_world(engine, *, map_id: str = TEST_MAP_ID) -> None:
     """铺一张最小地图（十字 5 地块 + 双向连接），幂等。"""
     if engine.get_map(map_id) is None:
-        await engine.create_map(map_id, "测试世界", spawn_row=0, spawn_col=0)
+        await engine.create_map(map_id, "测试世界")
     for (row, col), name in TEST_CELLS.items():
         if engine.get_location(map_id, row, col) is None:
             await engine.create_location(map_id, row, col, name)
@@ -57,6 +61,31 @@ async def _connect(engine, map_id: str, src: tuple[int, int], direction: str, ds
         enabled=True,
         paths=[{"targets": [{"map_id": map_id, "row": dst[0], "col": dst[1]}]}],
     )
+
+
+async def give_avatar(
+    engine,
+    info,
+    *,
+    name: str = "化身",
+    map_id: str = TEST_MAP_ID,
+    row: int = 0,
+    col: int = 0,
+):
+    """给一份玩家凭据一具化身，并让这份凭据**指向它**；返回该实体。
+
+    三步就是玩法包的三步（D46）：
+
+    1. ``place_entity`` 造实体；
+    2. ``claim_avatar`` 认领给该凭据的主体（写 ``core:account``，从此受 D14 保护）；
+    3. ``set_acting_entity`` 把这份凭据的行动实体指过去（= ``api.act_as``）。
+
+    三步都必须显式做——D45 之后内核不会再替任何人"诞生角色"。
+    """
+    entity = await engine.place_entity(None, map_id, row, col, name=name)
+    await engine.claim_avatar(entity.id, info.account_id)
+    await engine.set_acting_entity(info.token, entity.id)
+    return entity
 
 
 def schedule(

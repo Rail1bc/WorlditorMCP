@@ -17,9 +17,7 @@
     }
    ]
   },
-  "timezone": "Asia/Shanghai",
-  "spawn_row": 0,
-  "spawn_col": 0
+  "timezone": "Asia/Shanghai"
  },
  "locations": [
   {

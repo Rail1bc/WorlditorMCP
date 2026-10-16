@@ -19,7 +19,7 @@ from worlditor_mcp.world.store import WorldStore
 
 PLAY_ID = "worlditor_play_content"
 
-_MAP = {"id": "main", "name": "主世界", "spawn_row": 0, "spawn_col": 0}
+_MAP = {"id": "main", "name": "主世界"}
 _LOCS = [
     {"row": 0, "col": 0, "name": "广场"},
     {"row": 0, "col": 1, "name": "商店"},

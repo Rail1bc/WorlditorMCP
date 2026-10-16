@@ -40,7 +40,7 @@ async def _world_with_two_maps(engine: WorldEngine) -> None:
     await engine.create_world("world_a", "甲世界")
     await engine.create_world("world_b", "乙世界")
     await seed_test_world(engine, map_id="m1")
-    await engine.create_map("m2", "第二张图", spawn_row=0, spawn_col=0)
+    await engine.create_map("m2", "第二张图")
     await engine.create_location("m2", 0, 0, "广场")
     await engine.create_location("m2", 0, 1, "东街")
 
@@ -484,13 +484,17 @@ def test_lint_reports_dead_target(tmp_path):
     _run(fn())
 
 
-def test_lint_reports_spawn_missing_and_dangling_entity(tmp_path):
-    """出生点落空 + 实体悬空（数据损坏）都是 error。"""
+def test_lint_reports_dangling_entity(tmp_path):
+    """实体悬空（数据损坏）是 error。
+
+    D45 之前这里还顺带断言"出生点落空"（`spawn_missing`）——**内核没有出生点后
+    这条检查整个删除**（没有"新玩家会落哪"这回事，也就没有"落空"）。
+    """
 
     async def fn():
         engine = await _engine(tmp_path)
         try:
-            await engine.create_map("broken", "坏图", spawn_row=7, spawn_col=7)
+            await engine.create_map("broken", "坏图")
             await engine.create_location("broken", 0, 0, "孤岛")
             await engine.assign_map("broken", "default")
             # 手工塞一个坐标上没有地块的实体（模拟数据损坏）
@@ -508,11 +512,11 @@ def test_lint_reports_spawn_missing_and_dangling_entity(tmp_path):
             )
             report = engine.lint_map("broken")
             codes = {p["code"] for p in report["problems"]}
-            assert "spawn_missing" in codes
             assert "dangling_entity" in codes
+            assert "spawn_missing" not in codes  # D45：出生点检查已删除
             # 单地块图：孤立按 warn 报（可能是刚建的图）
             assert "isolated_location" in codes
-            assert report["counts"]["error"] == 2
+            assert report["counts"]["error"] == 1
         finally:
             await engine.terminate()
 
@@ -525,7 +529,7 @@ def test_lint_reports_no_world_and_empty_map(tmp_path):
     async def fn():
         engine = await _engine(tmp_path)
         try:
-            await engine.create_map("orphan", "孤儿图", spawn_row=0, spawn_col=0)
+            await engine.create_map("orphan", "孤儿图")
             report = engine.lint_map("orphan")
             codes = {p["code"] for p in report["problems"]}
             assert "no_world" in codes
@@ -545,9 +549,19 @@ def test_lint_maps_sorted_by_severity(tmp_path):
         try:
             await seed_test_world(engine)
             await engine.assign_map("default", "default")
-            await engine.create_map("broken", "坏图", spawn_row=7, spawn_col=7)
+            await engine.create_map("broken", "坏图")
             await engine.create_location("broken", 0, 0, "孤岛")
             await engine.assign_map("broken", "default")
+            # "坏图"要真的有 error 才谈得上排序（原本靠出生点落空，D45 已删除）
+            await engine.store.save_entity(
+                Entity(
+                    id="ghost2",
+                    components={
+                        "core:position": {"map_id": "broken", "row": 3, "col": 3},
+                        "core:info": {"name": "幽灵"},
+                    },
+                )
+            )
             report = engine.lint_maps()
             assert report["counts"]["maps"] == 2
             assert [r["map_id"] for r in report["maps"]][0] == "broken"
@@ -801,8 +815,8 @@ def test_legacy_db_is_refused_on_startup(tmp_path):
         msg = str(ei.value)
         assert "world.db" in msg  # 指明该删哪个文件（而不是打一屏栈）
         assert (
-            "v7" in msg and "v11" in msg
-        )  # 说清版本落差（SCHEMA_VERSION=11，升版要跟着改）
+            "v7" in msg and "v12" in msg
+        )  # 说清版本落差（SCHEMA_VERSION=12，升版要跟着改）
         assert "删除" in msg and "重新启动" in msg
         await engine.terminate()
 
@@ -820,6 +834,45 @@ def test_legacy_db_is_refused_on_startup(tmp_path):
             assert (await cur.fetchone())[0] == 1, "旧数据不能丢"
         finally:
             await conn.close()
+
+    _run(fn())
+
+
+def test_maps_spawn_columns_are_refused(tmp_path):
+    """**v12 的禁列闸**：库里的 `maps` 还带着 `spawn_row` / `spawn_col` → 拒绝启动。
+
+    这是 D45 的第三道闸（前两道是"表结构没有这两列"与"新库 DDL 不建这两列"）。
+    为什么放行不了：留着它们载入会**成功**，而"新玩家落在哪"这个语义已经不存在
+    ——一个作废的字段静静躺在库里，比拒绝启动危险（D23"不静默丢数据"的同源原则：
+    **不静默留作废语义**）。消息要指名 `world.db` 与那两列。
+    """
+
+    async def fn():
+        import aiosqlite
+
+        db = tmp_path / "world.db"
+        engine = await _engine(tmp_path)  # 先用本版本建一个**正常库**
+        await engine.terminate()
+
+        # 手工把旧列加回去（模拟"从 v11 库升上来"），版本号保持 v12 → 只剩禁列闸能拦
+        conn = await aiosqlite.connect(db)
+        await conn.execute(
+            "ALTER TABLE maps ADD COLUMN spawn_row INTEGER NOT NULL DEFAULT 0"
+        )
+        await conn.execute(
+            "ALTER TABLE maps ADD COLUMN spawn_col INTEGER NOT NULL DEFAULT 0"
+        )
+        await conn.commit()
+        await conn.close()
+
+        engine = WorldEngine(WorldStore(db))
+        with pytest.raises(IncompatibleDataError) as ei:
+            await engine.initialize()
+        msg = str(ei.value)
+        assert "world.db" in msg
+        assert "maps.spawn_row" in msg and "maps.spawn_col" in msg
+        assert "D45" in msg
+        await engine.terminate()
 
     _run(fn())
 

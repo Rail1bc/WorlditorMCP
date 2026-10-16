@@ -50,11 +50,13 @@ async def _scenario_no_map(db_path: Path, fn, **kwargs):
         await identity._engine.terminate()
 
 
-def test_register_and_login_without_map(tmp_path):
-    """世界还没有地图时：注册/登录仍可用（entity_id 为空），有地图后自动补建实体。
+def test_register_and_login_create_no_entity(tmp_path):
+    """**注册与登录都不创建实体**（D45）——有没有地图都一样。
 
-    v0.2.0 内核不内置世界内容——若此时拒绝注册/登录，管理员就进不了管理端去
-    启用世界包（部署死锁），因此身份层必须放行。
+    这条是 R2 的守卫：内核不诞生角色。新凭据的 ``entity_id`` 是空串，这是
+    **正常结果**（不是"注册没成功"）："我以哪具化身行动"由玩法包经
+    ``api.act_as`` 决定（D46）。历史上世界就绪后登录会"补建实体"，那个行为
+    已随 D45 删除——所以这里连"补建"也要断言掉。
     """
 
     async def fn(identity: IdentityService):
@@ -67,13 +69,11 @@ def test_register_and_login_without_map(tmp_path):
         again = await identity.login("管理员", "pass123")
         assert again.tier == "admin" and again.entity_id == ""
         assert engine.list_entities() == []
-        # 世界就绪后：同一账户登录即补建 player 实体
+        # 世界就绪后**依然不建实体**：内核不诞生角色（D45）
         await seed_test_world(engine)
         relogin = await identity.login("管理员", "pass123")
-        assert relogin.entity_id != ""
-        entity = engine.get_entity(relogin.entity_id)
-        assert entity is not None and entity.has_component("local:player")
-        assert entity.user_id is not None
+        assert relogin.entity_id == ""
+        assert engine.list_entities() == []
 
     _run(
         _scenario_no_map(
@@ -90,7 +90,7 @@ def _run_scenario(tmp_path, fn, **kwargs):
 
 
 def test_registration_bundle_failure_leaves_no_identity_rows(tmp_path, monkeypatch):
-    """注册事务失败时账户、实体、token 与邀请码都不应进入内存。"""
+    """注册事务失败时账户、凭据与邀请码都不应进入内存（D45：没有实体行）。"""
 
     async def fn(identity):
         codes = await identity.create_invite_codes(1)
@@ -112,17 +112,15 @@ def test_registration_bundle_failure_leaves_no_identity_rows(tmp_path, monkeypat
 
 
 def test_register_human_open(tmp_path):
-    """开放模式：注册 → player 实体 + play 档凭据；登录/改密/注销。"""
+    """开放模式：注册 → 账户 + play 档凭据（**不建实体**，D45）；登录/改密/注销。"""
 
     async def fn(identity: IdentityService):
         info = await identity.register_human("小明", "pass123")
         assert info.tier == "play" and info.kind == "player"
         assert info.username == "小明"
-        entity = identity._engine.get_entity(info.entity_id)
-        # D41：身份服务仍按 kind="player" 建实体，落成的是 local:player 组件
-        assert entity is not None and entity.has_component("local:player")
-        assert entity.user_id is not None
-        assert entity.pos_key() == ("default", 0, 0)  # 出生点
+        # D45：注册只产出凭据——内核不诞生角色、不指定落点
+        assert info.entity_id == ""
+        assert identity._engine.entities_of_account(info.account_id) == []
         # 重复用户名
         with pytest.raises(IdentityError, match="已存在"):
             await identity.register_human("小明", "pass456")
@@ -229,14 +227,30 @@ def test_closed_mode(tmp_path):
 
 
 def test_register_agent(tmp_path):
-    """无密码自助注册：实体带 ``local:player`` 组件（与人类注册一致）+ play 档凭据。"""
+    """无密码自助注册：**也建主体记录**（D46 方案 D-c）+ play 档凭据。
+
+    为什么 agent 必须有主体记录：没有它，"重连 = 换一个主体"，roster（它有几具
+    化身）会跟着丢，而且重名不查（每次注册多一具幽灵）。所以 agent 与人类的
+    差别只剩"没有密码"：密码哈希留空 → 永远登不进来，也改不出密码。
+    """
 
     async def fn(identity: IdentityService):
         info = await identity.register_agent("探索者")
         assert info.tier == "play" and info.kind == "player"
-        entity = identity._engine.get_entity(info.entity_id)
-        assert entity is not None and entity.has_component("local:player")
-        assert entity.name == "探索者"  # 不再加 "AI·" 前缀（人类与 agent 不区分）
+        assert info.entity_id == ""  # D45：不建实体
+        account = identity._engine.store.get_account(info.account_id)
+        assert account is not None and account.username == "探索者"
+        assert account.password_hash == ""  # 不可密码登录
+        assert account.role == "user"
+        # 空哈希过不了密码校验 → agent 主体登不进来
+        with pytest.raises(IdentityError, match="用户名或密码错误"):
+            await identity.login("探索者", "whatever")
+        # 重名现在会被查出来（同一个主体键不能被两个接入者占用）
+        with pytest.raises(IdentityError, match="已被占用"):
+            await identity.register_agent("探索者")
+        # 人类注册与 agent 注册共用同一个用户名空间
+        with pytest.raises(IdentityError, match="已存在"):
+            await identity.register_human("探索者", "pass123")
         # 关闭自助注册
         identity.allow_agent_register = False
         with pytest.raises(IdentityError, match="关闭"):

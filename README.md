@@ -124,11 +124,18 @@ helper.py          # 自己的辅助模块（可选，包内用相对导入 from
 
 玩法包可：声明组件（含字段 schema）、注册交互、事件订阅、MCP 工具
 （参数支持 array，G11）、WebUI 视图、覆盖/禁用行为原语（override/
-disable/过滤器链，D11/G14）、跨包服务（M3）、spawn/编辑实体与地图（D14）、
+disable/过滤器链，D11/G14）、跨包服务（M3）、放置/编辑实体与地图（D14）、
 读写实体组件与按世界隔离的 KV；**世界包**还可写 `async def setup(...)` 用
 `api.import_bundle(...)` **单事务**导入地图、地块、连接与实体（要么全落盘、
 要么什么都不写；参考内置 `worlditor_play_demo_world`：地图已存在则跳过，
 不覆盖用户改动）。
+
+**玩家模型（v0.8.0 / D45–D47）**：内核**不诞生角色、不存在出生点、不标记"谁是玩家"**
+——注册/登录只产出凭据（`token.entity_id` 为空是常态）。内核只记两本账
+（"这次以哪具实体行动" + "这具实体属于哪个主体"），**"玩家是什么"归玩法包**：
+一具化身 = 一个带 `core:account` 的普通实体，创建 / 切换 / 退掉都走内核窄口
+（`api.claim_avatar` / `api.act_as` / `api.release_avatar`）。参考玩家包见
+`tests/fixtures/plays/worlditor_play_player/`，契约见 `docs/PLAY_DEV.md` §14。
 
 安装方式：把包目录放进 `<数据目录>/plays/`，或在管理端
 「玩法包 → 安装玩法包（zip）」上传（zip 内单个顶层目录 `<play_id>/`，
@@ -137,9 +144,10 @@ disable/过滤器链，D11/G14）、跨包服务（M3）、spawn/编辑实体与
 - 内置包只有**世界内容包** `worlditor_play_demo_world`（示例主世界：41 地块 +
   商贩·阿福/告示牌/木门；只导入内容，不注册行为）；行为玩法包（工具/视图/
   服务/组件声明）不再随仓库分发，参考实现见 `tests/fixtures/plays/`
-  （`docs/PLAY_DEV.md` §12）
+  （`docs/PLAY_DEV.md` §12 / §14）
 - 身份只有一种 `player`：人类玩家与 agent 不作区分（脚本/agent 可用登录页
-  「agent / 脚本接入」无密码注册）
+  「agent / 脚本接入」无密码注册）；⚠ **v0.8.0 起表结构 v12——升级请删
+  `world.db` 重建**（D13：无迁移，旧库会被明确拒绝并指名该删哪个文件）
 - `docs/PLAY_DEV.md`：玩法包开发指南（API 全量 + 约定 + 示例）
 - `docs/HTTP_API.md`：HTTP 端点参考（玩家端口 + 管理端口：路径 / 档位 / 请求体 / 示例）
 - `docs/NGINX_DEPLOY.md`：域名 + HTTPS 反向代理部署（含双端口暴露边界）

@@ -21,10 +21,15 @@ from pathlib import Path
 
 PLAY_ID = "worlditor_play_demo"
 PROBE_ID = "worlditor_play_probe"
+PLAYER_ID = "worlditor_play_player"
 _REFERENCE_WEB = (
     Path(__file__).resolve().parent / "fixtures" / "plays" / PLAY_ID / "web"
 )
 _PROBE_WEB = Path(__file__).resolve().parent / "fixtures" / "plays" / PROBE_ID / "web"
+# 参考**玩家包**（D45–D47）：整目录提交在案（play.yaml / main.py / data/ / web/），
+# 装进 tmp 时整份复制——它与 demo/probe 不同，不是字符串常量，因为它同时是
+# "玩家包该怎么写"的活文档（PLAY_DEV §14 指向它）。
+_REFERENCE_PLAYER = Path(__file__).resolve().parent / "fixtures" / "plays" / PLAYER_ID
 
 _SHOP_JSON = """{
   "apple": { "price": 5, "label": "苹果" },
@@ -367,7 +372,9 @@ async def _on_entity_enter(
     api: WorlditorPlayAPI, entity, map_id: str, row: int, col: int
 ) -> None:
     """演示事件驱动行为：进入迷雾区域发自定义事件（说话下沉后，M2/D1）。"""
-    if row >= FOREST_ROW and entity.has_component("local:player"):
+    # D45：判"这是不是人"一律看 **账户绑定**（`core:account`），不再有内核产出的
+    # `local:player` 标记组件——那个概念随"内核不诞生角色"一起删了（D42/D45）。
+    if row >= FOREST_ROW and entity.is_account_bound():
         await api.emit(
             "fog_enter",
             {"entity_id": entity.id, "row": row, "text": "雾越来越浓，你几乎看不清三米以外的东西……"},
@@ -381,7 +388,7 @@ async def _on_world_edited(api: WorlditorPlayAPI, what) -> None:
         entity = api.get_entity(what["entity_id"])
         if (
             entity is not None
-            and entity.has_component("local:player")
+            and entity.is_account_bound()
             and _GOLD not in entity.component(_STAT)
         ):
             await api.set_data(entity.id, _GOLD, 100, component=_STAT)
@@ -459,6 +466,15 @@ def install_probe_play(plays_root: Path) -> Path:
     for name in ("view.js", "admin-ping.js"):
         shutil.copyfile(_PROBE_WEB / name, web_dir / name)
     return play_dir
+
+
+def install_player_play(plays_root: Path) -> Path:
+    """装**参考玩家包**（整目录复制；D45–D47 的示范，见 PLAY_DEV §14）。"""
+    target = plays_root / PLAYER_ID
+    shutil.copytree(
+        _REFERENCE_PLAYER, target, ignore=shutil.ignore_patterns("__pycache__")
+    )
+    return target
 
 
 def install_demo_play(plays_root: Path) -> Path:

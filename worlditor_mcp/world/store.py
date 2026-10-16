@@ -44,7 +44,8 @@ from .model import (
 # v9 = entities 去掉 name / desc / user_id 三列（D32 §12.4：它们进 core:info / core:account）
 # v10 = entities 去掉 map_id / row / col 三列（D36 §12.4：位置进 core:position，可为缺失）
 # v11 = entities 去掉 kind / tags_json 两列（D41：能力 = 组件的存在，表 4 列）
-SCHEMA_VERSION = "11"
+# v12 = maps 去掉 spawn_row / spawn_col 两列（D45：内核不存在"出生点"概念）
+SCHEMA_VERSION = "12"
 DEFAULT_MAP_ID = "default"
 
 # 后加列清单——**不是用来补的，是用来检查的**（`_check_schema`）。
@@ -61,6 +62,8 @@ _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
 # 一个没有版本记录的库如果还带着更早版本的列（name/desc/user_id、map_id/row/col，
 # 或 v11 之前的 kind/tags_json），只查"需要的列在不在"是查不出来的——载入会成功，
 # 而名字/描述/账户绑定或**能力归属**被无声丢掉。所以显式拒绝。
+# v12 / D45 同理：`maps.spawn_row` / `spawn_col` 若还留着，载入会**静默忽略**
+# 一个已经作废的语义（"新玩家落在哪"）。
 _FORBIDDEN_COLUMNS: dict[str, tuple[str, ...]] = {
     "entities": (
         "name",
@@ -72,6 +75,7 @@ _FORBIDDEN_COLUMNS: dict[str, tuple[str, ...]] = {
         "kind",
         "tags_json",
     ),
+    "maps": ("spawn_row", "spawn_col"),
 }
 
 # 世界日志保留上限（超出后裁掉最旧记录；防高频事件刷爆库）
@@ -108,7 +112,7 @@ def _bad_map_field(description: Any) -> str:
             parse_text_schedule(description)
         except _PARSE_ERRORS:
             return "description"
-    return "整行（id / 名称 / 出生点等）"
+    return "整行（id / 名称等）"
 
 
 def _bad_location_field(payload: dict) -> str:
@@ -216,13 +220,13 @@ DEFAULT_WORLD_ID = "default"
 
 # 地图层：地图 / 地块 / 模板 / 世界元数据
 _MAP_TABLES_SQL = """
+-- v12（D45）：``maps.spawn_row`` / ``spawn_col`` 两列删除——**内核不存在"出生点"**。
+-- 新角色落在哪是玩法包的事（它自己挑地块再 place/move），内核连"新角色"都不认。
 CREATE TABLE IF NOT EXISTS maps (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     description_json TEXT,
     timezone TEXT,
-    spawn_row INTEGER NOT NULL DEFAULT 0,
-    spawn_col INTEGER NOT NULL DEFAULT 0,
     visible TEXT NOT NULL DEFAULT 'public'
 );
 CREATE TABLE IF NOT EXISTS locations (
@@ -391,9 +395,10 @@ class WorldStore:
             stale.extend(f"{table}.{c}" for c in columns if c in existing)
         if stale:
             raise self._refuse(
-                f"库还带着 v9 之前已被取消的列：{', '.join(stale)}"
-                f"——名字/描述/账户绑定已进 core:info / core:account 组件（DESIGN §12.4），"
-                f"继续启动会把它们静默丢掉"
+                f"库还带着本版本已取消的列：{', '.join(stale)}"
+                f"——实体侧的名字/描述/账户绑定/位置/能力归属已进组件"
+                f"（core:info / core:account / core:position，DESIGN §12.4），"
+                f"地图侧的出生点已整体取消（D45），继续启动会把它们静默丢掉"
             )
 
     async def _seed_if_empty(self) -> None:
@@ -472,7 +477,9 @@ class WorldStore:
         assert self._conn is not None
         self.maps = {}
         self.loc_by_pos = {}
-        cur = await self._conn.execute("SELECT * FROM maps")
+        cur = await self._conn.execute(
+            "SELECT id, name, description_json, timezone, visible FROM maps"
+        )
         for row in await cur.fetchall():
             where = f"maps.id={row['id']!r}"
             description = self._load_json_field(
@@ -485,8 +492,6 @@ class WorldStore:
                         "name": row["name"],
                         "description": description,
                         "timezone": row["timezone"],
-                        "spawn_row": row["spawn_row"],
-                        "spawn_col": row["spawn_col"],
                         "visible": row["visible"],
                     }
                 )
@@ -646,15 +651,13 @@ class WorldStore:
         assert self._conn is not None
         await self._conn.execute(
             "INSERT OR REPLACE INTO maps("
-            "id, name, description_json, timezone, spawn_row, spawn_col, visible"
-            ") VALUES(?, ?, ?, ?, ?, ?, ?)",
+            "id, name, description_json, timezone, visible"
+            ") VALUES(?, ?, ?, ?, ?)",
             (
                 m.id,
                 m.name,
                 json.dumps(m.description.to_dict()) if m.description else None,
                 m.timezone,
-                m.spawn_row,
-                m.spawn_col,
                 m.visible,
             ),
         )
@@ -677,8 +680,8 @@ class WorldStore:
         """一次事务写入地图、副本地块、实体和可选世界归属。"""
         assert self._conn is not None
         await self._conn.execute(
-            "INSERT INTO maps(id, name, description_json, timezone, spawn_row, spawn_col, visible) "
-            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO maps(id, name, description_json, timezone, visible) "
+            "VALUES(?, ?, ?, ?, ?)",
             (
                 world_map.id,
                 world_map.name,
@@ -686,8 +689,6 @@ class WorldStore:
                 if world_map.description
                 else None,
                 world_map.timezone,
-                world_map.spawn_row,
-                world_map.spawn_col,
                 world_map.visible,
             ),
         )
@@ -903,20 +904,23 @@ class WorldStore:
         """写回 / 新建一个实体（整体替换对象）。"""
         await self.save_entities([entity])
 
-    async def save_registration_bundle(
+    async def save_auth_bundle(
         self,
         account: Account | None,
-        entity: Entity,
         token: TokenInfo,
         created_ts: float,
         invite_code: str | None = None,
     ) -> None:
-        """一次事务写入注册所需的实体、账户、凭据与邀请码消费。"""
+        """一次事务写入注册所需的账户、凭据与邀请码消费。
+
+        D45：注册**不再产生实体**，所以这里没有实体参数（原
+        ``save_registration_bundle`` 的那个位置随"内核不诞生角色"一起消失）。
+        ``account=None`` = 只发凭据（开放模式的围观凭据走 ``save_token``）。
+
+        邀请码在**同一事务**内消费：抢不到（rowcount != 1）就整个回滚——否则
+        "注册失败但账户已落库"会留下一个占了用户名的空壳。
+        """
         assert self._conn is not None
-        revision = self.revision + 1
-        snapshot = copy.deepcopy(entity)
-        snapshot.revision = revision
-        snapshot.changed_tick = self.tick
         if account is not None:
             await self._conn.execute(
                 "INSERT INTO accounts(id, username, password_hash, role, created_ts) "
@@ -929,10 +933,6 @@ class WorldStore:
                     account.created_ts,
                 ),
             )
-        await self._conn.execute(
-            "INSERT INTO entities(id, components_json, revision, changed_tick) VALUES(?, ?, ?, ?)",
-            entity_db_row(snapshot),
-        )
         await self._conn.execute(
             "INSERT INTO tokens(token, entity_id, tier, kind, account_id, username, created_ts, revoked) "
             "VALUES(?, ?, ?, ?, ?, ?, ?, 0)",
@@ -952,12 +952,9 @@ class WorldStore:
                 (invite_code,),
             )
             if cursor.rowcount != 1:
+                await self.rollback()
                 raise WorldError("邀请码无效或已使用")
         await self._commit()
-        entity.revision = snapshot.revision
-        entity.changed_tick = snapshot.changed_tick
-        self.entities[entity.id] = entity
-        self._index_entity(entity)
         if account is not None:
             self.accounts[account.id] = account
         self.tokens[token.token] = token
@@ -1121,6 +1118,45 @@ class WorldStore:
     def get_token(self, token: str) -> TokenInfo | None:
         """解析未吊销凭据。"""
         return self.tokens.get(token)
+
+    async def set_token_entity(self, token: str, entity_id: str) -> bool:
+        """把凭据的**行动实体**指向某具实体（D46；``api.act_as`` 的唯一落点）。
+
+        "哪具实体算我的"由**玩法包**校验（内核不替它判断归属），这里只负责把
+        指针写下去并保证跨进程重启仍在（``tokens.entity_id`` 是落库列）。
+
+        Returns:
+            是否真的改了——凭据不存在/已吊销 → ``False``（不静默生效）。
+        """
+        assert self._conn is not None
+        info = self.tokens.get(token)
+        if info is None:
+            return False
+        await self._conn.execute(
+            "UPDATE tokens SET entity_id = ? WHERE token = ?", (entity_id, token)
+        )
+        await self._commit()
+        info.entity_id = entity_id
+        return True
+
+    async def clear_token_entities(self, entity_id: str) -> int:
+        """清空**所有指向该实体**的凭据指针（D46 退化身时用；返回改了几条）。
+
+        为什么必须做：``tokens.entity_id`` 是"这次以哪具实体行动"，实体被退掉并
+        删除后它就成了悬空指针——玩家下次请求会拿着一个不存在的 id，所有工具都
+        以"实体不存在"失败。清空 = 回到"还没有化身"这个合法状态（D45）。
+        """
+        assert self._conn is not None
+        pointing = [t for t, info in self.tokens.items() if info.entity_id == entity_id]
+        if not pointing:
+            return 0
+        await self._conn.execute(
+            "UPDATE tokens SET entity_id = '' WHERE entity_id = ?", (entity_id,)
+        )
+        await self._commit()
+        for token in pointing:
+            self.tokens[token].entity_id = ""
+        return len(pointing)
 
     async def set_token_revoked(self, token: str, revoked: bool = True) -> bool:
         """吊销 / 恢复一份凭据；不存在返回 False。"""

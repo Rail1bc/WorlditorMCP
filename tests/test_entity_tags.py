@@ -28,7 +28,7 @@ import pytest
 from world_fixtures import schedule, seed_test_world
 
 from worlditor_mcp.world.engine import WorldEngine, WorldError
-from worlditor_mcp.world.model import TagSpec, WorldTemplate, parse_names
+from worlditor_mcp.world.model import Entity, TagSpec, WorldTemplate, parse_names
 from worlditor_mcp.world.play.api import WorlditorPlayAPI
 from worlditor_mcp.world.store import WorldStore
 
@@ -902,8 +902,19 @@ def test_admin_lint_world_filter(tmp_path):
 
     async def fn(client, h, engine):
         await engine.create_world("w_a", "甲世界")
-        await engine.create_map("m_a", "甲图", spawn_row=9, spawn_col=9)
+        await engine.create_map("m_a", "甲图")
         await engine.create_location("m_a", 0, 0, "孤岛")
+        # 造一个真实的 error（实体悬空）让"世界过滤后仍有 error"可断言。
+        # D45 之前这里靠"出生点落空"制造 error，而出生点已从内核删除。
+        await engine.store.save_entity(
+            Entity(
+                id="ghost_a",
+                components={
+                    "core:position": {"map_id": "m_a", "row": 5, "col": 5},
+                    "core:info": {"name": "幽灵"},
+                },
+            )
+        )
         await engine.assign_map("m_a", "w_a")
         await engine.assign_map("default", "default")
 
