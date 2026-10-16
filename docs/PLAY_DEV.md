@@ -183,7 +183,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `query_entities(*, tags, exclude_tags, map_id, world_id, row, col, viewer_id, changed_since_tick, changed_since_revision, where, limit, include_absent=False)` | **实体查询（D26，见 §5.2）**：按标签查一批实体，不再需要"全量拿 + 自己筛"；同样支持 `include_absent` |
 | `current_tick()` / `world_revision()` | 变更游标（D28）：tick 窗口号 / 全局变更号（见 §5.4） |
 | `get_location(map_id, row, col)` / `get_map(map_id)` | 地块 / 地图（Location 含 connections） |
-| `list_actions(target_id)` | 目标可用动作按钮（UI 菜单） |
+| `list_actions(target_id, *, viewer_id=None, tier="")` | 目标可用动作按钮（UI 菜单）。传 `viewer_id`（+`tier`）时先过观察权限：看不见的目标（隐身 / 私有地图）返回**空菜单**——玩法包自建界面也能按感知过滤 |
 | `list_worlds()` / `get_world(world_id)` / `entity_world(entity_id)` / `map_world(map_id)` | 世界与归属（D15） |
 | `list_folders(world_id)` / `list_maps_by_folder(world_id, folder_id)` | 组织树（按容器内序号排序） |
 | `list_admin_pages()` | 管理端管理页清单（§13；导航/调试用） |
@@ -199,11 +199,12 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 > 注意 `get_component`（同步）与 `get_data`（async）是一对**不一致**的读接口——
 > 后者确实要 `await`；`kv_get` / `kv_set` 同理。
 
-> **只读接口目前是"浅只读"**：`get_entity` / `list_entities` / `query_entities`
-> 返回**深拷贝**（改了不影响内核），但 `get_component`（浅拷贝：嵌套的 dict/list
-> 仍与内核共享）、`get_map` / `get_location` / `get_world` / `list_worlds` /
-> `list_templates`（返回内核活对象）**改了会污染运行中的世界**（不落库、但内存
-> 快照会漂移）。要改数据请走写接口；只读结果请当**不可变**用（见 GAPS G51）。
+> **只读接口一律返回深拷贝（v0.7.3 / G51）**：`get_entity` / `list_entities` /
+> `query_entities` / `get_component` / `get_map` / `get_location` / `get_world` /
+> `list_worlds` / `list_folders` / `list_maps_by_folder` / `list_templates` /
+> `capabilities` / `kv_get` 改返回值**都不会**影响运行中的世界（此前地图、地块、
+> 世界是内核活对象，改个 `loc.name` 就真的改了世界；组件与 KV 是浅拷贝，嵌套的
+> dict/list 与内核共享）。要改数据请走写接口。
 
 ### 动作（引擎原语，锁内执行）
 

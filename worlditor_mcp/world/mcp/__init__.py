@@ -295,4 +295,93 @@ def build_mcp_server(
         # 显式传入：SDK 在 host=127.0.0.1（默认）时会自动只放行 localhost → 421
         transport_security=build_transport_security(allowed_hosts, allowed_origins),
     )
+    enable_tool_change_notifications(mcp)
     return mcp
+
+
+# ---------- 工具清单变化通知（G56） ----------
+#
+# 问题：SDK 默认把 `ServerCapabilities.tools.listChanged` 报成 **false**，`add_tool`
+# 也不发任何通知——运行期装/启用玩法包后，服务端 `tools/list` 已经变了，**已连接的
+# 客户端却看不到新工具**（要重连）。而"装包即生效"恰恰是这个项目的主要用法。
+#
+# 难点：SDK 没有"按会话广播"的口子——`ServerSession` 是 `Server.run()` 里的**局部
+# 变量**，传输层（`_server_instances`）只存 transport、不存 session。
+#
+# 做法：两处**只补在本实例上**的包装（不动 SDK 类、不影响别的 FastMCP 实例）：
+# 1. `create_initialization_options`：把 `tools_changed` 置真 → initialize 结果里声明
+#    `tools.listChanged: true`（客户端认这条，才会理我们的通知）；
+# 2. `run`：每次会话（streamable HTTP 一个连接一个会话）记下它的**出站流**；广播时直
+#    接往这些流写通知——与 `ServerSession.send_notification` 走的是同一条路径
+#    （它就是 `write_stream.send(SessionMessage(JSONRPCMessage(...)))`）。
+#
+# 广播是 **best-effort**：客户端没开 SSE 流 / 已断开时静默跳过（记 debug 日志）。
+
+_tool_change_streams: set[Any] = set()
+
+
+def enable_tool_change_notifications(mcp: Any) -> None:
+    """让本 MCP 实例声明并在工具清单变化时通知客户端（幂等；见上）。"""
+    server = getattr(mcp, "_mcp_server", None)
+    if server is None or getattr(server, "_worlditor_notify_enabled", False):
+        return
+    from mcp.server.lowlevel.server import NotificationOptions
+
+    original_options = server.create_initialization_options
+
+    def create_initialization_options(
+        notification_options: Any = None, experimental_capabilities: Any = None
+    ) -> Any:
+        options = notification_options or NotificationOptions()
+        options.tools_changed = True
+        return original_options(options, experimental_capabilities)
+
+    original_run = server.run
+
+    async def run(
+        read_stream: Any,
+        write_stream: Any,
+        initialization_options: Any,
+        raise_exceptions: bool = False,
+        stateless: bool = False,
+    ) -> Any:
+        _tool_change_streams.add(write_stream)
+        try:
+            return await original_run(
+                read_stream,
+                write_stream,
+                initialization_options,
+                raise_exceptions,
+                stateless,
+            )
+        finally:
+            _tool_change_streams.discard(write_stream)
+
+    server.create_initialization_options = create_initialization_options
+    server.run = run
+    server._worlditor_notify_enabled = True  # noqa: SLF001
+
+
+async def notify_tools_changed() -> None:
+    """向全部活跃会话广播 `notifications/tools/list_changed`（无会话 = 空操作）。"""
+    if not _tool_change_streams:
+        return
+    from mcp.shared.message import SessionMessage
+    from mcp.types import (
+        JSONRPCMessage,
+        JSONRPCNotification,
+        ToolListChangedNotification,
+    )
+
+    notification = ToolListChangedNotification()
+    payload = JSONRPCNotification(
+        jsonrpc="2.0",
+        **notification.model_dump(by_alias=True, mode="json", exclude_none=True),
+    )
+    message = SessionMessage(message=JSONRPCMessage(payload))
+    for stream in list(_tool_change_streams):
+        try:
+            await stream.send(message)
+        except Exception:  # noqa: BLE001
+            # 会话可能已断开 / 没有开 SSE 流：通知是增强，不是协议必需
+            logger.debug("[worlditor] 工具清单通知发送失败（会话可能已断开）")

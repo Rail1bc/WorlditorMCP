@@ -302,11 +302,6 @@ class WorldStore:
 
     # ---------- 变更检测（D28） ----------
 
-    def next_revision(self) -> int:
-        """推进并返回全局变更号（不落盘；``_commit`` 在同一事务里写 world_meta）。"""
-        self.revision += 1
-        return self.revision
-
     async def _resume_revision(self) -> None:
         """启动时从 world_meta 续变更号（在任何写之前调用；表不存在则按 0）。"""
         assert self._conn is not None

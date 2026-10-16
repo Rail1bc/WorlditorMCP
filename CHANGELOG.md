@@ -1,5 +1,70 @@
 # Changelog
 
+## v0.7.3（2026-10-16）
+
+**玩法包开发可用性：文档校正 + 安装一致性 + 多文件包 + 单事务内容导入 + 只读快照 + 工具清单通知。**
+（无破坏性变更；玩法包 API 只增不改——`include_absent`、`import_bundle`、`list_actions(viewer_id=)` 为新增参数。）
+
+### 新增（玩法包）
+
+- **多文件包（G50）**：`main.py` 按**包语义**加载（`submodule_search_locations` = 包目录），
+  包内可写 `from . import helper` → 解析成 `<play_id>.helper`。**不走"把包目录塞进 `sys.path`"**：
+  `sys.modules` 按裸模块名缓存，两个包各有 `helper.py` 时后加载的会**静默拿到别人的模块**
+  （实测：B 包跑出 A 包的 helper），且包目录排在 `sys.path` 前会遮蔽标准库同名模块。
+  绝对导入 `import helper` 仍是 `ModuleNotFoundError`——响亮地失败取代安静地错。
+- **`api.import_bundle(map, locations=…, entities=…, world_id=…, folder_id=…)`（G55）**：
+  地图 + 地块 + 连接 + 实体 + 世界归属**一次 SQLite 提交**；校验先于写入（报错带"第几行"），
+  地图已存在即拒绝。逐条 `create_map`/`create_location`/`place_entity` 在"导入到一半抛错"时
+  会留下**半张世界**，而"地图已存在则跳过"的幂等判断又会让重跑**假装成功**。
+  配套 `store.rollback()`：失败路径显式回滚，否则长连接上一条失败语句会被下一个 `_commit`
+  一起提交。内置世界包 `worlditor_play_demo_world` 改为用它（41 地块 + 3 实体一次导入）。
+- **`include_absent` 透传到玩法包 API**：`list_entities` / `query_entities` 补该参数——
+  D36 的"不在世界上"的实体（容器里的东西 / 下线玩家）此前在玩法包侧**无法枚举**，
+  而文档教的正是这个参数（照抄即 `TypeError`）。
+- **`list_actions(target_id, *, viewer_id=None, tier="")`**：传查看者时先过观察权限，
+  看不见的目标返回空菜单（玩法包自建界面也能按感知/私有地图过滤）。
+- **只读接口一律深拷贝（G51）**：`get_component` / `get_map` / `get_location` / `get_world` /
+  `list_worlds` / `list_folders` / `list_maps_by_folder` / `list_templates` / `capabilities` /
+  `kv_get` 此前返回内核**活对象**或浅拷贝——改个 `loc.name` 就真的改了运行中的世界
+  （不落库、不发事件、不盖 `revision`，重启才"自愈"）。只动 API 层，引擎热路径不变。
+
+### 修复（玩法包生命周期）
+
+- **安装一致性三连洞（G53）**：① 顶层目录名 ≠ `play.yaml` 的 `name` → 装得上、两个名字都
+  卸不掉、目录永久残留；② 目录缺 `worlditor_play_` 前缀 → 装得上但 `list_plays` 看不到、
+  重启后静默消失；③ 与内置包同 id → 顶掉内置、重启后两个都不加载。现在安装即校验并回滚，
+  `load_all` 同名冲突改为**内置优先**（落败目录写进 `list_plays().note`，管理页可见），
+  `uninstall` 只删社区那份。
+- **卸载原子性**：改为**先删目录、再清状态**（旧顺序下 `rmtree` 失败会留下"已 teardown +
+  禁用标记已落库 + 目录还在"，下次启动包又回来了）。文档同步纠正：**卸载不删 `play_data`**。
+- **加载失败回滚组件声明**（首次加载失败改 `purge=True`）：旧行为只清注册，声明留在内存里，
+  `list_kinds()` 会一直列出从未加载成功的包声明的组件。
+- **`sys.exit()` 隔离**：包内调用不再让**整个服务启动失败**（`SystemExit` 不继承 `Exception`，
+  旧代码捕不到）。
+- **MCP 工具 handler 异常留栈**：此前客户端只拿"工具执行出错，请稍后再试"、**服务端零日志**
+  （交互/事件/on_tick/服务/管理页/override/ui_hook 七条回调路径都有栈，只差这条）。
+- **`tools/list_changed` 通知（G56）**：SDK 默认 `listChanged: false` 且 `add_tool` 不发通知
+  ——运行期装/启用玩法包后已连接的客户端看不到新工具。现在 initialize 声明该能力，
+  装/启/停/卸包时广播通知（best-effort，无活跃会话时空操作）。
+- **`PlayLoader` 的 `worlditor_version` 默认值**从写死的 `"0.3.0"` 改为本包版本。
+
+### 文档
+
+- **`docs/PLAY_DEV.md` / `docs/HTTP_API.md` / `DESIGN.md` / `README.md` 校正到实体模型 v2 终态**：
+  实体形态改成 **5 键**（旧文档仍写 `{id, map_id, row, col, kind, components, tags, …}`）、
+  落库 **v11 / 4 列**（旧文档写 v9 / 10 列）、`capabilities()` 四象限（旧文档仍列
+  `unknown_components`）、示例补 `await`、参数名与 keyword-only 校正、多文件包与
+  `import_bundle` 用法、卸载不删数据、实体模板不按世界过滤。
+- **新增 `tests/test_docs_contract.py`**（5 条守卫）：文档里的 `api.x(` 必须存在、每个公开
+  方法必须被文档提到、旧实体形态与 `unknown_components` 不得出现、表结构版本必须写对。
+- **`GAPS.md` 新增 G49–G57** 并更正两条过期条目：G17（私有地图可见性其实已修）、
+  G35 首条（同名交互其实已报错拒绝）。
+
+### 清理
+
+- 删死代码 4 处：`engine._package_states`、`store.next_revision`、`identity.TOKEN_TIERS`、
+  `engine.effective_fields_for`（"跨组件摊平"的最后一块）。
+
 ## v0.7.2（2026-10-16）
 
 **修复 v0.7.1 的实体编辑面板白屏（D44 能力键改名未同步前端）。**

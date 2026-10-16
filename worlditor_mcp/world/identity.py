@@ -30,7 +30,6 @@ from typing import Any
 logger = logging.getLogger("worlditor")
 
 AUTH_MODES = ("open", "invite", "closed")
-TOKEN_TIERS = ("read", "play", "admin")
 _PBKDF2_ITERATIONS = 200_000
 
 

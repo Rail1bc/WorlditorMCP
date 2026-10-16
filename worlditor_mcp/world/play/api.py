@@ -143,8 +143,12 @@ class WorlditorPlayAPI:
         return self._engine.list_kinds(category)
 
     def capabilities(self, entity) -> dict:
-        """某实体的能力（D41）：生效组件 / 动作并集 / **按组件分组**的字段。"""
-        return self._engine.capabilities(entity)
+        """某实体的能力（D41）：生效组件 / 动作并集 / **按组件分组**的字段。
+
+        返回**深拷贝**（G51）：`fields` 里的声明对象与内核注册表共享，改它等于
+        改组件声明——那份声明是全局的，会影响到所有带该组件的实体。
+        """
+        return copy.deepcopy(self._engine.capabilities(entity))
 
     def register_interaction(
         self, action: str, handler, *, label: str | None = None
@@ -298,22 +302,35 @@ class WorlditorPlayAPI:
         return self._engine.revision
 
     def get_location(self, map_id: str, row: int, col: int):
-        return self._engine.get_location(map_id, row, col)
+        """地块快照（**深拷贝**：改了不影响运行中的世界，见 G51）。"""
+        return copy.deepcopy(self._engine.get_location(map_id, row, col))
 
     def get_map(self, map_id: str):
-        return self._engine.get_map(map_id)
+        """地图快照（**深拷贝**，同 get_location）。"""
+        return copy.deepcopy(self._engine.get_map(map_id))
 
-    def list_actions(self, target_id: str) -> list:
-        """目标实体可用动作按钮（C3，UI 菜单生成用）。"""
-        return self._engine.list_actions(target_id)
+    def list_actions(
+        self, target_id: str, *, viewer_id: str | None = None, tier: str = ""
+    ) -> list:
+        """目标实体可用动作按钮（C3，UI 菜单生成用）。
+
+        传 ``viewer_id``（+ ``tier``）时先过观察权限：看不见的目标返回空菜单
+        （与此前只能拿"全量菜单"相比，玩法包自建 UI 也能按感知/私有地图过滤了）。
+        """
+        return self._engine.list_actions(target_id, viewer_id=viewer_id, tier=tier)
 
     # ---------- 世界与组织只读（D15；写 = admin 管理端点） ----------
+    #
+    # 只读接口一律返回**深拷贝**（G51）：`get_entity` / `list_entities` /
+    # `query_entities` 本来就是，其余的曾经直接返回内核活对象——改个
+    # `loc.name` 就真的改了运行中的世界（不落库、不发事件、不盖 revision，
+    # 但内存快照漂移，直到重启才"自愈"）。
 
     def list_worlds(self) -> list:
-        return self._engine.list_worlds()
+        return copy.deepcopy(self._engine.list_worlds())
 
     def get_world(self, world_id: str):
-        return self._engine.get_world(world_id)
+        return copy.deepcopy(self._engine.get_world(world_id))
 
     def entity_world(self, entity_id: str) -> str | None:
         """实体所在世界 id（经地图归属推导）。"""
@@ -323,17 +340,18 @@ class WorlditorPlayAPI:
         return self._engine.map_world(map_id)
 
     def list_folders(self, world_id: str) -> list:
-        return self._engine.list_folders(world_id)
+        return copy.deepcopy(self._engine.list_folders(world_id))
 
     def list_maps_by_folder(self, world_id: str, folder_id: str | None = None) -> list:
-        return self._engine.list_maps_by_folder(world_id, folder_id)
+        return copy.deepcopy(self._engine.list_maps_by_folder(world_id, folder_id))
 
     # ---------- 玩法数据 KV（play_data 表，namespace = 玩法包 id） ----------
     # world_id 传入时双层隔离：(world_id, play_id)——同玩法包在不同世界各自状态（D15）
 
     def kv_get(self, key: str, default=None, *, world_id: str | None = None) -> Any:
+        """读本包 KV（**深拷贝**：改了返回的 dict/list 不会污染内核缓存，G51）。"""
         namespace = f"{world_id}:{self.play_id}" if world_id else self.play_id
-        return self._engine.kv_get(namespace, key, default)
+        return copy.deepcopy(self._engine.kv_get(namespace, key, default))
 
     async def kv_set(
         self, key: str, value: Any, *, world_id: str | None = None
@@ -392,8 +410,12 @@ class WorlditorPlayAPI:
         return self._engine.list_components(entity_id)
 
     def get_component(self, entity_id: str, component: str) -> dict | None:
-        """整块读组件数据（不存在返回 ``None``；只读）。"""
-        return self._engine.get_component(entity_id, component)
+        """整块读组件数据（不存在返回 ``None``；只读）。
+
+        **深拷贝**（G51）：引擎那边只做浅拷贝，嵌套的 dict/list 与内核共享——
+        改 `api.get_component(e, "x:y")["nested"]["hp"]` 会直接改到运行中的实体。
+        """
+        return copy.deepcopy(self._engine.get_component(entity_id, component))
 
     async def add_component(
         self, entity_id: str, component: str, data: dict | None = None
@@ -773,8 +795,8 @@ class WorlditorPlayAPI:
         )
 
     def list_templates(self, scope: str | None = None) -> list[dict]:
-        """模板清单（D22：玩法包注册 + 管理端本地合并）。"""
-        return self._engine.list_templates(scope)
+        """模板清单（D22：玩法包注册 + 管理端本地合并）。返回深拷贝（G51）。"""
+        return copy.deepcopy(self._engine.list_templates(scope))
 
     async def apply_location_template(
         self, template_id: str, map_id: str, row: int, col: int

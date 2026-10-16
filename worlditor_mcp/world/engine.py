@@ -636,6 +636,8 @@ class WorldEngine:
         # D2/G2 MCP 工具注册表（玩法包 register_tool；MCP server 动态同步）
         self._tools: dict[str, _ToolBinding] = {}
         self._mcp: Any | None = None  # 绑定后工具注册/清理即时 add/remove
+        # G56：广播 tools/list_changed 的待执行任务（持引用，防被 GC 提前回收）
+        self._tool_notify_tasks: set[asyncio.Task] = set()
         # G3/D7 视图注册表（玩法包 register_view；GET /views 暴露）
         self._views: dict[str, _ViewBinding] = {}
         # M3 跨包服务注册表：play_id -> name -> binding（玩法包间同步调用）
@@ -918,16 +920,6 @@ class WorldEngine:
             return []  # 未声明组件：无字段、无能力贡献（D19/R6）
         return [*spec.fields, *(a.field for a in self._tag_fields.get(key, ()))]
 
-    def effective_fields_for(self, keys: list[str] | tuple[str, ...]) -> list[dict]:
-        """多个组件的字段清单（D41：**不摊平**，每个字段保留自己的组件归属）。"""
-        out: list[dict] = []
-        for key in keys:
-            resolved = self._resolve_component_key(key)
-            out.extend(
-                {**f, "component": resolved} for f in self.effective_fields(resolved)
-            )
-        return out
-
     def fields_by_component(
         self, keys: list[str] | tuple[str, ...]
     ) -> dict[str, list[dict]]:
@@ -1095,14 +1087,6 @@ class WorldEngine:
                 }
             )
         return sorted(out, key=lambda r: r["source"])
-
-    def _package_states(self) -> dict[str, str]:
-        """已加载的玩法包集合（默认的包状态判据，D44）。
-
-        引擎只知道"谁加载过"；"目录还在不在"要问 PlayLoader——管理端会传入更细的
-        解析器（``loaded`` / ``disabled`` / ``load_failed`` / ``invalid`` / ``uninstalled``）。
-        """
-        return dict.fromkeys(self._play_apis, "loaded")
 
     def diagnose_components(
         self, package_state: Callable[[str], str] | None = None
@@ -1291,6 +1275,27 @@ class WorldEngine:
             description=binding.description or f"玩法包工具：{name}",
         )
         self._refresh_instructions()
+        self._notify_tools_changed()
+
+    def _notify_tools_changed(self) -> None:
+        """向已连接的 MCP 客户端广播 `tools/list_changed`（G56）。
+
+        装/启用/停用/卸载玩法包都会走到这里——没有它，服务端 `tools/list` 变了而
+        客户端还拿着旧清单，只能重连才看得见新工具。
+
+        best-effort：同步上下文（没有事件循环）或没有活跃会话时静默跳过。
+        """
+        if self._mcp is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        from .mcp import notify_tools_changed
+
+        task = loop.create_task(notify_tools_changed())
+        self._tool_notify_tasks.add(task)
+        task.add_done_callback(self._tool_notify_tasks.discard)
 
     def _sync_tool_remove(self, name: str) -> None:
         if self._mcp is not None:
@@ -1299,6 +1304,7 @@ class WorldEngine:
             except Exception:  # noqa: BLE001
                 logger.debug("[worlditor] MCP 工具移除失败（可能未注册）：%s", name)
             self._refresh_instructions()
+            self._notify_tools_changed()
 
     def register_tool(
         self,

@@ -1046,15 +1046,19 @@
 - **仍不做**：两个包依赖**同一个 pip 包的不同版本**仍无解（同进程同一 site-packages），
   真要隔离得上子进程 / 独立 venv。
 
-### G51 只读接口是"浅只读"——待做
-- **现象**（实测）：`api.get_component()` 返回**浅拷贝**（`dict(data)`）——改嵌套的
+### G51 只读接口是"浅只读"——✅ 已修（v0.7.3）
+- **现象（修复前，实测）**：`api.get_component()` 返回**浅拷贝**（`dict(data)`）——改嵌套的
   dict/list 会**改到内核内存里的实体数据**；`api.get_map()` / `get_location()` /
-  `get_world()` / `list_worlds()` / `list_templates()` 直接返回**内核活对象**（改
-  `loc.name` 真的改名）。而 `get_entity` / `list_entities` / `query_entities` 是深拷贝。
-- **影响**：不落库、不发事件、不盖 `revision`，但运行中的世界快照会漂移；"只读"承诺
-  只对实体接口成立。当前靠约定（文档已标注"当不可变用"）。
-- **方案**：统一深拷贝（`get_map` 这类热点可用 `copy.deepcopy` 或只读视图包装）；
-  `list_actions` 同时补 `viewer_id` / `tier` 透传（玩法包自建 UI 才能按感知过滤菜单）。
+  `get_world()` / `list_worlds()` / `list_folders()` / `list_templates()` /
+  `capabilities()`（`fields` 是**声明对象**）/ `kv_get()`（KV 缓存里的同一对象）直接返回
+  内核**活对象**（改 `loc.name` 真的改名）。只有 `get_entity` / `list_entities` /
+  `query_entities` 是深拷贝。
+- **影响**：不落库、不发事件、不盖 `revision`，但运行中的世界快照会漂移，重启才"自愈"。
+- **✅ 落地**：`WorlditorPlayAPI` 的只读出口一律 `copy.deepcopy`（**只动 API 层**——
+  引擎内部的 `get_map` 等保持原样，热路径不受影响）；`list_actions` 补
+  `viewer_id` / `tier` 透传（看不见的目标返回空菜单，玩法包自建界面也能按感知过滤）。
+  回归测试 `tests/test_play_readonly_snapshots.py` 3 条：地图名 / 地块名 / 世界名 /
+  模板 data / KV / 组件嵌套值 / 能力声明逐条验"改了不影响内核"。
 
 ### G52 实体模板未按世界激活过滤——待做（文档已纠正）
 - **现象**：`engine.list_templates(scope)` 只有 scope 参数；`PLAY_DEV` §3 的"世界激活"
@@ -1110,13 +1114,29 @@
   会**阻塞事件循环**，`asyncio.wait_for` 也打断不了——真要治得上线程/子进程执行
   `setup`，代价远超收益，故只记录不实现（文档已提示别在 setup 里做长阻塞的事）。
 
-### G56 MCP 工具清单变化不通知客户端——待做
-- **现象**：SDK 报 `tools.listChanged: false`，且 `FastMCP.add_tool` 不发
+### G56 MCP 工具清单变化不通知客户端——✅ 已修（v0.7.3）
+- **现象（修复前）**：SDK 报 `tools.listChanged: false`，且 `FastMCP.add_tool` 不发
   `notifications/tools/list_changed`——运行期装/启用玩法包后，**已连接的客户端看不到
   新工具**（`tools/list` 服务端已更新），要重连。`engine._sync_tool_add` 只刷新
   instructions（那份也只在新的 `initialize` 里下发）。
-- **方案**：在 `_sync_tool_add` / `_sync_tool_remove` 后直接向 lowlevel server 发一次
-  `notifications/tools/list_changed`（不违反 M2：注册的仍是玩法包的工具，内核只发信号）。
+- **难点**：SDK 没有"按会话广播"的口子——`ServerSession` 是 `Server.run()` 里的**局部
+  变量**，传输层只存 transport、不存 session。
+- **✅ 落地**（两处**只补在本实例**上的包装，不动 SDK 类、不影响别的 FastMCP）：
+  1. `create_initialization_options`：置 `tools_changed=True` → initialize 结果声明
+     `tools.listChanged: true`（客户端认这条才会理我们的通知）；
+  2. `run`：每次会话记下它的**出站流**；`engine._sync_tool_add` / `_sync_tool_remove`
+     后广播 `notifications/tools/list_changed`（与 `ServerSession.send_notification`
+     同一条路径，只是省了 session 对象）。
+  广播是 **best-effort**：没有活跃会话 / 客户端没开 SSE 流时静默跳过（记 debug）。
+  回归测试 `tests/test_mcp_tool_notifications.py` 3 条（进程内真会话：声明 +
+  注册后收到通知 + 移除后收到通知 + 无会话空操作）。
+
+### G57 重构遗留的死代码——✅ 已清（v0.7.3）
+- `engine._package_states`（D44 换解析器后的孤儿）、`store.next_revision`（D28 单事务
+  改造残留）、`identity.TOKEN_TIERS`（0 引用）、`engine.effective_fields_for`
+  （"跨组件摊平"的最后一块，D41 就该删；用到它的那条断言改成 `fields_by_component`
+  的分组断言）。
+- 全仓库仍无 TODO/FIXME/HACK 标记；AST + grep 双证无其它未引用符号。
 
 ### G17 私有地图可见性：**已修**（本节更正 2026-09-24 的复核）
 - `/scene` 现在走 `engine.can_observe_entity()`（`mcp/http.py:289`，不可观察 → 404），

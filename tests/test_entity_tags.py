@@ -238,9 +238,11 @@ def test_fields_are_grouped_by_component(tmp_path):
             # 单组件查询：只看该组件自己的声明
             assert engine.effective_fields("pkg:base")[0]["default"] == "base"
             assert engine.effective_fields("pkg:t1")[0]["default"] == "t1"
-            # 多组件清单带组件归属（不摊平成一个 list 丢失来源）
-            merged = engine.effective_fields_for(["pkg:base", "pkg:t1"])
-            assert {f["component"] for f in merged} == {"pkg:base", "pkg:t1"}
+            # 多组件字段清单**按组件分组**（不摊平成一个 list 丢失来源）
+            grouped = engine.fields_by_component(["pkg:base", "pkg:t1"])
+            assert set(grouped) == {"pkg:base", "pkg:t1"}
+            assert grouped["pkg:base"][0]["default"] == "base"
+            assert grouped["pkg:t1"][0]["default"] == "t1"
             # 分类只是**选取分组**（D10），不再承载字段（D41 删了分类字段）
             assert engine.list_kinds(category="生物")[0]["key"] == "pkg:base"
             assert not hasattr(engine, "add_category_fields")
