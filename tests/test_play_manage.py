@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import sys
 import zipfile
 from pathlib import Path
 
@@ -384,6 +385,148 @@ def test_uninstall_rmtree_failure_keeps_state(tmp_path, monkeypatch):
         assert "worlditor_play_demo" not in loader._disabled  # noqa: SLF001
         monkeypatch.undo()
         assert (tmp_path / "plays" / "worlditor_play_demo").is_dir()
+        await engine.terminate()
+
+    _run(fn())
+
+
+# ---------- 多文件玩法包（G50，方案 B：包语义加载） ----------
+
+
+def test_multifile_package_relative_import(tmp_path):
+    """包内多文件：`from . import helper` 可用（旧写法下包目录不在 sys.path，必炸）。"""
+
+    async def fn():
+        pkg = _write_play(
+            tmp_path / "plays",
+            "worlditor_play_multi",
+            "from . import helper\n"
+            "\n"
+            "def setup(api, context):\n"
+            "    api.register_tool(helper.TOOL, helper.handler, description='多文件')\n",
+        )
+        (pkg / "helper.py").write_text(
+            "TOOL = 'world_multi'\n"
+            "\n"
+            "async def handler(api, ctx, **kw):\n"
+            "    return {'text': '来自 helper'}\n",
+            encoding="utf-8",
+        )
+        engine, loader = await _make(tmp_path)
+        await loader.load_all()
+        assert "worlditor_play_multi" in loader.plays
+        assert [t["name"] for t in engine.list_tools()] == ["world_multi"]
+        assert sys.modules["worlditor_play_multi.helper"].TOOL == "world_multi"
+        await engine.terminate()
+
+    _run(fn())
+
+
+def test_multifile_same_named_helper_is_isolated(tmp_path):
+    """两个包各有一个 helper.py：**互不串味**（模块全名里带着 play_id）。
+
+    这正是不能走"把包目录塞进 sys.path + import helper"的原因：sys.modules 按裸
+    模块名缓存，先导入的那个会永久占住名字，后一个静默拿到别人的模块（实测）。
+    """
+
+    async def fn():
+        for name, value in (("worlditor_play_alpha", 1), ("worlditor_play_beta", 2)):
+            pkg = _write_play(
+                tmp_path / "plays",
+                name,
+                "from . import helper\n"
+                "\n"
+                "def setup(api, context):\n"
+                "    api.HELPER_VALUE = helper.VALUE\n",
+            )
+            (pkg / "helper.py").write_text(f"VALUE = {value}\n", encoding="utf-8")
+        engine, loader = await _make(tmp_path)
+        await loader.load_all()
+        alpha = loader.plays["worlditor_play_alpha"]
+        beta = loader.plays["worlditor_play_beta"]
+        assert alpha.api.HELPER_VALUE == 1
+        assert beta.api.HELPER_VALUE == 2
+        assert alpha.module.helper is not beta.module.helper
+        assert "helper" not in sys.modules  # 没往全局裸名空间里塞东西
+        await engine.terminate()
+
+    _run(fn())
+
+
+def test_absolute_import_still_fails_loudly(tmp_path):
+    """包内写绝对导入 `import helper`：**响亮地失败**，而不是拿到别人的模块。"""
+
+    async def fn():
+        pkg = _write_play(
+            tmp_path / "plays",
+            "worlditor_play_abs",
+            "import helper\n\ndef setup(api, context):\n    pass\n",
+        )
+        (pkg / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
+        engine, loader = await _make(tmp_path)
+        await loader.load_all()
+        status = {p["play_id"]: p for p in loader.list_plays()}
+        assert status["worlditor_play_abs"]["status"] == "load_failed"
+        assert "worlditor_play_abs" not in sys.modules  # 失败不留缓存
+        await engine.terminate()
+
+    _run(fn())
+
+
+def test_disable_forgets_module_cache(tmp_path):
+    """disable 清掉模块缓存：改了 helper.py 再 enable 拿到**新代码**。
+
+    注：内容要**改到字节数不同**——`__pycache__` 的有效性判据是"源文件 mtime +
+    大小"，同一秒内改出同样大小的文件时 CPython 会认为旧 .pyc 仍然有效
+    （那是解释器行为，不是内核缓存的问题）。
+    """
+
+    async def fn():
+        pkg = _write_play(
+            tmp_path / "plays",
+            "worlditor_play_reload",
+            "from . import helper\n"
+            "\n"
+            "def setup(api, context):\n"
+            "    api.VALUE = helper.VALUE\n",
+        )
+        helper = pkg / "helper.py"
+        helper.write_text("VALUE = 1\n", encoding="utf-8")
+        engine, loader = await _make(tmp_path)
+        await loader.load_all()
+        assert loader.plays["worlditor_play_reload"].api.VALUE == 1
+        assert "worlditor_play_reload.helper" in sys.modules
+        await loader.disable("worlditor_play_reload")
+        assert "worlditor_play_reload" not in sys.modules
+        assert "worlditor_play_reload.helper" not in sys.modules
+        helper.write_text("VALUE = 2  # 二次修改\n", encoding="utf-8")
+        await loader.enable("worlditor_play_reload")
+        assert loader.plays["worlditor_play_reload"].api.VALUE == 2
+        await engine.terminate()
+
+    _run(fn())
+
+
+def test_systemexit_in_package_is_isolated(tmp_path):
+    """包内 sys.exit() 不得把服务带下水：一个包失败，其余照常加载。"""
+
+    async def fn():
+        _write_play(
+            tmp_path / "plays",
+            "worlditor_play_suicide",
+            "import sys\n\ndef setup(api, context):\n    sys.exit(3)\n",
+        )
+        _write_play(
+            tmp_path / "plays",
+            "worlditor_play_fine",
+            "def setup(api, context):\n    pass\n",
+        )
+        engine, loader = await _make(tmp_path)
+        await loader.load_all()  # 不得抛 SystemExit
+        status = {p["play_id"]: p for p in loader.list_plays()}
+        assert status["worlditor_play_suicide"]["status"] == "load_failed"
+        assert "sys.exit" in status["worlditor_play_suicide"]["error"]
+        assert "worlditor_play_fine" in loader.plays
         await engine.terminate()
 
     _run(fn())

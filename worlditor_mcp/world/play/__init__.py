@@ -278,6 +278,16 @@ class PlayLoader:
             self._load_errors[spec.play_id] = str(e)
             self._rollback_failed_load(spec.play_id)
             return None
+        except SystemExit as e:
+            # `SystemExit` 不是 `Exception`：不隔离的话 `sys.exit()` 会一路冒到
+            # `load_all` → `WorlditorService.start`，**一个包就能让服务起不来**
+            # （实测）。这里按"该包加载失败"处理，其余包照常。
+            logger.exception("[worlditor] 玩法包企图退出进程（已隔离）：%s", path.name)
+            self._load_errors[spec.play_id] = (
+                f"包内调用了 sys.exit({e.code!r})——已隔离为加载失败，服务继续"
+            )
+            self._rollback_failed_load(spec.play_id)
+            return None
         except Exception:  # noqa: BLE001
             logger.exception("[worlditor] 玩法包加载失败：%s", path.name)
             self._load_errors[spec.play_id] = "加载异常（见日志）"
@@ -285,7 +295,7 @@ class PlayLoader:
             return None
 
     def _rollback_failed_load(self, play_id: str) -> None:
-        """加载失败后的回滚：清注册 + 解绑 api。
+        """加载失败后的回滚：清注册 + 解绑 api + 清模块缓存。
 
         **首次加载失败要连组件声明一起清**（``purge=True``）——这个包从来没成功
         过，它的声明留在内存里会让 ``list_kinds()`` / ``capabilities()`` 继续报
@@ -296,10 +306,41 @@ class PlayLoader:
         purge = play_id not in self._disabled
         self.engine.clear_play_registrations(play_id, purge=purge)
         self.engine.detach_play_api(play_id)
+        self._forget_modules(play_id)
+
+    @staticmethod
+    def _forget_modules(play_id: str) -> None:
+        """清掉该包的模块缓存（``play_id`` 及其全部子模块）。
+
+        模块是按**名字**缓存的：不清的话重装同名包会拿到上一次的模块对象
+        （目录都换了、代码还是旧的），包内的辅助模块也会一直挂着——CORE_AUDIT §4
+        记的"sys.modules 卸载残留"就是这条。
+        """
+        stale = [
+            name
+            for name in sys.modules
+            if name == play_id or name.startswith(f"{play_id}.")
+        ]
+        for name in stale:
+            sys.modules.pop(name, None)
 
     def _load_module(self, play_id: str, main_py: Path) -> Any:
-        """importlib 加载玩法包 main.py（模块名 = play id）。"""
-        spec = importlib.util.spec_from_file_location(play_id, main_py)
+        """按**包语义**加载玩法包入口 ``main.py``（多文件包，G50 已落地）。
+
+        `main.py` 作为包 ``<play_id>`` 的入口注册，包的 ``__path__`` 指向包目录
+        ——于是包内可以写 ``from . import helper``，解析成 ``<play_id>.helper``。
+
+        为什么不是"把包目录塞进 `sys.path` 再 `import helper`"：`sys.modules` 按
+        **裸模块名**缓存、`sys.path` 是全局扁平列表，两个包各有一个 `helper.py`
+        时，先导入的那个会永久占住名字，后一个**静默拿到别人的模块**（实测）；
+        包目录排在 `sys.path` 前面还会遮蔽标准库同名的模块（放个 `json.py` 就中招）。
+        包语义把唯一的 play_id 放进模块全名，天然隔离，也不碰 `sys.path`。
+        """
+        spec = importlib.util.spec_from_file_location(
+            play_id,
+            main_py,
+            submodule_search_locations=[str(main_py.parent)],
+        )
         if spec is None or spec.loader is None:
             raise RuntimeError("无法创建模块加载器")
         module = importlib.util.module_from_spec(spec)
@@ -638,6 +679,8 @@ class PlayLoader:
         # v2 / D37：原"落库删除本包注册的物品定义"已移除（内核不再有物品定义）
         self.engine.clear_play_registrations(info.play_id, purge=purge)
         self.engine.detach_play_api(info.play_id)
+        # 模块缓存清理必须在 teardown **之后**（teardown 还要用包里的代码）
+        self._forget_modules(info.play_id)
 
     # ---------- 整体卸载 ----------
 
