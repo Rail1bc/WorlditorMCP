@@ -694,6 +694,61 @@ class WorlditorPlayAPI:
         """
         await self._engine.assign_map(map_id, world_id, folder_id=folder_id, sort=sort)
 
+    async def import_bundle(
+        self,
+        map_data: dict,
+        *,
+        locations: list[dict] | None = None,
+        entities: list[dict] | None = None,
+        world_id: str | None = None,
+        folder_id: str | None = None,
+    ) -> dict:
+        """**单事务导入世界内容**（G55：地图 + 地块 + 实体 + 归属一次提交）。
+
+        内容包（世界包）该用它，而不是逐条 `create_map` / `create_location` /
+        `place_entity`：逐条写"导入到一半抛错"会留下**半张世界**，而按
+        "地图已存在则跳过"的幂等写法重跑时会**假装成功**——你会得到一张看起来
+        已导入、实际缺地块的世界。这里要么全落盘、要么一个字节都不写。
+
+        ```python
+        async def setup(api, context):
+            data = json.loads((Path(__file__).parent / "world.json").read_text("utf-8"))
+            if api.get_map(data["map"]["id"]) is not None:
+                return                      # 幂等：已经导入过就跳过
+            await api.import_bundle(
+                data["map"],
+                locations=data["locations"],
+                entities=data["entities"],
+                world_id="default",
+            )
+        ```
+
+        语义：
+        - 地图 id 已存在 → 报错（**不覆盖**；"导入过就跳过"由你自己判断）
+        - 校验先于写入：地图 / 坐标 / 文案（TextSchedule 结构）/ 连接 / 组件信封
+          全部先在内存里过一遍，消息里带**第几行**，便于对着内容文件改
+        - 实体的 `name` / `desc` 折进 `core:info`，`row` / `col` 折进 `core:position`
+          （全给或全不给；不给 = 不在世界上）；`kind` / `tags` 是输入便利（裸名解析）
+        - **实体不能带 `core:` 组件，也不能绑账户**（账户绑定归身份服务，D20/D42）
+        - 不走原语分派（数据面导入，不是一次动作）；完成后发一条
+          ``on_world_edited``（``{op: "import_bundle", …}``）
+
+        Returns:
+            ``{"map_id", "locations", "entities", "entity_ids"}``。
+        """
+        for index, raw in enumerate(entities or [], start=1):
+            if not isinstance(raw, dict):
+                raise WorldError(f"第 {index} 个实体必须是对象（dict）")
+            for key in raw.get("components") or {}:
+                self._guard_component(str(key))
+        return await self._engine.import_bundle(
+            map_data,
+            locations,
+            entities,
+            world_id=world_id,
+            folder_id=folder_id,
+        )
+
     async def delete_map(self, map_id: str) -> None:
         """删除地图（G2：级联清理；图上玩家/agent 在场被拒）。"""
         await self._engine.delete_map(map_id)

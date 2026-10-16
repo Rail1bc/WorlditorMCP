@@ -334,6 +334,17 @@ class WorldStore:
         )
         await self._conn.commit()
 
+    async def rollback(self) -> None:
+        """回滚当前**未提交**的写事务（bundle 失败路径用）。
+
+        为什么需要它：sqlite 连接是长生命周期的，一条语句失败后事务仍然开着，
+        后续语句会继续待在同一事务里——下一个 `_commit()` 就会把**半截写入**
+        一起提交。正常路径由 `_commit()` 收尾，失败路径必须显式回滚，
+        否则"单事务导入失败即零落盘"只是句口号。
+        """
+        if self._conn is not None:
+            await self._conn.rollback()
+
     async def _check_schema(self) -> None:
         """版本闸（D13）：库的表结构版本或**表形态**与本版本不符 → **拒绝启动**。
 

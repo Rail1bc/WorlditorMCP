@@ -114,18 +114,21 @@ CLI 参数（`worlditor serve …`）优先于同名环境变量：
 ```
 play.yaml          # name/display_name/version/requires（name 必须 worlditor_play_ 前缀）
 main.py            # setup(api, context)：注册组件声明/交互/事件/工具/视图
+helper.py          # 自己的辅助模块（可选，包内用相对导入 from . import helper）
 ```
 
-> ⚠️ **包目前只能是单文件**（`main.py` 被当顶层模块加载，包目录不在 `sys.path`
-> 上——同目录的辅助 `.py` 用 `import` 会 `ModuleNotFoundError`；打包多文件见
-> `GAPS.md` G50）。zip 安装（管理端）还要求：顶层目录名 **== `play.yaml` 的 name**。
+> **多文件包**：`main.py` 按**包语义**加载（v0.7.3 起），包内用相对导入即可；
+> `import helper` 这种绝对导入会失败（避免两个包抢同一个裸模块名）。
+> zip 安装（管理端）要求：顶层目录名 **== `play.yaml` 的 name**、带
+> `worlditor_play_` 前缀。
 
 玩法包可：声明组件（含字段 schema）、注册交互、事件订阅、MCP 工具
 （参数支持 array，G11）、WebUI 视图、覆盖/禁用行为原语（override/
 disable/过滤器链，D11/G14）、跨包服务（M3）、spawn/编辑实体与地图（D14）、
-读写实体组件与按世界隔离的 KV；**世界包**还可写 `async def setup(...)` 导入
-地图、地块、连接与实体（参考内置 `worlditor_play_demo_world`，幂等：地图
-已存在则跳过，不覆盖用户改动）。
+读写实体组件与按世界隔离的 KV；**世界包**还可写 `async def setup(...)` 用
+`api.import_bundle(...)` **单事务**导入地图、地块、连接与实体（要么全落盘、
+要么什么都不写；参考内置 `worlditor_play_demo_world`：地图已存在则跳过，
+不覆盖用户改动）。
 
 安装方式：把包目录放进 `<数据目录>/plays/`，或在管理端
 「玩法包 → 安装玩法包（zip）」上传（zip 内单个顶层目录 `<play_id>/`，

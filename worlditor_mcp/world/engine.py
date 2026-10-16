@@ -61,6 +61,7 @@ from .model import (
     Entity,
     InteractionRequest,
     InteractionResult,
+    Location,
     MenuButton,
     ScenePath,
     SceneView,
@@ -2856,39 +2857,14 @@ class WorldEngine:
         """
         async with self._lock:
             has_pos = self._resolve_new_position(map_id, row, col)
-            payload = _clean_components(components)
-            ability: list[str] = []
-            if kind is not None:
-                # None = 不带能力组件；空串是**写错了**（`_resolve_component_key` 报"不能为空"），
-                # 不静默当成"没有"——"忘了填"该吵，不该悄悄造出一个裸实体
-                ability.append(self._resolve_component_key(kind))
-            ability.extend(self._resolve_component_key(t) for t in parse_names(tags))
-            spec = self._tag_specs.get(ability[0]) if ability else None
-            if name is None or not str(name).strip():
-                name = (
-                    (spec.label if spec and spec.label else ability[0])
-                    if ability
-                    else ""
-                )
-            # 能力组件进实体（数据 {} 是"纯能力标记"；components 里已给数据就保留）
-            for key in ability:
-                payload.setdefault(key, {})
-            # D36：位置进 core:position（不再是列）——给了坐标才叫"放进世界"
-            if has_pos is not None:
-                payload = {**payload, CORE_POSITION: has_pos}
-            if str(name).strip() or str(desc or ""):
-                info = dict(payload.get(CORE_INFO) or {})
-                if str(name).strip():
-                    info["name"] = str(name).strip()
-                if str(desc or ""):
-                    info["desc"] = str(desc or "")
-                payload = {**payload, CORE_INFO: info}
-            if user_id is not None:
-                payload = {**payload, CORE_ACCOUNT: {"user_id": str(user_id)}}
-            entity = Entity(
-                id=uuid.uuid4().hex,
-                components=payload,
-                last_active_ts=self._now_ts(),
+            entity, ability = self._compose_entity(
+                kind=kind,
+                tags=tags,
+                components=components,
+                name=name,
+                desc=desc,
+                position=has_pos,
+                user_id=user_id,
             )
             if _persist:
                 await self.store.save_entity(entity)
@@ -2901,6 +2877,199 @@ class WorldEngine:
                     },
                 )
             return entity
+
+    def _compose_entity(
+        self,
+        *,
+        kind: object,
+        tags: object,
+        components: object,
+        name: object,
+        desc: object,
+        position: dict[str, Any] | None,
+        user_id: str | None = None,
+    ) -> tuple[Entity, list[str]]:
+        """组装一个新实体（**不落盘、不发事件**）：能力裸名解析 + 组件折叠。
+
+        `place_entity`（单条）与 `import_bundle`（批量导入）共用这一段——能力解析、
+        `name`/`desc` → `core:info`、坐标 → `core:position`、账户 → `core:account`
+        的规则只有一处实现（分散写早晚两边不一致）。
+
+        Returns:
+            ``(实体, 本次由 kind/tags 解析出的能力组件键)``。
+        """
+        payload = _clean_components(components)
+        ability: list[str] = []
+        if kind is not None:
+            # None = 不带能力组件；空串是**写错了**（`_resolve_component_key` 报"不能为空"），
+            # 不静默当成"没有"——"忘了填"该吵，不该悄悄造出一个裸实体
+            ability.append(self._resolve_component_key(kind))
+        ability.extend(self._resolve_component_key(t) for t in parse_names(tags))
+        spec = self._tag_specs.get(ability[0]) if ability else None
+        if name is None or not str(name).strip():
+            name = (
+                (spec.label if spec and spec.label else ability[0]) if ability else ""
+            )
+        # 能力组件进实体（数据 {} 是"纯能力标记"；components 里已给数据就保留）
+        for key in ability:
+            payload.setdefault(key, {})
+        # D36：位置进 core:position（不再是列）——给了坐标才叫"放进世界"
+        if position is not None:
+            payload = {**payload, CORE_POSITION: position}
+        if str(name).strip() or str(desc or ""):
+            info = dict(payload.get(CORE_INFO) or {})
+            if str(name).strip():
+                info["name"] = str(name).strip()
+            if str(desc or ""):
+                info["desc"] = str(desc or "")
+            payload = {**payload, CORE_INFO: info}
+        if user_id is not None:
+            payload = {**payload, CORE_ACCOUNT: {"user_id": str(user_id)}}
+        return (
+            Entity(
+                id=uuid.uuid4().hex,
+                components=payload,
+                last_active_ts=self._now_ts(),
+            ),
+            ability,
+        )
+
+    async def import_bundle(
+        self,
+        map_data: dict,
+        locations: list[dict] | None = None,
+        entities: list[dict] | None = None,
+        *,
+        world_id: str | None = None,
+        folder_id: str | None = None,
+    ) -> dict[str, Any]:
+        """内容导入（**单事务**）：地图 + 地块 + 实体 + 世界归属一次提交（G55）。
+
+        与逐条 `create_map` / `create_location` / `place_entity` 的区别：
+
+        - **一次 SQLite 提交**（`store.save_map_bundle`）：中途任何校验失败 → 一个
+          字节都不落盘。逐条写则"导入到一半抛错"会留下半张世界，而按
+          "地图已存在则跳过"的幂等写法重跑时会**假装成功**（这正是 G55 的坑）。
+        - **校验先于写入**：地图 / 坐标 / 文案 / 连接 / 信封 / 组件全都先在内存里
+          过一遍，全部合法才动库。
+        - **不覆盖**：地图 id 已存在 → 报错。"已经导入过就跳过"仍由玩法包自己判断
+          （``api.get_map(map_id) is not None``）。
+        - 实体 id 由内核生成；``name`` / ``desc`` 折进 ``core:info``，``row`` / ``col``
+          折进 ``core:position``（同一条"全给或全不给"规则，缺坐标 = 不在世界上）；
+          **不支持 `user_id`**（账户绑定归身份服务，D20/D42）。
+        - **不走原语分派**：这是数据面导入（与 `create_map` 同级），不是一次动作；
+          完成后只发一条 ``on_world_edited``（``{op: "import_bundle", …}``），
+          不为每个实体补发 `place_entity` 事件。
+
+        Args:
+            map_data: 地图定义（``{id, name, description?, timezone?, spawn_row?,
+                spawn_col?, visible?}``）。
+            locations: 地块列表（``{row, col, name, description?, connections?}``）。
+            entities: 实体列表（``{row?, col?, name?, desc?, kind?, tags?,
+                components?}``）。
+            world_id: 归属世界（不给 = 未归属；未归属地图按默认世界的激活集合算）。
+            folder_id: 归属组织节点（需与 world_id 同给）。
+
+        Returns:
+            ``{"map_id", "locations", "entities", "entity_ids"}``。
+
+        Raises:
+            WorldError: 地图已存在 / 世界或文件夹不存在 / 逐个地块或实体的校验失败
+                （消息里带序号，便于定位是哪一行内容写错了）。
+        """
+        async with self._lock:
+            if not isinstance(map_data, dict):
+                raise WorldError("地图数据必须是对象（dict）")
+            map_id = _clean_required(str(map_data.get("id") or ""), "地图 id")
+            if map_id in self.store.maps:
+                raise WorldError(f"地图已存在：{map_id}（导入不覆盖既有地图）")
+            try:
+                world_map = parse_map({**map_data, "id": map_id})
+            except (ValueError, WorldError) as e:
+                raise WorldError(f"地图数据非法：{e}") from None
+            if world_id is not None:
+                if world_id not in self.store.worlds:
+                    raise WorldError(f"世界不存在：{world_id}")
+                if folder_id is not None and folder_id not in self.store.folders:
+                    raise WorldError(f"文件夹不存在：{folder_id}")
+            raw_locations = locations or []
+            if not isinstance(raw_locations, list):
+                raise WorldError("locations 必须是列表")
+            parsed: list[Location] = []
+            seen: set[tuple[int, int]] = set()
+            for index, raw in enumerate(raw_locations, start=1):
+                if not isinstance(raw, dict):
+                    raise WorldError(f"第 {index} 个地块必须是对象（dict）")
+                try:
+                    loc = parse_location({**raw, "map_id": map_id})
+                except (ValueError, WorldError) as e:
+                    raise WorldError(f"第 {index} 个地块非法：{e}") from None
+                if (loc.row, loc.col) in seen:
+                    raise WorldError(f"地块坐标重复：({loc.row}, {loc.col})")
+                seen.add((loc.row, loc.col))
+                parsed.append(loc)
+            raw_entities = entities or []
+            if not isinstance(raw_entities, list):
+                raise WorldError("entities 必须是列表")
+            built: list[Entity] = []
+            for index, raw in enumerate(raw_entities, start=1):
+                if not isinstance(raw, dict):
+                    raise WorldError(f"第 {index} 个实体必须是对象（dict）")
+                row, col = raw.get("row"), raw.get("col")
+                position: dict[str, Any] | None = None
+                if (row is None) != (col is None):
+                    raise WorldError(
+                        f"第 {index} 个实体的位置要么全给、要么全不给"
+                        "（row / col 收到了半截）——不给坐标 = 不在世界上"
+                    )
+                if row is not None or col is not None:
+                    _check_pos(row, col)
+                    # 地块必须存在：本批带来的，或世界里已有的（同 place_entity 的闸门）
+                    if (row, col) not in seen and (
+                        map_id,
+                        row,
+                        col,
+                    ) not in self.store.loc_by_pos:
+                        raise WorldError(
+                            f"第 {index} 个实体的地块不存在：({row}, {col})"
+                            "（要么写进本批 locations，要么图上是现成的）"
+                        )
+                    position = {"map_id": map_id, "row": row, "col": col}
+                try:
+                    entity, _ability = self._compose_entity(
+                        kind=raw.get("kind"),
+                        tags=raw.get("tags"),
+                        components=raw.get("components"),
+                        name=raw.get("name"),
+                        desc=raw.get("desc"),
+                        position=position,
+                    )
+                except (WorldError, ValueError) as e:
+                    raise WorldError(f"第 {index} 个实体非法：{e}") from None
+                built.append(entity)
+            try:
+                await self.store.save_map_bundle(
+                    world_map, parsed, built, world_id=world_id, folder_id=folder_id
+                )
+            except Exception:
+                # 半截写入不许留给下一个 _commit 提交（见 store.rollback 的说明）
+                await self.store.rollback()
+                raise
+            await self._emit(
+                "on_world_edited",
+                {
+                    "op": "import_bundle",
+                    "map_id": map_id,
+                    "locations": len(parsed),
+                    "entities": len(built),
+                },
+            )
+            return {
+                "map_id": map_id,
+                "locations": len(parsed),
+                "entities": len(built),
+                "entity_ids": [e.id for e in built],
+            }
 
     def _resolve_new_position(
         self, map_id: object, row: object, col: object

@@ -1024,15 +1024,27 @@
 - **处置**：✅ 文档说真话（`PLAY_DEV` §2、`uninstall` docstring）——**KV 与实体组件
   一律保留**，"卸载只删包目录"。是否要给一个显式的"连数据一起删"开关，等真实需求。
 
-### G50 玩法包目前只能单文件——待做
-- **现象**：`main.py` 被当**顶层模块** exec（`play/__init__.py:_load_module`），包目录
-  不在 `sys.path`、也不是 Python 包 → `import helper` / `from . import helper` 全部
-  `ModuleNotFoundError`（实测；README/PLAY_DEV 已标注）。
-- **影响**：真实玩法包必然想拆多文件；现在只能发成 pip 依赖包，或在 main.py 里手工
-  `sys.path` 注入（未文档化、易踩）。
-- **方案**：加载前把包目录放进 `sys.path`（`import package.module` 即可用），
-  或在 teardown 时按前缀清 `sys.modules`（顺带修 CORE_AUDIT §4 的"sys.modules 残留"）。
-  需定命名冲突语义（两个包同名辅助模块）。
+### G50 玩法包只能单文件——✅ 已修（v0.7.3，方案 B：包语义加载）
+- **现象（修复前）**：`main.py` 被当**顶层模块** exec（`play/__init__.py:_load_module`），
+  包目录不在 `sys.path`、也不是 Python 包 → `import helper` / `from . import helper`
+  全部 `ModuleNotFoundError`（实测）。
+- **为什么不用"把包目录塞进 sys.path"**（曾评估的方案 A）：`sys.modules` 按**裸模块名**
+  缓存、`sys.path` 是全局扁平列表——两个包各有一个 `helper.py` 时，先导入者永久占名，
+  后一个**静默拿到别人的模块**（本地实测：B 包跑出了 A 包的 helper）；且包目录排在
+  `sys.path` 前面会遮蔽标准库同名模块（放个 `json.py` 就中招）。
+- **✅ 落地（方案 B）**：`_load_module` 用 `spec_from_file_location(..., submodule_search_locations=[包目录])`
+  ——`main.py` 成为包 `<play_id>` 的入口，包内 `from . import helper` 解析成
+  `<play_id>.helper`。模块全名带唯一 play_id，天然隔离，不碰 `sys.path`；
+  绝对导入 `import helper` 会**响亮失败**（不再是静默拿到别人的模块）。
+  **卸载/停用清缓存**：`_forget_modules(play_id)` 按 `play_id` 与前缀清 `sys.modules`
+  （teardown 之后调用），顺带修掉 CORE_AUDIT §4 记的"sys.modules 卸载残留"——
+  "改代码 → 停用 → 启用"现在能拿到新代码。
+- **测试**：`test_play_manage.py` 5 条（相对导入可用 / 两包同名 helper 互不串味 +
+  不污染裸名空间 / 绝对导入响亮失败且不留缓存 / 停用清缓存后拿到新代码 / `sys.exit`
+  隔离）。⚠ 文档提醒：改文件要**改到字节数不同**，否则 CPython 的 `__pycache__`
+  判据（mtime 同秒 + 大小相同）会继续用旧 `.pyc`。
+- **仍不做**：两个包依赖**同一个 pip 包的不同版本**仍无解（同进程同一 site-packages），
+  真要隔离得上子进程 / 独立 venv。
 
 ### G51 只读接口是"浅只读"——待做
 - **现象**（实测）：`api.get_component()` 返回**浅拷贝**（`dict(data)`）——改嵌套的
@@ -1074,15 +1086,29 @@
 - **修法**：`_dynamic` 的兜底 except 补 `logger.exception`；测试
   `test_play_runtime.py::test_dynamic_tool_error_is_logged`（断言有 ERROR 记录 + 带栈）。
 
-### G55 加载失败只回滚注册表、不回滚世界写入——待做（设计口径见下）
+### G55 加载失败只回滚注册表、不回滚世界写入——✅ 已修（v0.7.3，超时项另记）
 - **现象**（实测）：世界包 `setup` 里 `create_map` + 2 个地块后抛错 → 地图与地块**留在库里**；
   重启重跑直接卡在"地图已存在"。更糟的是**按官方幂等写法（"地图存在即跳过"）的包
   会假装加载成功**，留下一张半成品世界。
 - **同族**：`load_one` 只捕 `Exception` → 包顶层或 setup 里 `sys.exit(3)` 会穿透让**整个
   服务启动失败**；`setup` 无超时（`time.sleep(30)` 让启动挂住）。
-- **方案**：给内容包一个**单事务导入**入口（复用 v0.7.1 已有的 `store.save_map_bundle`，
-  一次性提交地图+地块+实体+归属），或提供 `api.import_bundle(...)`；`setup` 加超时 +
-  捕 `BaseException` 里的 `SystemExit`（隔离成"该包加载失败"而不是"服务起不来"）。
+- **✅ 已落地（v0.7.3）**：
+  - **`api.import_bundle(map, locations=…, entities=…, world_id=…, folder_id=…)`**：
+    地图 + 地块 + 实体 + 归属**一次 SQLite 提交**（复用 `store.save_map_bundle`），
+    校验先于写入（报错消息带"第几行"），地图已存在即拒绝；失败路径显式
+    `store.rollback()`（新增）——否则长连接上一条失败语句会留给**下一个 `_commit`
+    一起提交**，"零落盘"就只是句口号
+  - 引擎侧抽了 `_compose_entity`：`place_entity` 与 `import_bundle` 共用同一套
+    "裸名解析 / `core:info` / `core:position` 折叠"规则（分散写早晚不一致）
+  - **`SystemExit` 隔离**：`load_one` 单捕它 → 记"包内调用了 sys.exit(3)——已隔离为
+    加载失败，服务继续"，其余包照常加载
+  - 内置世界包 `worlditor_play_demo_world` 改为用它（41 地块 + 3 实体一次导入，
+    连接与文案逐字不变，实测）；参考实现即文档
+  - 测试：`tests/test_play_content_import.py` 8 条（全量落地 / 失败零落盘 / 已存在拒绝 /
+    地块不存在 / 半截坐标 / 不在世界上 / 文案结构 / core: 守卫 / 单条事件）
+- **仍缺（明确的边界）**：`setup` **没有超时**。同步 `setup` 里的 `time.sleep(30)`
+  会**阻塞事件循环**，`asyncio.wait_for` 也打断不了——真要治得上线程/子进程执行
+  `setup`，代价远超收益，故只记录不实现（文档已提示别在 setup 里做长阻塞的事）。
 
 ### G56 MCP 工具清单变化不通知客户端——待做
 - **现象**：SDK 报 `tools.listChanged: false`，且 `FastMCP.add_tool` 不发

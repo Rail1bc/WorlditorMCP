@@ -67,16 +67,23 @@ def teardown(api: WorlditorPlayAPI) -> None:
 worlditor_play_xxx/
 ├── play.yaml        # 元数据（必填：name / version；display_name、requires 可省）
 ├── main.py          # setup(api, context) 入口（必填）
+├── helper.py        # 自己的辅助模块（可选，包内用**相对导入**引用）
 ├── data/            # 自有数据文件（只读访问；写操作走 api.kv_*）
 └── web/             # 视图组件 JS（register_view 的 provider.url 指向这里）
 ```
 
 - play_id = `play.yaml` 的 `name`，必须 `worlditor_play_` 前缀（**加载的硬条件**：
   没有前缀的目录会被直接跳过，手工放进 `plays/` 也不会出现在管理页里）
-- ⚠️ **现在只支持单文件包**：`main.py` 被当作**顶层模块**加载，包目录不在
-  `sys.path` 上、也不是 Python 包——同目录的 `helpme.py` 用 `import helpme` /
-  `from . import helpme` **都会 ModuleNotFoundError**。要拆多文件，只能把代码
-  发成 pip 依赖包（或自己在 main.py 里手工 `sys.path` 注入；多文件支持见 GAPS G50）
+- **多文件包（v0.7.3 起）**：`main.py` 作为包 `worlditor_play_xxx` 加载、`__path__`
+  指向包目录——包内写 `from . import helper` / `from .helper import f` 即可。
+  ⚠ **包内一律用相对导入**：`import helper`（绝对、不带点）会 `ModuleNotFoundError`
+  ——这是刻意的：绝对导入全进程抢同一个裸模块名，两个包各有 `helper.py` 时后加载的
+  会**静默拿到别人的模块**（本地实测：B 包跑出了 A 包的 helper），而且把包目录放进
+  `sys.path` 还会遮蔽标准库同名的模块
+- 停用/卸载时内核清掉 `sys.modules` 里该包的全部模块（含子模块），所以"改代码 →
+  停用 → 启用"能拿到新代码。⚠ 改文件要**改到字节数不同**：`__pycache__` 的有效性
+  判据是"mtime + 大小"，同一秒内改出同样大小的文件时 CPython 会继续用旧 `.pyc`
+  （解释器行为，不是内核的问题）
 - zip 安装（管理端上传）额外要求：顶层目录**只有一个**、目录名 **== `name`**、
   且匹配 `^[A-Za-z0-9_-]+$`（安装与卸载都按目录名定位，不一致会"装得上却卸不掉"）
 - `requires.plays`：依赖的玩法包 id 列表——加载拓扑保证先加载；enable 时自动先启用依赖；disable 时仍有依赖者则拒绝
@@ -226,6 +233,36 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 `create_location(map_id, row, col, name, *, description=None)`（新建地块，坐标重复/空名称报错）/ `update_location(map_id, row, col, **kwargs)` / `update_connection(map_id, row, col, direction, **kwargs)` / `create_map(map_id, name, ...)` / `delete_map(map_id)`（图上玩家在场拒绝，G2）/ `save_template(template)` / `delete_template(template_id)`
 
+**内容包导入世界内容用 `import_bundle`（单事务，别逐条写）**：
+
+```python
+await api.import_bundle(
+    {"id": "main", "name": "主世界", "spawn_row": 0, "spawn_col": 0},   # 地图定义
+    locations=[{"row": 0, "col": 0, "name": "广场",
+                "description": {"periods": [...]},          # 文案：TextSchedule 结构
+                "connections": {"up": {"enabled": True, "paths": [...]}}}],
+    entities=[{"row": 0, "col": 0, "name": "阿福", "desc": "老商贩",
+               "components": {"local:merchant": {}}}],
+    world_id="default",          # 归属世界（默认世界被删过就传 None = 不归属）
+    folder_id=None,              # 归属组织节点（可选）
+)
+# → {"map_id", "locations", "entities", "entity_ids"}
+```
+
+- **一次 SQLite 提交**：要么全落盘、要么一个字节都不写。逐条 `create_map` /
+  `create_location` / `place_entity` 在"导入到一半抛错"时会留下**半张世界**，
+  而按"地图已存在则跳过"的幂等判断重跑又会**假装成功**（GAPS G55）
+- **地图 id 已存在 → 报错**（不覆盖）。"导入过就跳过"由你自己判断：
+  `if api.get_map(map_id) is not None: return`
+- 校验先于写入，报错消息带**第几行**（"第 3 个地块非法：地块名称不能为空"），
+  对着内容文件改就行；地块坐标重复、实体坐标不在任何地块上同样会点名
+- 实体的 `name` / `desc` 折进 `core:info`，`row` / `col` 折进 `core:position`
+  （**全给或全不给**，不给 = 不在世界上）；`kind` / `tags` 是输入便利（裸名解析）
+- **不能带 `core:` 组件、不能绑账户**（D33 / D20）；完成后只发一条
+  `on_world_edited`（`{op: "import_bundle", …}`），**不为每个实体补发** `place_entity`
+- 不走原语分派——这是数据面导入（与 `create_map` 同级），不是一次动作
+- 参考实现：内置世界包 `worlditor_play_demo_world`（41 地块 + 3 实体一次导入）
+
 **模板（D22：地块与实体共用一个"模板"概念）**：
 - `register_entity_template(template_id, name, data, label="")` —— 注册本包自带的**实体模板**
   （内存注册表，随包卸载消失）；`data = {name, desc, components}`
@@ -238,11 +275,12 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 - `apply_location_template(template_id, map_id, row, col)` —— 套用地块模板：
   **同图目标按相对偏移平移、跨图目标原样复制**，目标格已有地块则拒绝。
 
-**世界包导入内容时**：`assign_map(map_id, world_id, folder_id=None, sort=None)` 把地图
+**世界包导入内容时**：新内容走 `import_bundle(..., world_id=…)`（见上）；已经建好的
+地图单独改归属用 `assign_map(map_id, world_id, folder_id=None, sort=None)`——把地图
 归属到世界与组织节点（`sort` = 该节点内的序号，文件夹与地图**共用一个序号空间**，
 见 DESIGN §4.3.2；缺省 = 同节点保留原位 / 换节点排到末尾）。管理端还有组织树拖拽、
 地图搬家（含跨世界）、复制另存与地图体检（`GET /admin/lint`）——这些都是**管理维度**，
-玩法包一般只需要 `assign_map` 把自己的地图放进世界。
+玩法包一般只需要导入时带上 `world_id`。
 
 **文案（TextSchedule）只有一种格式**（v0.5.2 统一）：地图/地块的 `description`
 与出口路径的 `label` 都必须是
@@ -830,7 +868,7 @@ await api.remove_data(entity_id, "gold", component="local:stat")    # 删字段�
 
 | 包 | 能力 | 关键机制 |
 |---|---|---|
-| `worlditor_play_demo_world` | **世界内容包**：导入示例主世界（41 地块：广场/步行街/AstrBot大道/开源小区/迷雾森林 + 商贩·阿福/告示牌/木门） | `async setup` 读取本包 `world.json`（地图/地块/连接/实体）并写入世界；**地图已存在则跳过**（不覆盖用户改动）；只导入内容，**不注册组件声明/交互/工具/视图**——行为由你自己的包（或夹具参考包）提供；换世界主题 = 停用本包换成你自己的世界包 |
+| `worlditor_play_demo_world` | **世界内容包**：导入示例主世界（41 地块：广场/步行街/AstrBot大道/开源小区/迷雾森林 + 商贩·阿福/告示牌/木门） | `async setup` 读取本包 `world.json`（地图/地块/连接/实体），**一次 `api.import_bundle` 单事务导入**（§4「地图编辑」——要么全落盘、要么什么都不写）；**地图已存在则跳过**（不覆盖用户改动）；只导入内容，**不注册组件声明/交互/工具/视图**——行为由你自己的包（或夹具参考包）提供；换世界主题 = 停用本包换成你自己的世界包 |
 
 > 想看真实代码？内容导入型包看 `worlditor_mcp/builtin_plays/worlditor_play_demo_world/`；
 > 行为玩法包看 `tests/play_fixtures.py`（Python）+ `tests/fixtures/plays/worlditor_play_demo/web/*.js`（组件）。
