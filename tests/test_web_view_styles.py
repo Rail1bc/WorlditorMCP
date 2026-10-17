@@ -22,6 +22,15 @@ _WEBUI = _ROOT / "webui" / "src"
 # v0.7.0 起内置玩法包不再随仓库携带视图组件，本目录是唯一的视图组件来源。
 _VIEW_COMPONENTS = _ROOT / "tests" / "fixtures" / "plays"
 
+# 前端静态扫描范围：内核 WebUI + 内置玩法包 + 夹具参考包。
+# 后两者是包作者直接抄的"参考实现"——只守内核等于给样例开后门。
+_FRONTEND_SCAN_ROOTS = (
+    _WEBUI,
+    _ROOT / "worlditor_mcp" / "builtin_plays",
+    _VIEW_COMPONENTS,
+)
+_FRONTEND_EXTS = ("*.vue", "*.js", "*.mjs")
+
 # 玩家端布局/组件样式类（styles.css 缺失即布局崩坏——v0.1.17 回归点）
 _REQUIRED_CSS = (
     ".app-header",
@@ -164,20 +173,50 @@ def test_map_governance_pages_shape():
     assert "allmaps" in panel  # #/admin/maps = 跨世界总览
 
 
-def test_admin_pages_use_no_native_dialogs():
-    """管理端不用原生 confirm/prompt/alert（iframe/沙箱下会被浏览器屏蔽）。"""
+def _frontend_files():
+    for root in _FRONTEND_SCAN_ROOTS:
+        for pattern in _FRONTEND_EXTS:
+            yield from sorted(root.rglob(pattern))
+
+
+def test_frontend_uses_no_native_dialogs():
+    """内核与玩法包前端都不用原生 confirm/prompt/alert（iframe/沙箱下会被屏蔽）。
+
+    两种写法都要抓：带前缀的 ``window.prompt(`` 与裸调用 ``prompt(``。
+    旧正则 ``(?<![\\w.$])`` 为了放过 ``obj.prompt(`` 把 ``.`` 也排除了，
+    于是 ``window.prompt(`` **永远不匹配**——夹具里那处违规守卫从没抓到过。
+    """
     offenders = []
-    for path in sorted((_WEBUI).rglob("*.vue")) + sorted((_WEBUI).rglob("*.js")):
+    for path in _frontend_files():
         text = path.read_text(encoding="utf-8")
         for pattern in (
-            r"(?<![\w.$])confirm\(",
-            r"(?<![\w.$])prompt\(",
-            r"(?<![\w.$])alert\(",
+            r"\bwindow\.(?:confirm|prompt|alert)\s*\(",
+            r"(?<![\w$.])(?:confirm|prompt|alert)\s*\(",
         ):
             for match in re.finditer(pattern, text):
                 line = text[: match.start()].count("\n") + 1
-                offenders.append(f"{path.name}:{line} {match.group(0)}")
-    assert not offenders, f"原生弹窗应改用 askConfirm()：{offenders}"
+                where = path.relative_to(_ROOT)
+                offenders.append(f"{where}:{line} {match.group(0).strip()}")
+    assert not offenders, (
+        "原生弹窗在 iframe/沙箱下会被屏蔽：内核 WebUI 用 askConfirm()，"
+        f"玩法包组件改用页内交互（如行内 input）：{offenders}"
+    )
+
+
+def test_play_components_do_not_use_template_compiler():
+    """玩法包组件跑在 runtime-only Vue 上：只能用 ``h()``，不能写 ``template:``（X-5）。
+
+    内核 WebUI 是编译构建，``.vue`` 里的 ``<template>`` 合法；玩法包组件是运行时
+    ``new Function`` 装载，没有模板编译器，写 ``template:`` 会静默渲染空白。
+    """
+    offenders = []
+    for root in _FRONTEND_SCAN_ROOTS[1:]:
+        for path in sorted(root.rglob("*.js")):
+            text = path.read_text(encoding="utf-8")
+            for match in re.finditer(r"\btemplate\s*:", text):
+                line = text[: match.start()].count("\n") + 1
+                offenders.append(f"{path.relative_to(_ROOT)}:{line}")
+    assert not offenders, f"runtime-only Vue 不支持 template:，请改用 h()：{offenders}"
 
 
 def test_confirm_host_is_mounted_globally():

@@ -52,11 +52,13 @@
         }
       }
 
-      async function setPrice(row) {
-        const raw = window.prompt("新价格", String(row.price));
-        if (raw === null) return;
+      // 页内编辑：管理页组件跑在 iframe/沙箱里，原生 prompt 会被浏览器屏蔽
+      async function setPrice(row, raw) {
+        if (raw === "") return; // 清空不提交
+        const price = Number(raw);
+        if (!Number.isFinite(price)) return;
         try {
-          await call("set_price", { item_id: row.id, price: Number(raw) });
+          await call("set_price", { item_id: row.id, price: price });
           await refresh();
         } catch (e) {
           error.value = e.message;
@@ -82,7 +84,14 @@
                   h(
                     "td",
                     {},
-                    [h("button", { onClick: () => setPrice(row) }, "改价")]
+                    [
+                      h("input", {
+                        type: "number",
+                        min: "0",
+                        value: String(row.price),
+                        onChange: (e) => setPrice(row, e.target.value),
+                      }),
+                    ]
                   ),
                 ])
               )
