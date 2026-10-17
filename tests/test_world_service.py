@@ -84,7 +84,7 @@ def _auth(token: str) -> dict:
 
 
 def test_public_auth_endpoints(tmp_path):
-    """公共端点免认证：注册 / 登录 / read-token / agent 注册。"""
+    """公共端点免认证：注册 / 登录 / agent 注册；read 围观档已删除（v0.9）。"""
 
     async def fn(client, identity, engine, loader, app):
         # 注册（无 token）
@@ -100,9 +100,9 @@ def test_public_auth_endpoints(tmp_path):
             "/auth/login", json={"username": "小明", "password": "pass123"}
         )
         assert resp.json()["ok"]
-        # read-token
-        resp = await client.get("/auth/read-token")
-        assert resp.json()["token"]["tier"] == "read"
+        # v0.9：read（围观）档整体删除——端点下线。注意它**不在 PUBLIC_PATHS 里了**，
+        # 所以未认证请求在中间件层就被拦成 401（不是 404）——比"免认证但不存在"更省事
+        assert (await client.get("/auth/read-token")).status_code == 401
         # admin_key 管理员
         resp = await client.post(
             "/auth/register",
@@ -128,12 +128,13 @@ def test_public_auth_endpoints(tmp_path):
 
 
 def test_snapshot_and_auth(tmp_path):
-    """快照：无 token 401；read 档可读 state/scene。"""
+    """快照：无 token 401；玩家凭据可读 state/scene。"""
 
     async def fn(client, identity, engine, loader, app):
         assert (await client.get("/state")).status_code == 401
-        read = (await client.get("/auth/read-token")).json()["token"]["token"]
-        h = _auth(read)
+        # v0.9：read 围观档删除后，"能读世界"的最小身份就是 play 档（可无化身）
+        viewer = await identity.register_human("看客", "pass123")
+        h = _auth(viewer.token)
         # state
         resp = await client.get("/state", headers=h)
         data = resp.json()
@@ -233,8 +234,8 @@ def test_events_auth(tmp_path):
         resp = await mcp_http._events(Request(scope))
         assert isinstance(resp, StreamingResponse)
         assert resp.media_type == "text/event-stream"
-        read = (await client.get("/auth/read-token")).json()["token"]["token"]
-        assert (await client.get("/events", headers=_auth(read))).status_code == 403
+        # v0.9：read（围观）档删除——`/events` 要么 play/admin，要么没凭据（401）
+        assert (await client.get("/events")).status_code == 401
 
     _run(_scenario(tmp_path, fn, world="test"))
 
@@ -256,8 +257,8 @@ def test_play_web_static(tmp_path):
         (play_dir / "web").mkdir()
         (play_dir / "web" / "comp.js").write_text("// component", encoding="utf-8")
         await loader.load_all(None)
-        read = (await client.get("/auth/read-token")).json()["token"]["token"]
-        h = _auth(read)
+        viewer = await identity.register_human("看客", "pass123")
+        h = _auth(viewer.token)
         resp = await client.get("/plays/worlditor_play_ui/web/comp.js", headers=h)
         assert resp.status_code == 200 and resp.text == "// component"
         # 路径穿越
@@ -340,8 +341,8 @@ def test_scene_actions_with_demo(tmp_path):
     """演示玩法包注册的实体可用动作经 /scene 暴露（talk/trade/read/open）。"""
 
     async def fn(client, identity, engine, loader, app):
-        read = (await client.get("/auth/read-token")).json()["token"]["token"]
-        h = _auth(read)
+        viewer = await identity.register_human("看客", "pass123")
+        h = _auth(viewer.token)
         state = (await client.get("/state", headers=h)).json()
         # D41：三个演示实体各带自己的组件（内容里的 kind 已折进 components）
         for kind in ("local:merchant", "local:sign", "local:door"):
@@ -477,3 +478,81 @@ def test_mcp_http_end_to_end(tmp_path):
             await asyncio.wait_for(task, timeout=10)
 
     _run(_scenario(tmp_path, fn, install_demo=True, world="test"))
+
+
+def test_chrome_mount_point(tmp_path):
+    """K-1：`/chrome` 壳层挂载点——抽屉列表，条目由玩法包注入，壳层自己不放内容。"""
+
+    async def fn(client, identity, engine, loader, app):
+        from worlditor_mcp.world.model import CORE_SHELL_MENU, UiBlock
+
+        # 要认证：这里会执行玩法包代码（apply_ui_hooks 调 provider），
+        # 返回内容可能是有权限的——不能像 /views 那样免认证
+        assert (await client.get("/chrome")).status_code == 401
+
+        info = await identity.register_human("小明", "pass123")
+        h = _auth(info.token)
+
+        # 没有包注入 → blocks 为空，但**请求成功**（抽屉照常能开、退出登录仍在）
+        resp = await client.get("/chrome", headers=h)
+        assert resp.status_code == 200
+        assert resp.json()["blocks"] == []
+
+        # 玩法包往挂载点里放一条「我」——零新 API，复用 register_ui_hook
+        async def _me(api, block):
+            return [
+                UiBlock(
+                    kind="worlditor_play_me:entry",
+                    title="我",
+                    icon="🙋",
+                    data={"view": "me"},
+                )
+            ]
+
+        engine.register_ui_hook(
+            CORE_SHELL_MENU, "after", _me, play_id="worlditor_play_me"
+        )
+        blocks = (await client.get("/chrome", headers=h)).json()["blocks"]
+        assert [b["title"] for b in blocks] == ["我"]
+        assert blocks[0]["icon"] == "🙋"  # K-8 的字段在这里真正用上
+        assert blocks[0]["data"] == {"view": "me"}  # 导航走 data，不走 action
+
+        # 卸载即回收：撤注册后列表回到空
+        engine.clear_play_registrations("worlditor_play_me")
+        assert (await client.get("/chrome", headers=h)).json()["blocks"] == []
+
+    _run(_scenario(tmp_path, fn))
+
+
+def test_where_reports_world_and_map(tmp_path):
+    """K-3：`/where` = 页眉的"我在哪个世界的哪张地图"，比 `/state` 轻得多。"""
+
+    async def fn(client, identity, engine, loader, app):
+        # 要认证
+        assert (await client.get("/where")).status_code == 401
+
+        info = await identity.register_human("小明", "pass123")
+        h = _auth(info.token)
+        # 注册不产生化身（D45）→ 明确的空态 + reason，不是错误
+        data = (await client.get("/where", headers=h)).json()
+        assert data["reason"] == "no_avatar"
+        assert data["entity_id"] == "" and data["map"] is None
+
+        # 造化身 → 认领 → 把凭据指过去（D46 的三步）
+        avatar = await engine.place_entity(None, "default", 0, 0, name="小明")
+        await engine.claim_avatar(avatar.id, info.account_id)
+        await engine.set_acting_entity(info.token, avatar.id)
+        data = (await client.get("/where", headers=h)).json()
+        assert data["reason"] == ""
+        assert data["entity_id"] == avatar.id
+        assert data["map"]["id"] == "default"
+        assert data["map"]["name"]  # 地图名（页眉要显示的就是它）
+        # 地图未归属世界 → world 为 null（合法，"没有归属"不是错误）
+        assert data["world"] is None or data["world"]["id"]
+
+        # 下线（D36：位置是可选组件）→ not_in_world，不是 404
+        await engine.clear_position(avatar.id)
+        data = (await client.get("/where", headers=h)).json()
+        assert data["reason"] == "not_in_world" and data["map"] is None
+
+    _run(_scenario(tmp_path, fn, world="test"))

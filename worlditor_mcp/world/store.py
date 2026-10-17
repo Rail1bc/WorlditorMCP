@@ -45,8 +45,16 @@ from .model import (
 # v10 = entities 去掉 map_id / row / col 三列（D36 §12.4：位置进 core:position，可为缺失）
 # v11 = entities 去掉 kind / tags_json 两列（D41：能力 = 组件的存在，表 4 列）
 # v12 = maps 去掉 spawn_row / spawn_col 两列（D45：内核不存在"出生点"概念）
-SCHEMA_VERSION = "12"
+# v13 = worlds.play_ids_json 支持 JSON null（D55：null = 全部启用，[] = 一个都不启用）。
+#       ⚠ 这次是**存的数据**变义而非表结构变义——旧库的 '[]' 原本表示"全部"，
+#       新语义下表示"一个都不启用"。按 D13 无迁移：拒绝启动、指名删库重建，
+#       绝不静默重解释（否则那个世界的玩家会突然什么都看不见，且没人知道为什么）。
+SCHEMA_VERSION = "13"
 DEFAULT_MAP_ID = "default"
+
+_UNSET = object()
+"""``update_*`` 的"这次不改"标记（不能用 ``None``——它已经是一个有意义的值了，
+例如 :class:`World` 的 ``play_ids = None`` 表示"全部启用"，见 D55）。"""
 
 # 后加列清单——**不是用来补的，是用来检查的**（`_check_schema`）。
 # 这是原 `_ensure_columns`（缺列就 ALTER 补上）的替代物：补列会把旧数据静默改成
@@ -199,7 +207,7 @@ CREATE TABLE IF NOT EXISTS worlds (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     desc TEXT NOT NULL DEFAULT '',
-    play_ids_json TEXT NOT NULL DEFAULT '[]'
+    play_ids_json TEXT NOT NULL DEFAULT 'null'
 );
 CREATE TABLE IF NOT EXISTS world_folders (
     id TEXT PRIMARY KEY,
@@ -412,7 +420,7 @@ class WorldStore:
         if (await cur.fetchone())["n"] == 0:
             await self._conn.execute(
                 "INSERT INTO worlds(id, name, desc, play_ids_json) VALUES(?, ?, ?, ?)",
-                (DEFAULT_WORLD_ID, "默认世界", "", "[]"),
+                (DEFAULT_WORLD_ID, "默认世界", "", "null"),
             )
         await self._conn.execute(
             "INSERT OR REPLACE INTO world_meta(key, value) VALUES('schema_version', ?)",
@@ -576,14 +584,20 @@ class WorldStore:
         for row in await cur.fetchall():
             where = f"worlds.id={row['id']!r}"
             try:
-                play_ids = json.loads(row["play_ids_json"] or "[]")
+                # v13 / D55：JSON null = 全部启用；数组 = 只启用这些（[] = 一个都不启用）
+                play_ids = json.loads(row["play_ids_json"] or "null")
             except (ValueError, TypeError) as e:
                 raise self._incompatible_error(where, "play_ids_json", e) from e
-            if not isinstance(play_ids, list) or not all(
-                isinstance(play_id, str) and play_id for play_id in play_ids
+            if play_ids is not None and (
+                not isinstance(play_ids, list)
+                or not all(
+                    isinstance(play_id, str) and play_id for play_id in play_ids
+                )
             ):
                 raise self._incompatible_error(
-                    where, "play_ids_json", ValueError("必须是非空字符串数组")
+                    where,
+                    "play_ids_json",
+                    ValueError("必须是非空字符串数组，或 JSON null（null = 全部启用）"),
                 )
             self.worlds[row["id"]] = World(
                 id=row["id"],
@@ -1264,7 +1278,12 @@ class WorldStore:
         assert self._conn is not None
         if world_id in self.worlds:
             raise ValueError(f"世界已存在：{world_id}")
-        world = World(id=world_id, name=name, desc=desc, play_ids=list(play_ids or []))
+        world = World(
+            id=world_id,
+            name=name,
+            desc=desc,
+            play_ids=None if play_ids is None else list(play_ids),
+        )
         await self._conn.execute(
             "INSERT INTO worlds(id, name, desc, play_ids_json) VALUES(?, ?, ?, ?)",
             (world.id, world.name, world.desc, json.dumps(world.play_ids)),
@@ -1279,9 +1298,14 @@ class WorldStore:
         *,
         name: str | None = None,
         desc: str | None = None,
-        play_ids: list[str] | None = None,
+        play_ids: object = _UNSET,
     ) -> World:
-        """更新世界（名称/描述/激活玩法包集合；None = 不变）。"""
+        """更新世界（名称/描述/激活玩法包集合）。
+
+        ``play_ids`` 的三种说法都要能传（v0.9 / D55）：**不传** = 不变；
+        ``None`` = 改成"全部启用"；``[]`` = 改成"一个都不启用"；列表 = 只启用这些。
+        所以这里不能用 ``None`` 当"不传"——那正是被这次改动修掉的歧义。
+        """
         assert self._conn is not None
         world = self.worlds.get(world_id)
         if world is None:
@@ -1290,8 +1314,8 @@ class WorldStore:
             world.name = name
         if desc is not None:
             world.desc = desc
-        if play_ids is not None:
-            world.play_ids = list(play_ids)
+        if play_ids is not _UNSET:
+            world.play_ids = None if play_ids is None else list(play_ids)
         await self._conn.execute(
             "UPDATE worlds SET name = ?, desc = ?, play_ids_json = ? WHERE id = ?",
             (world.name, world.desc, json.dumps(world.play_ids), world.id),

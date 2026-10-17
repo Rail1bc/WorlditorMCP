@@ -164,15 +164,16 @@ def test_username_password_validation(tmp_path):
     _run_scenario(tmp_path, fn)
 
 
-def test_read_token_open_only(tmp_path):
-    """read 档围观凭据：开放模式可取；invite/closed 拒绝。"""
+def test_read_tier_is_gone():
+    """v0.9：read（围观）档**整体删除**——签发方法不复存在（端点见 test_world_service）。
 
-    async def fn(identity: IdentityService):
-        info = await identity.create_read_token()
-        assert info.tier == "read" and info.kind == "readonly"
-        assert info.entity_id == ""
+    围观档是一个"只能看、不能做"的只读身份，实际上没有任何场景需要它：
+    未登录时 `/meta`、`/views` 本来就免认证；要读世界内容就得先有身份。
+    """
 
-    _run_scenario(tmp_path, fn)
+    from worlditor_mcp.world.identity import IdentityService
+
+    assert not hasattr(IdentityService, "create_read_token")
 
 
 # ---------- 邀请码模式 ----------
@@ -217,8 +218,6 @@ def test_closed_mode(tmp_path):
             await identity.register_human("小明", "pass123")
         with pytest.raises(IdentityError, match="封闭模式"):
             await identity.register_agent("bot")
-        with pytest.raises(IdentityError, match="当前模式"):
-            await identity.create_read_token()
 
     _run_scenario(tmp_path, fn, auth_mode="closed")
 

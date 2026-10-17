@@ -5,7 +5,8 @@ WebUI 与远程 MCP 客户端的**单一连接源**：
 - ``/world/mcp``：MCP streamable HTTP（唯一动作通道，B10）
 - ``/state`` / ``/scene``（含实体可用动作）：只读快照
 - ``/events``：SSE 事件流（事件总线序列化出口，B11）
-- ``/auth/*``：身份注册 / 登录 / agent 注册 / read-token / 注销 / 改密（B13）
+- ``/views`` / ``/chrome``：视图清单（免认证）与**壳层挂载点**（要认证，K-1）
+- ``/auth/*``：身份注册 / 登录 / agent 注册 / 注销 / 改密（B13；v0.9 删掉 read 围观档）
 - ``/plays/<id>/web/*``：玩法包 web 静态资源（B9）
 
 鉴权：AuthMiddleware 校验 ``Authorization: Bearer <token>`` 或 ``?token=``，
@@ -68,7 +69,6 @@ PUBLIC_PATHS = (
     "/auth/register",
     "/auth/login",
     "/auth/agent-register",
-    "/auth/read-token",
     "/meta",
     "/views",
 )
@@ -276,7 +276,7 @@ def _require_tier(info: TokenInfo | None, tiers: tuple[str, ...]) -> None:
 
 
 async def _state(request: Request) -> Response:
-    _require_tier(_identity_of(request.scope), ("read", "play", "admin"))
+    _require_tier(_identity_of(request.scope), ("play", "admin"))
     engine = request.app.state.world_engine
     info = _identity_of(request.scope)
     viewer_id = info.entity_id if info else None
@@ -313,7 +313,7 @@ async def _scene(request: Request) -> Response:
     本来就没有化身，客户端要能区分"你还没角色"（去创建）与"这个实体不存在"
     （真的错了）。这两种情况下 ``scene`` 都是 null，``reason`` 给出机器可读的原因。
     """
-    _require_tier(_identity_of(request.scope), ("read", "play", "admin"))
+    _require_tier(_identity_of(request.scope), ("play", "admin"))
     engine = request.app.state.world_engine
     info = _identity_of(request.scope)
     entity_id = request.query_params.get("entity_id") or (
@@ -481,15 +481,6 @@ async def _agent_register(request: Request) -> Response:
     return JSONResponse({"ok": True, "token": info.to_dict()})
 
 
-async def _read_token(request: Request) -> Response:
-    identity: IdentityService = request.app.state.world_identity
-    try:
-        info = await identity.create_read_token()
-    except (IdentityError, WorldError) as e:
-        return _identity_error_response(e)
-    return JSONResponse({"ok": True, "token": info.to_dict()})
-
-
 async def _logout(request: Request) -> Response:
     identity: IdentityService = request.app.state.world_identity
     info = _identity_of(request.scope)
@@ -551,13 +542,41 @@ async def _views(request: Request) -> Response:
     return JSONResponse({"views": views})
 
 
+async def _chrome(request: Request) -> Response:
+    """壳层挂载点（K-1）：页眉抽屉的列表 ``{blocks: [...]}``。
+
+    **要认证**（play / admin）：这里会**执行玩法包代码**（`apply_ui_hooks` 调
+    provider），返回内容可能是有权限的——不能像 `/views` 那样免认证（那只是纯元数据）。
+
+    没有包注入时 ``blocks`` 是空数组：**抽屉照常打开**，底部「退出登录」仍在
+    （那三样是壳层写死的，不给玩法包）。
+    """
+    _require_tier(_identity_of(request.scope), ("play", "admin"))
+    engine = request.app.state.world_engine
+    info = _identity_of(request.scope)
+    block = await engine.shell_menu(entity_id=info.entity_id if info else None)
+    return JSONResponse({"blocks": [b.to_dict() for b in block.blocks]})
+
+
+async def _where(request: Request) -> Response:
+    """页眉基础信息（K-3）：**我在哪个世界的哪张地图**。
+
+    壳层的常驻信息不该靠 `/state`——那是全量快照，为一个页眉把整个世界拉下来不划算。
+    "没有化身"与"不在世界上"都是**合法状态**（D45 / D36），用 `reason` 明说，不是错误。
+    """
+    _require_tier(_identity_of(request.scope), ("play", "admin"))
+    engine = request.app.state.world_engine
+    info = _identity_of(request.scope)
+    return JSONResponse(engine.where(info.entity_id if info else None))
+
+
 async def _meta(request: Request) -> Response:
     """前端模式识别 + **连接身份状态**（玩家端 = play；见 ``meta_payload``）。"""
     return JSONResponse(meta_payload("play", _identity_of(request.scope)))
 
 
 async def _play_web(request: Request) -> Response:
-    _require_tier(_identity_of(request.scope), ("read", "play", "admin"))
+    _require_tier(_identity_of(request.scope), ("play", "admin"))
     loader = request.app.state.world_loader
     play_id = request.path_params.get("play_id", "")
     subpath = request.path_params.get("path", "")
@@ -604,10 +623,11 @@ def build_http_app(
         Route("/scene", _scene),
         Route("/events", _events),
         Route("/views", _views),
+        Route("/chrome", _chrome),
+        Route("/where", _where),
         Route("/auth/register", _register, methods=["POST"]),
         Route("/auth/login", _login, methods=["POST"]),
         Route("/auth/agent-register", _agent_register, methods=["POST"]),
-        Route("/auth/read-token", _read_token, methods=["GET"]),
         Route("/auth/logout", _logout, methods=["POST"]),
         Route("/auth/change-password", _change_password, methods=["POST"]),
         Route("/auth/delete-account", _delete_account, methods=["POST"]),

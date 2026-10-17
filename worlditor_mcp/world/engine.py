@@ -53,6 +53,7 @@ from .model import (
     CORE_INFO,
     CORE_PERCEPTION,
     CORE_POSITION,
+    CORE_SHELL_MENU,
     DEFAULT_EVENT_PHASE,
     DIRECTIONS,
     EVENT_PHASES,
@@ -219,6 +220,7 @@ class _ViewBinding:
     title: str
     icon: str = ""
     provider: dict = field(default_factory=dict)
+    layout: str = "default"  # K-6：default / fullscreen（见 VIEW_LAYOUTS）
 
 
 @dataclass
@@ -320,6 +322,23 @@ _FIELD_TYPES = ("str", "int", "float", "bool", "json")
 
 # 感知字段白名单（``set_perception`` 的受控入口；见该方法的说明）
 _PERCEPTION_KEYS = (ATTR_INVISIBLE, ATTR_SEE_INVISIBLE)
+
+# 界面钩子展开的**深度熔断**（K-2）。
+# 历史：注入的块原先直接拼接、不再展开，这顺带当过一道意外的循环护栏
+# （A 注入 kind=A 不会无限递归）。让注入块也展开之后，护栏必须**显式存在**——
+# 否则一个写错的玩法包能把服务器递归到栈溢出。取 32：界面块树的实际深度远小于它。
+_UI_HOOK_MAX_DEPTH = 32
+
+VIEW_LAYOUTS = ("default", "fullscreen")
+"""视图布局（K-6）：``default`` = 壳层页眉照常；``fullscreen`` = 视图占满整屏。
+
+``fullscreen`` 的语义是**壳层不画页眉**（顶栏 tab 条与右侧抽屉按钮都不出现），
+所以这类视图**不进顶栏 tab 条**——入口由玩法包自己提供（例如抽屉里的一条）。
+出口（返回按钮）由视图自己负责，壳层不做兜底 UI。
+
+⚠ 只在**玩家端**生效（`webui/src/App.vue`）；管理端预览（`PlayPageHost.vue`）
+忽略它，那里是 PC 全宽布局。
+"""
 
 
 def _check_primitive_name(name: object) -> str:
@@ -1373,14 +1392,23 @@ class WorldEngine:
         title: str,
         icon: str = "",
         provider: dict | None = None,
+        layout: str = "default",
         play_id: str = "",
     ) -> None:
         """注册 WebUI 视图（G3：provider = {type, url} 组件入口；WebUI 动态加载）。
 
         视图 key 冲突报错（同 D2 风格）。
+
+        ``layout``（K-6）：``default`` / ``fullscreen``。``fullscreen`` 表示这个
+        视图**自带整个屏幕**——壳层不画页眉（顶栏与抽屉按钮都不出现），它也不进
+        顶栏 tab 条；入口与出口都由视图自己负责。见 ``VIEW_LAYOUTS``。
         """
         key = _clean_required(key, "视图 key")
         title = _clean_required(title, "视图标题")
+        if layout not in VIEW_LAYOUTS:
+            raise WorldError(
+                f"视图 layout 仅支持 {'/'.join(VIEW_LAYOUTS)}（收到 {layout!r}）"
+            )
         if key in self._views:
             prev = self._views[key]
             raise WorldError(f"视图 key 冲突：{key}（已由 {prev.play_id} 注册）")
@@ -1399,6 +1427,7 @@ class WorldEngine:
             title=title,
             icon=str(icon or ""),
             provider={"type": "component", "url": url},
+            layout=layout,
         )
 
     def list_views(self) -> list[dict]:
@@ -1408,6 +1437,7 @@ class WorldEngine:
                 "key": key,
                 "title": v.title,
                 "icon": v.icon,
+                "layout": v.layout,
                 "play_id": v.play_id,
                 "provider": dict(v.provider),
             }
@@ -1916,6 +1946,10 @@ class WorldEngine:
         首个子块）。provider 异常被隔离（记日志跳过），不破坏渲染。
         锁内执行（可重入；provider 为玩法包回调，统一「锁内」不变量）。
 
+        **注入的块也会继续展开**（v0.9 / K-2）——所以跨包嵌套可以有任意层：
+        装备包注入的装备栏，还能被饰品包 hook。循环由 ``_UI_HOOK_MAX_DEPTH``
+        熔断兜住。
+
         Args:
             block: UiBlock 或 None。
             entity_id: 查看者实体（D15：注入方在该实体所在世界未启用 → 不注入；
@@ -1925,27 +1959,89 @@ class WorldEngine:
             展开后的 UiBlock；``block`` 为 None 时返回 None。
         """
         async with self._lock:
-            return await self._apply_ui_hooks_locked(block, entity_id)
+            # P5：查看者的生效包集合**只解析一次**，逐层传下去——原先每个块的
+            # 每个钩子都要走一遍 实体→地图→世界（N×M 次）。
+            return await self._apply_ui_hooks_locked(
+                block, entity_id, self._active_play_set(entity_id)
+            )
+
+    async def shell_menu(self, *, entity_id: str | None = None) -> Any:
+        """**壳层挂载点**：页眉抽屉的块（K-1）。
+
+        返回 ``UiBlock(kind=CORE_SHELL_MENU)``，其 ``blocks`` 是玩法包注入的条目
+        （世界过滤 / provider 异常隔离 / 随包卸载回收——全部沿用 `apply_ui_hooks`）。
+
+        **没有包注入时 ``blocks`` 为空**：壳层照常打开抽屉、照常有「退出登录」。
+        内核因此不需要知道"玩家包"存在——挂载点由内核提供，玩家包只是第一个
+        往里面放东西的人。
+        """
+        from .model import UiBlock
+
+        return await self.apply_ui_hooks(
+            UiBlock(kind=CORE_SHELL_MENU), entity_id=entity_id
+        )
+
+    def _active_play_set(self, entity_id: str | None) -> frozenset[str] | None:
+        """查看者所在世界的**生效包集合**；``None`` = 不设限。
+
+        与 ``play_active_for_entity`` 的宽松默认逐条对齐（世界未知 / 世界不存在 /
+        ``play_ids is None`` → 不设限），**不是新的语义**，只是把它算一次。
+        """
+        world_id = self._world_for_activation(self.entity_world(entity_id or ""))
+        if world_id is None:
+            return None
+        world = self.store.worlds.get(world_id)
+        if world is None or world.play_ids is None:
+            return None
+        return frozenset(world.play_ids)
 
     async def _apply_ui_hooks_locked(
-        self, block: Any | None, entity_id: str | None = None
+        self,
+        block: Any | None,
+        entity_id: str | None = None,
+        active: frozenset[str] | None = None,
+        depth: int = 0,
+        spent: frozenset[tuple[str, str, str]] = frozenset(),
     ) -> Any | None:
-        """钩子展开主体（调用方持锁；见 apply_ui_hooks）。"""
+        """钩子展开主体（调用方持锁；见 apply_ui_hooks）。
+
+        ``spent`` = 这条**展开路径**上已经应用过的钩子
+        ``(block_kind, position, play_id)``。注入的块会继承它，于是自引用钩子
+        （A 往 kind=A 注入 kind=A）**只应用一次就停**，不会指数膨胀；而原树里的
+        同 kind 嵌套不受影响（它们与父块共享同一份 ``spent``，没有新增条目）。
+
+        ``depth`` 是第二道熔断，兜住"很多个不同的钩子互相注入"这种环。
+        """
         from .model import UiBlock
 
         if block is None:
             return None
         if not isinstance(block, UiBlock):
             return block
-        # 1. 先递归展开子块
-        block.blocks = await self._expand_children(block.blocks, entity_id)
+        if depth >= _UI_HOOK_MAX_DEPTH:
+            # 熔断：停止展开，保留当前块（渲染仍然可用）。诊断用 warning 而非
+            # exception——界面不该因为一个写错的包整屏失败。
+            logger.warning(
+                "[worlditor] ui_hook 展开深度超过 %d，停止展开（kind=%s）",
+                _UI_HOOK_MAX_DEPTH,
+                block.kind,
+            )
+            return block
+        # 1. 先递归展开子块（原树：spent 不带新增）
+        block.blocks = await self._expand_children(
+            block.blocks, entity_id, active, depth, spent
+        )
         # 2. 本块钩子
         before: list[UiBlock] = []
         after: list[UiBlock] = []
         replaced: UiBlock | None = None
+        fired: set[tuple[str, str, str]] = set()
         for position in ("before", "after", "replace"):
             for binding in self._ui_hooks.get((block.kind, position), []):
-                if not self.play_active_for_entity(entity_id, binding.play_id):
+                hook_key = (block.kind, position, binding.play_id)
+                if hook_key in spent:
+                    continue  # 这条路径上已应用过 → 防自引用循环
+                if active is not None and binding.play_id not in active:
                     continue  # 注入方不在查看者所在世界 → 不注入（D15）
                 api = self._play_apis.get(binding.play_id)
                 try:
@@ -1962,29 +2058,51 @@ class WorldEngine:
                     continue
                 if not isinstance(injected, list):
                     continue
+                fired.add(hook_key)
                 if position == "replace" and injected:
                     replaced = injected[0]
                 elif position == "before":
                     before.extend(injected)
                 elif position == "after":
                     after.extend(injected)
+        downstream = spent | fired
         if replaced is not None:
             # replace：整体替换；新块的子块递归展开（自身 replace 钩子不再
             # 应用，防 A 的 replace 又返回 A 的循环）
-            replaced.blocks = await self._expand_children(replaced.blocks, entity_id)
+            replaced.blocks = await self._expand_children(
+                replaced.blocks, entity_id, active, depth, downstream
+            )
             return replaced
-        block.blocks = before + block.blocks + after
+        # K-2：注入的块**也展开**。原先这里是 ``before + block.blocks + after``，
+        # 注入进去的块从此是叶子——装备包注入的装备栏无法再被饰品包扩展。
+        block.blocks = (
+            await self._expand_children(
+                before, entity_id, active, depth, downstream
+            )
+            + block.blocks
+            + await self._expand_children(
+                after, entity_id, active, depth, downstream
+            )
+        )
         return block
 
     async def _expand_children(
-        self, blocks: list, entity_id: str | None = None
+        self,
+        blocks: list,
+        entity_id: str | None = None,
+        active: frozenset[str] | None = None,
+        depth: int = 0,
+        spent: frozenset[tuple[str, str, str]] = frozenset(),
     ) -> list:
         """递归展开一组子块（None 剔除）。"""
         from .model import UiBlock
 
         expanded: list[UiBlock] = []
         for child in blocks:
-            child = await self.apply_ui_hooks(child, entity_id=entity_id)
+            # 调用方一律在锁内（两个调用点都在 _apply_ui_hooks_locked）。
+            child = await self._apply_ui_hooks_locked(
+                child, entity_id, active, depth + 1, spent
+            )
             if child is not None:
                 expanded.append(child)
         return expanded
@@ -2079,16 +2197,17 @@ class WorldEngine:
         return self._world_play_active(world_id, play_id)
 
     def _world_play_active(self, world_id: str | None, play_id: str) -> bool:
-        """世界激活集合判断：世界不存在或 play_ids 为空 = 全部激活（D15）。
+        """世界激活集合判断（D15 / D55）。
 
-        未归属世界的地图按**默认世界**算（`_world_for_activation`）——世界是
-        数据边界，"没有归属"不等于"没有规则"。
+        ``play_ids is None`` = **全部启用**（新世界的默认）；``[]`` = **一个都不启用**；
+        非空列表 = 只启用这些。未归属世界的地图按**默认世界**算
+        （`_world_for_activation`）——世界是数据边界，"没有归属"不等于"没有规则"。
         """
         world_id = self._world_for_activation(world_id)
         if world_id is None:
             return True
         world = self.store.worlds.get(world_id)
-        if world is None or not world.play_ids:
+        if world is None or world.play_ids is None:
             return True
         return play_id in world.play_ids
 
@@ -2565,6 +2684,36 @@ class WorldEngine:
             return None
         return self.store.map_world.get(entity.map_id)
 
+    def where(self, entity_id: str | None) -> dict:
+        """**看我在哪**：当前世界 + 当前地图（K-3，壳层页眉的常驻信息）。
+
+        为什么单开一条：页眉只要"世界名 + 地图名"两个字符串，而唯一现成的来源是
+        ``/state``——那是**全量快照**（所有地图、地块、实体），为一个页眉把整个世界
+        拉下来不划算。
+
+        **没有化身**与**不在世界上**都是合法状态（D45 / D36），用 ``reason`` 明说，
+        不是错误：``no_avatar`` / ``not_in_world`` / ``""``（正常）。
+        """
+        entity = self.store.entities.get(entity_id or "")
+        if entity is None:
+            return {"entity_id": "", "world": None, "map": None, "reason": "no_avatar"}
+        map_id = entity.map_id
+        if map_id is None:
+            return {
+                "entity_id": entity.id,
+                "world": None,
+                "map": None,
+                "reason": "not_in_world",
+            }
+        world = self.store.worlds.get(self.store.map_world.get(map_id) or "")
+        m = self.store.maps.get(map_id)
+        return {
+            "entity_id": entity.id,
+            "world": {"id": world.id, "name": world.name} if world else None,
+            "map": {"id": map_id, "name": m.name if m else ""},
+            "reason": "",
+        }
+
     def list_folders(self, world_id: str) -> list[WorldFolder]:
         return self.store.list_folders(world_id)
 
@@ -2590,7 +2739,11 @@ class WorldEngine:
         desc: str = "",
         play_ids: list[str] | None = None,
     ) -> World:
-        """新建世界（D15：id = 玩法包激活集合配置边界）。"""
+        """新建世界（D15：id = 玩法包激活集合配置边界）。
+
+        ``play_ids``（D55）：``None``（默认）= **全部启用**；``[]`` = 一个都不启用；
+        非空列表 = 只启用这些。
+        """
         async with self._lock:
             world_id = _clean_required(world_id, "世界 id")
             name = _clean_required(name, "世界名称")
@@ -2607,28 +2760,37 @@ class WorldEngine:
         *,
         name: str | None = None,
         desc: str | None = None,
-        play_ids: list[str] | None = None,
+        play_ids: object = _UNSET,
     ) -> World:
-        """更新世界（名称/描述/激活玩法包集合；None = 不变）。"""
+        """更新世界（名称/描述/激活玩法包集合）。
+
+        ``play_ids``（D55）：**不传** = 不变；``None`` = 全部启用；``[]`` = 一个都不
+        启用；列表 = 只启用这些。这里不能用 ``None`` 当"不传"——那正是被 D55 修掉的歧义。
+        """
         async with self._lock:
             if name is not None:
                 name = _clean_required(name, "世界名称")
             try:
+                # ⚠ "不传"用本模块的 _UNSET 表达，**不转交给 store**——store 有它自己的
+                # 同名哨兵，两个对象不相等（转过去会被当成一个可迭代的 play_ids）。
+                extra = {} if play_ids is _UNSET else {"play_ids": play_ids}
                 world = await self.store.update_world(
-                    world_id, name=name, desc=desc, play_ids=play_ids
+                    world_id, name=name, desc=desc, **extra
                 )
             except KeyError as e:
                 raise WorldError(str(e)) from None
             # 激活集合变了 → 该世界里玩家能看到的视图/工具也跟着变，广播同一条信号
             # （否则站在该世界的玩家要整页刷新才知道 tab 变了；PlayLoader 那条只覆盖
             # 包的生命周期，世界级激活不在其中）
-            if play_ids is not None:
+            if play_ids is not _UNSET:
                 await self.emit(
                     "plays_changed",
                     {
                         "reason": "world_plays",
                         "world_id": world_id,
-                        "plays": list(world.play_ids),
+                        "plays": None
+                        if world.play_ids is None
+                        else list(world.play_ids),
                     },
                 )
             return world

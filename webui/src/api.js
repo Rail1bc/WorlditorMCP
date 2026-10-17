@@ -98,6 +98,13 @@ export const deleteAccount = () => apiPost("/auth/delete-account", {});
 // 视图列表（G3：玩法包 register_view；免认证公共端点，登录页也要用）
 export const listViews = () => apiGet("/views");
 
+// 壳层挂载点（K-1：页眉抽屉的列表）。**要认证**——这里会执行玩法包代码，
+// 返回内容可能是有权限的（与 /views 的纯元数据不同）
+export const getChrome = () => apiGet("/chrome");
+
+// 页眉基础信息（K-3）：当前世界 + 当前地图。比 /state 轻得多
+export const getWhere = () => apiGet("/where");
+
 // 模式识别：play（玩家端口）/ admin（管理端口）——前端界面分离的运行时依据
 export const getMeta = () => apiGet("/meta");
 

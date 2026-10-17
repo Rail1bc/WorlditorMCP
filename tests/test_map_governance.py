@@ -22,7 +22,7 @@ from world_fixtures import seed_test_world
 from worlditor_mcp.world.engine import WorldEngine, WorldError
 from worlditor_mcp.world.errors import IncompatibleDataError
 from worlditor_mcp.world.model import Entity
-from worlditor_mcp.world.store import WorldStore
+from worlditor_mcp.world.store import SCHEMA_VERSION, WorldStore
 
 
 def _run(coro):
@@ -815,8 +815,8 @@ def test_legacy_db_is_refused_on_startup(tmp_path):
         msg = str(ei.value)
         assert "world.db" in msg  # 指明该删哪个文件（而不是打一屏栈）
         assert (
-            "v7" in msg and "v12" in msg
-        )  # 说清版本落差（SCHEMA_VERSION=12，升版要跟着改）
+            "v7" in msg and f"v{SCHEMA_VERSION}" in msg
+        )  # 说清版本落差（升版要跟着改）
         assert "删除" in msg and "重新启动" in msg
         await engine.terminate()
 

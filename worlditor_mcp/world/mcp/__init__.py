@@ -146,11 +146,6 @@ def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
         api = engine._play_apis.get(binding.play_id)
         if api is None:
             return _result({"text": f"玩法包未加载：{binding.play_id}"})
-        # 档位消费（v0.2.0）：read（围观）凭据只能看，不能执行动作
-        if _tier_of(ctx) == "read":
-            return _result(
-                {"text": "围观（read）凭据不能执行动作：请用玩家身份登录后再试。"}
-            )
         entity_id = _entity_id(ctx)
         # 需要身体的工具（默认）：没有化身 → 明说"你还没有角色"，并指出出路。
         # 自举工具（requires_entity=False）跳过这道闸——否则"创建第一具化身"

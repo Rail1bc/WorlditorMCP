@@ -650,10 +650,12 @@ def test_apply_ui_hooks_positions(tmp_path):
         out = await engine.apply_ui_hooks(UiBlock(kind="text", text="正文"))
         assert out.kind == "custom"
         # 嵌套：子块先递归展开
+        # 注意用独立 kind（heading）——v0.9/K-2 之后注入的块也会被展开，
+        # 若这里还用 kind="text"，会被上面的 text/replace 钩子改掉（那是新语义，不是 bug）
         engine.register_ui_hook(
             "list",
             "before",
-            _hook_provider([UiBlock(kind="text", text="[列表头]")]),
+            _hook_provider([UiBlock(kind="heading", text="[列表头]")]),
             play_id="p1",
         )
         parent = UiBlock(kind="menu", blocks=[UiBlock(kind="list", text="条目")])
@@ -666,6 +668,74 @@ def test_apply_ui_hooks_positions(tmp_path):
         )
         out = await engine.apply_ui_hooks(UiBlock(kind="menu"))
         assert out is not None
+
+    _run(_scenario(tmp_path, fn))
+
+
+def test_ui_block_icon_round_trips():
+    """K-8：``UiBlock`` 有 ``icon``——抽屉条目 / 底栏 tab 需要"标题 + 图标"。
+
+    视图登记早有 ``icon``，块一直没有，于是包没法给自己注入的入口配图标。
+    """
+
+    from worlditor_mcp.world.model import UiBlock
+
+    assert UiBlock(kind="menu", title="我", icon="🙋").to_dict()["icon"] == "🙋"
+    assert UiBlock(kind="text").to_dict()["icon"] == ""
+
+
+def test_ui_hooks_expand_injected_blocks(tmp_path):
+    """K-2：注入进去的块**也会被别的包的钩子扩展**——跨包嵌套不止一层。
+
+    这正是「装备包注入装备栏、饰品包再往装备栏里放饰品栏」的形状。改动前
+    注入的块是叶子（`before + block.blocks + after` 直接拼接），第二层永远挂不上。
+    """
+
+    from worlditor_mcp.world.model import UiBlock
+
+    async def fn(engine: WorldEngine, clock=None):
+        # 装备包：往 page 里注入一个 equipment 块
+        engine.register_ui_hook(
+            "page",
+            "after",
+            _hook_provider([UiBlock(kind="equipment", title="装备")]),
+            play_id="p_equip",
+        )
+        # 饰品包：往 equipment 里注入一个 accessory 块
+        engine.register_ui_hook(
+            "equipment",
+            "after",
+            _hook_provider([UiBlock(kind="accessory", title="饰品")]),
+            play_id="p_acc",
+        )
+        out = await engine.apply_ui_hooks(UiBlock(kind="page"))
+        assert [b.kind for b in out.blocks] == ["equipment"]
+        # 注入的 equipment 被展开过 → 饰品挂进去了
+        assert [b.kind for b in out.blocks[0].blocks] == ["accessory"]
+
+    _run(_scenario(tmp_path, fn))
+
+
+def test_ui_hooks_self_reference_terminates(tmp_path):
+    """自引用钩子（A 往 kind=loop 注入 kind=loop）只应用一次，不指数膨胀。
+
+    改动前"注入块不再展开"顺带当过循环护栏；K-2 之后必须显式兜住——
+    只靠深度熔断不够（2^32 个块会和死循环没区别）。
+    """
+
+    from worlditor_mcp.world.model import UiBlock
+
+    async def fn(engine: WorldEngine, clock=None):
+        engine.register_ui_hook(
+            "loop",
+            "after",
+            _hook_provider([UiBlock(kind="loop", title="再一层")]),
+            play_id="p1",
+        )
+        out = await engine.apply_ui_hooks(UiBlock(kind="loop"))
+        assert len(out.blocks) == 1
+        assert out.blocks[0].kind == "loop"
+        assert out.blocks[0].blocks == []  # 注入层不再被同一个钩子展开
 
     _run(_scenario(tmp_path, fn))
 

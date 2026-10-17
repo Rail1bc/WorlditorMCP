@@ -146,8 +146,8 @@ def test_tools_and_views_follow_world_activation(tmp_path):
                 views = (await client.get("/views", headers=h)).json()["views"]
                 assert {v["key"] for v in views} == {"demo"}, views
 
-                # 放开 → 恢复
-                await engine.update_world("default", play_ids=[])
+                # 放开 → 恢复（D55：`None` = 全部启用；`[]` 现在表示"一个都不启用"）
+                await engine.update_world("default", play_ids=None)
                 restored = await _call_tool(client, player.token, "world_ping", {})
                 assert "pong" in restored.get("text", ""), restored
         finally:
@@ -204,8 +204,8 @@ def test_views_filter_uses_caller_world_not_default(tmp_path):
                 anon = (await client.get("/views")).json()["views"]
                 assert {v["key"] for v in anon} >= {"demo", "ping"}
 
-                # 放开乙世界 → 恢复
-                await engine.update_world("world_b", play_ids=[])
+                # 放开乙世界 → 恢复（D55：`None` = 全部启用）
+                await engine.update_world("world_b", play_ids=None)
                 views = (await client.get("/views", headers=h)).json()["views"]
                 assert {v["key"] for v in views} >= {"demo", "ping"}
         finally:

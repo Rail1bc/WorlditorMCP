@@ -67,7 +67,7 @@ class TokenInfo:
     token: str
     entity_id: str
     tier: str
-    kind: str  # "player" | "readonly"（v0.2.0 起不再有 agent 类型）
+    kind: str  # "player"（v0.2.0 起不再有 agent 类型；v0.9 删掉 readonly 围观档）
     account_id: str | None = None
     username: str | None = None
 
@@ -246,12 +246,6 @@ class IdentityService:
                 username=account.username,
             )
             return token
-
-    async def create_read_token(self) -> TokenInfo:
-        """read 档围观凭据（开放模式可公开获取，免注册；B13）。"""
-        if self.auth_mode != "open":
-            raise IdentityError("当前模式不提供公开围观凭据")
-        return await self._issue_token(entity_id="", tier="read", kind="readonly")
 
     # ---------- 凭据管理 ----------
 

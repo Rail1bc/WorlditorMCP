@@ -84,13 +84,12 @@ def test_delete_own_account(tmp_path):
     _run(_scenario(tmp_path / "world.db", fn))
 
 
-def test_delete_own_account_read_tier_rejected(tmp_path):
-    """read 档（围观者）不能注销（无账户绑定）。"""
+def test_delete_own_account_rejects_unknown_token(tmp_path):
+    """注销要认得出人：解析不出账户绑定的凭据一律拒绝（read 围观档已随 v0.9 删除）。"""
 
     async def fn(engine, identity):
-        info = await identity.create_read_token()
         with pytest.raises(IdentityError, match="无效的凭据"):
-            await identity.delete_own_account(info.token)
+            await identity.delete_own_account("not-a-token")
 
     _run(_scenario(tmp_path / "world.db", fn))
 

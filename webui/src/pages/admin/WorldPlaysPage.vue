@@ -22,10 +22,11 @@
     <p v-if="note" class="dim">{{ note }}</p>
     <p v-if="error" class="error-text">{{ error }}</p>
 
-    <!-- 激活模式：全部启用（play_ids 空）/ 自定义（显式名单） -->
+    <!-- 激活模式（D55 三态）：全部启用（play_ids = null）/ 一个都不启用（[]）/ 自定义（名单） -->
     <div class="mode-row">
       <div class="seg">
         <button :class="{ on: mode === 'all' }" @click="useAll">全部启用</button>
+        <button :class="{ on: mode === 'none' }" @click="useNone">全关</button>
         <button :class="{ on: mode === 'custom' }" @click="useCustom">
           自定义
         </button>
@@ -295,10 +296,16 @@ const loadedPlays = computed(() =>
   plays.value.filter((p) => p.status === "loaded")
 );
 const playIds = computed(() => (world.value?.play_ids || []).slice());
-const mode = computed(() => (playIds.value.length ? "custom" : "all"));
+// D55 三态：null = 全部启用；[] = 一个都不启用；数组 = 自定义
+const mode = computed(() => {
+  const raw = world.value ? world.value.play_ids : null;
+  if (raw === null || raw === undefined) return "all";
+  return raw.length ? "custom" : "none";
+});
 const summary = computed(() => {
   const total = loadedPlays.value.length;
   if (mode.value === "all") return `本世界：全部启用（共 ${total} 个已加载包）`;
+  if (mode.value === "none") return "本世界：一个都不启用（面板为空）";
   const live = playIds.value.filter((id) =>
     plays.value.some((p) => p.play_id === id && p.status === "loaded")
   );
@@ -467,7 +474,21 @@ async function useAll() {
     confirmText: "全部启用",
   });
   if (!ok) return;
-  await savePlayIds([], "已切换为「全部启用」");
+  // D55：null = 全部启用（[] 现在表示"一个都不启用"）
+  await savePlayIds(null, "已切换为「全部启用」");
+}
+
+async function useNone() {
+  if (mode.value === "none" || !world.value) return;
+  const ok = await askConfirm({
+    title: "全部停用",
+    text: `让「${world.value.name}」不启用任何玩法包？`,
+    detail: "该世界的玩家会看到一个空面板（没有视图、没有工具）。",
+    confirmText: "全部停用",
+    danger: true,
+  });
+  if (!ok) return;
+  await savePlayIds([], "已切换为「一个都不启用」");
 }
 
 async function useCustom() {

@@ -11,13 +11,15 @@
 | 玩家端口 | `6288`（`0.0.0.0`） | MCP + 游玩 WebUI + 快照/SSE + 注册登录 |
 | 管理端口 | `6289`（`127.0.0.1`） | 管理 REST + 管理 WebUI（`--admin-port 0` 可关闭） |
 
-- **档位（tier）**：`read`（围观，只读快照/scene）/ `play`（玩家）/ `admin`（拥有者）。
+- **档位（tier）**：`play`（玩家）/ `admin`（拥有者）。（v0.9 删除了 `read` 围观档：
+  一个"只能看、不能做"的身份没有真实场景——未登录时 `/meta`、`/views` 本来就免认证，
+  要看世界内容就得先有身份。）
 - **认证**：`Authorization: Bearer <token>`；SSE 因浏览器 `EventSource` 不能带
   请求头，额外支持 `?token=<token>`——**该 query 会进服务器/反代访问日志**，
   别把它贴到公网日志里。
 - **管理端口不信任端口隔离**：所有 `/admin/*` 一律要求 `tier=admin`（双保险，D16）。
 - **公共路径（免认证）**：玩家端口 `/auth/register`、`/auth/login`、
-  `/auth/agent-register`、`/auth/read-token`、`/meta`、`/views`，以及内置 WebUI
+  `/auth/agent-register`、`/meta`、`/views`，以及内置 WebUI
   静态资源 `/`、`/assets/*`、`/favicon.ico`。
   （免认证 = 不要求凭据；带凭据时仍会解析身份，`/views` 就依赖这一点按世界过滤。）
 - **响应约定**：管理端写端点成功 `{"ok": true, "data": …}`，失败 `400
@@ -27,16 +29,17 @@
 
 | 方法 | 路径 | 档位 | 说明 |
 |---|---|---|---|
-| POST/GET/DELETE | `/world/mcp` | play / admin | MCP streamable HTTP（工具调用入口；`read` 档在工具入口被拒） |
-| GET | `/state` | read / play / admin | 全量快照：`{revision, tick, maps, locations, entities}`，按 G1 可见性过滤 private 地图；`revision`/`tick` = 变更游标（D28，实体各自也带）。**`entities[]` = 组件形态**（表结构 v12）：`{id, components, last_active_ts, revision, changed_tick}`——**没有顶层 `name` / `desc` / `user_id`，也没有 `kind` / `tags` / `map_id` / `row` / `col`**（能力 = 带没带那个组件，D41；位置在 `core:position` 里，D36，**不在投影里**）。名字/描述在 `components["core:info"]`、账户绑定在 `components["core:account"]`；读名字用 `components["core:info"]["name"]`，**缺失兜底 `id` 前 8 位**（DESIGN §12.4）。⚠ `/state` **不做隐身过滤**（G12 尾巴：只挡私有地图，不挡 `invisible` 实体），也**不过滤 `core:account`**（能读到别人的账户 id，见 GAPS G63）。地图对象**没有** `spawn_row` / `spawn_col`（D45） |
-| GET | `/scene?entity_id=` | read / play / admin | 单实体场景 `{entity, scene, peers}`（含动作菜单；`entity_id` 缺省 = 调用者自己）。`entity` / `peers` 的实体形态同 `/state`（组件里放名字，无顶层 `name` / `desc` / `user_id`）。**D45/D46：没有化身是 200 空态**——`{entity: null, scene: null, peers: [], reason: "no_avatar", text: "你还没有角色…"}`；实体不在世界上（下线 / 收在容器里）同样是 200，`reason: "not_in_world"` 而 `entity` 照常返回 |
+| POST/GET/DELETE | `/world/mcp` | play / admin | MCP streamable HTTP（工具调用入口） |
+| GET | `/state` | play / admin | 全量快照：`{revision, tick, maps, locations, entities}`，按 G1 可见性过滤 private 地图；`revision`/`tick` = 变更游标（D28，实体各自也带）。**`entities[]` = 组件形态**（表结构 v13）：`{id, components, last_active_ts, revision, changed_tick}`——**没有顶层 `name` / `desc` / `user_id`，也没有 `kind` / `tags` / `map_id` / `row` / `col`**（能力 = 带没带那个组件，D41；位置在 `core:position` 里，D36，**不在投影里**）。名字/描述在 `components["core:info"]`、账户绑定在 `components["core:account"]`；读名字用 `components["core:info"]["name"]`，**缺失兜底 `id` 前 8 位**（DESIGN §12.4）。⚠ `/state` **不做隐身过滤**（G12 尾巴：只挡私有地图，不挡 `invisible` 实体），也**不过滤 `core:account`**（能读到别人的账户 id，见 GAPS G63）。地图对象**没有** `spawn_row` / `spawn_col`（D45） |
+| GET | `/scene?entity_id=` | play / admin | 单实体场景 `{entity, scene, peers}`（含动作菜单；`entity_id` 缺省 = 调用者自己）。`entity` / `peers` 的实体形态同 `/state`（组件里放名字，无顶层 `name` / `desc` / `user_id`）。**D45/D46：没有化身是 200 空态**——`{entity: null, scene: null, peers: [], reason: "no_avatar", text: "你还没有角色…"}`；实体不在世界上（下线 / 收在容器里）同样是 200，`reason: "not_in_world"` 而 `entity` 照常返回 |
+| GET | `/where` | play / admin | **页眉基础信息**（K-3）：`{entity_id, world: {id,name}\|null, map: {id,name}\|null, reason}`。页眉只要"世界名 + 地图名"，而唯一现成的来源 `/state` 是全量快照——为一个页眉把整个世界拉下来不划算。`reason`：`""`（正常）/ `no_avatar`（还没有化身，D45）/ `not_in_world`（下线或收在容器里，D36）——**都是合法状态，不是错误** |
 | GET | `/events` | play / admin | SSE 事件流（`?token=` 支持）。⚠ 主体生命周期事件（登录/登出/注销）**不推 SSE**（D47：那等于把主体名册发给每个订阅者） |
-| GET | `/views` | 免认证 | 视图清单 `{views: [{key,title,icon,play_id}]}`；**带凭据且有行动实体时按调用者所在世界过滤**（D15）；**没有化身时不过滤**（D46 / R9：否则"创建角色"的入口会跟着消失，人被困死在门口） |
+| GET | `/views` | 免认证 | 视图清单 `{views: [{key,title,icon,layout,play_id,provider}]}`；**带凭据且有行动实体时按调用者所在世界过滤**（D15）；**没有化身时不过滤**（D46 / R9：否则"创建角色"的入口会跟着消失，人被困死在门口）。`layout`：`default` / `fullscreen`（K-6：`fullscreen` 视图自带整屏，壳层不画页眉、不进顶栏 tab 条） |
+| GET | `/chrome` | **play / admin** | **壳层挂载点**（K-1）：玩家端页眉抽屉的列表 `{blocks: [...]}`。条目由玩法包用 `register_ui_hook("core:shell.menu", "after", provider)` 注入，**内核不放内容**——没有包时 `blocks` 是空数组，抽屉照常打开、底部「退出登录」仍在。**要认证**：它会执行玩法包代码（provider），返回内容可能是有权限的（与免认证的 `/views` 不同）。条目协议：`title` + `icon` + `data["view"]`（目标视图 key；**不是** `action`） |
 | GET | `/meta` | 免认证 | `{"mode":"play","authenticated":bool}`（前端模式识别 + **连接身份状态**）。带有效凭据时补 `tier` / `entity_id` / `username` / `principal`（`principal` = 主体账户 id，**稳定的键**；`entity_id` 可能为空 = 还没有化身，D46）；无凭据或凭据解析不出 → `authenticated:false`（仍 200，登录页要用它判断端口模式）。前端启动时若本地存有 token 而这里是 `false`，就清掉凭据回登录页——否则删库/吊销后界面停在打不开任何东西的空壳上 |
 | POST | `/auth/register` | 免认证 | 人类注册（`{username, password, invite_code?, admin_key?}`）→ 账户 + 凭据（**不建实体**，D45：返回的 `token.entity_id` 是空串，"我以哪具化身行动"由玩法包定） |
 | POST | `/auth/login` | 免认证 | 人类登录 → `{"ok":true,"token":{…}}` |
 | POST | `/auth/agent-register` | 免认证 | agent/脚本无密码自助注册（`{"name": "…"}`，按 `AUTH_MODE` / `ALLOW_AGENT_REGISTER` 判定） |
-| GET | `/auth/read-token` | 免认证 | 围观凭据（仅 `AUTH_MODE=open`） |
 | POST | `/auth/logout` | 本人凭据 | 吊销当前 token |
 | POST | `/auth/change-password` | 本人凭据 | 改密（改后旧凭据失效） |
 | POST | `/auth/delete-account` | 本人凭据 | 永久注销（级联吊销凭据 + **删除该主体的全部化身** + 发 `on_principal_deleted`，不可恢复） |
@@ -69,8 +72,8 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET / POST | `/admin/worlds` | 世界列表 / 新建（`{id, name, desc, play_ids}`） |
-| PATCH / DELETE | `/admin/worlds/{world_id}` | 改名/描述/激活集合 / 删除 |
+| GET / POST | `/admin/worlds` | 世界列表 / 新建（`{id, name, desc, play_ids}`）。`play_ids` 三态（D55）：**`null` = 全部启用（默认）**、`[]` = 一个都不启用、数组 = 只启用这些 |
+| PATCH / DELETE | `/admin/worlds/{world_id}` | 改名/描述/激活集合 / 删除。`play_ids`：**键不出现 = 不变**；`null` / `[]` / 数组分别表示"全部 / 一个都不启用 / 这些"（不能用"传 null 表示不改"——那正是 D55 修掉的歧义） |
 | POST | `/admin/worlds/{world_id}/assign-map` | 地图归属（`{map_id, folder_id?, sort?}`） |
 | POST | `/admin/worlds/{world_id}/unassign-map` | 解除归属（`{map_id}`） |
 | POST | `/admin/worlds/{world_id}/reorder` | 容器内序号绝对化（`{parent_id, items}`，拖拽落位用） |
@@ -179,7 +182,7 @@ curl -s -X POST http://127.0.0.1:6288/world/mcp \
   之后发出，**改世界激活集合**（`PATCH /admin/worlds/{id}` 带 `play_ids`）时也发
   （reason = `world_plays`）——**前端据此刷新 `/views`**，装/卸玩法包或改世界激活后
   玩家端不必整页刷新。注意：SSE 只发 `data:` 行、**没有 `id:` 行**，断线重连
-  （`retry: 3000`）无法补发丢失的事件，客户端应把 `/state` 快照当作兜底；
-  `read` 围观档不能订阅 `/events`。
+  （`retry: 3000`）无法补发丢失的事件，客户端应把 `/state` 快照当作兜底。
+  （v0.9 删除了 `read` 围观档，`/events` 现在只有 play / admin 两档。）
 - **实体查询（D26）不走 HTTP**：`query_entities` 是玩法包/内核 API（`api.query_entities`），
   面向 agent 的查询能力由玩法包自己注册 MCP 工具暴露。

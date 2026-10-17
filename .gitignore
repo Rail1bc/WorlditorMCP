@@ -28,3 +28,7 @@ node_modules/
 
 # 本地验证工具（playwright 等，不入库）
 .uitools/
+
+# IDE（各人本地视窗，不入库）
+.idea/
+.vscode/

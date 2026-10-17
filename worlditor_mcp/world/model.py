@@ -54,6 +54,52 @@ CORE_INFO = "core:info"
 CORE_ACCOUNT = "core:account"
 """内核协议组件：``{user_id}``——实体与账户的绑定（原 ``entities.user_id`` 列）。"""
 
+
+@dataclass(frozen=True)
+class CoreComponent:
+    """``core:`` 组件的写入策略（K-7：**按组件声明**，不再按命名空间一刀切）。
+
+    判据是"**写它有没有语义**"，不是"它在不在 ``core:`` 里"：
+
+    - **数据组件**（``core:info``）：写它就是改数据——和写任何玩法包组件完全一样
+      （合并 + 存储 + 发 ``on_entity_changed``），**没有任何不变量**，所以**可直写**。
+    - **协议 / 动作组件**（``core:position`` / ``core:account`` / ``core:perception``）：
+      直写会绕过语义（移动不发 ``on_entity_move``、账户绑定绕过两本账、感知绕过
+      G12），所以**只能走内核的动作入口**——``use`` 就是"该用哪个"。
+    """
+
+    writable: bool = False
+    use: str = ""
+
+
+CORE_COMPONENTS: dict[str, CoreComponent] = {
+    CORE_INFO: CoreComponent(writable=True),
+    CORE_POSITION: CoreComponent(writable=False, use="move_entity / clear_position"),
+    CORE_ACCOUNT: CoreComponent(writable=False, use="claim_avatar / release_avatar"),
+    CORE_PERCEPTION: CoreComponent(writable=False, use="set_perception"),
+}
+"""内核组件的写入策略表。**缺省拦截**（fail-closed）：未列出的 ``core:`` 组件一律
+拒绝——守卫的意义就是防"忘了声明"，而失败模式必须是"少一个能力"，
+不能是"多一个后门"。"""
+
+
+CORE_SHELL_MENU = "core:shell.menu"
+"""**壳层挂载点**：页眉抽屉的列表（K-1）。
+
+内核保留的**块 kind**（沿用 D33 的命名空间规则）。玩法包用
+``register_ui_hook(CORE_SHELL_MENU, "after", provider)`` 往里放条目——例如玩家包
+放一条「我」。**壳层自己不放内容**：
+
+- 没有包 hook → 列表为空，但抽屉本体、遮罩、底部「退出登录」**照常工作**。那三样是
+  壳层写死的、**不给玩法包**（退出登录被挪走就没有出口了）；
+- 于是内核**永远不需要知道"玩家包"存在**——否则壳层就得硬编码调用 ``player:me``
+  这个工具名，等于内核硬依赖一个玩法包（D48 想避免的事）。
+
+**条目协议**（写法约定，内核不强制）：``title`` = 列表上显示的字；``icon`` = 图标；
+``data["view"]`` = 点它跳哪个视图 key。⚠ **不是 ``action``**——``UiBlock.action``
+至今没有执行者（渲染器只 ``emit``，壳层无人消费）。
+"""
+
 ATTR_INVISIBLE = "invisible"
 """``core:perception`` 内的字段：实体对普通 viewer 隐藏（G1 可见性通道）。"""
 ATTR_SEE_INVISIBLE = "see_invisible"
@@ -593,20 +639,23 @@ class World:
         id: 世界标识（如 "default"）。
         name: 显示名。
         desc: 描述。
-        play_ids: 激活玩法包列表；空列表 = 全部激活。
+        play_ids: 激活玩法包列表——**三种状态各自可表达**（v0.9 / D55）：
+            ``None`` = **全部启用**（新世界的默认）；``[]`` = **一个都不启用**；
+            非空列表 = 只启用这些。旧版用"空列表"同时表达"还没配"和"全部"，
+            那正是 D36 反对的"把缺失当语义"。
     """
 
     id: str
     name: str
     desc: str = ""
-    play_ids: list[str] = field(default_factory=list)
+    play_ids: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "name": self.name,
             "desc": self.desc,
-            "play_ids": list(self.play_ids),
+            "play_ids": None if self.play_ids is None else list(self.play_ids),
         }
 
 
@@ -980,10 +1029,15 @@ class UiBlock:
       fallback_text，``component`` / ``props`` 无人消费。要自定义界面请用
       ``register_view``（provider 组件）；要往块里加内容用 ``register_ui_hook``。
     blocks 为子块（B9 界面钩子注入点；内核渲染时按序展开）。
+
+    ``icon``（v0.9）：**给宿主用的标签图标**（抽屉条目、底栏 tab 等）。内核不解释它；
+    留空 = 不显示。之所以放在块上而不是 ``data`` 里，是因为"块被当成一个标签条目
+    渲染"是宿主侧的通用模式（``title`` + ``icon``），不该让每个宿主各自约定。
     """
 
     kind: str
     title: str = ""
+    icon: str = ""  # 图标（emoji / 短字符）；宿主按需使用，内核不解释
     text: str = ""
     fields: list[dict] = field(default_factory=list)  # form: {name,label,type,required}
     items: list[dict] = field(default_factory=list)  # list: {label,value,action?,args?}
@@ -995,6 +1049,7 @@ class UiBlock:
         return {
             "kind": self.kind,
             "title": self.title,
+            "icon": self.icon,
             "text": self.text,
             "fields": self.fields,
             "items": self.items,

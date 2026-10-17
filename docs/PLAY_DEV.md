@@ -154,7 +154,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `register_ui_hook(block_kind, position, provider)` | UiBlock 注入（before/after/replace，可用）；自定义页面请使用 `register_view` + provider（§8）。`UiBlock(kind="custom")` 只保留 fallback 数据结构，不提供组件注册 API |
 | `apply_ui_hooks(block)` | 对一棵 UiBlock 树应用全部已注册钩子（服务端展开，锁内）；玩家壳生成角色卡后调它，部件包的面板即被追加（§11） |
 | `register_tool(name, handler, *, description="", params=None)` | MCP 工具（见 §7） |
-| `register_view(key, *, title, icon="", provider=None)` | WebUI 视图（见 §8）；`title` 必填且**只能关键字传** |
+| `register_view(key, *, title, icon="", provider=None, layout="default")` | WebUI 视图（见 §8）；`title` 必填且**只能关键字传**。`layout`：`"default"` = 壳层页眉照常；`"fullscreen"` = 这个视图**自带整个屏幕**（不画页眉、不进顶栏 tab 条，**入口与返回按钮都由包自己负责**；只在组件成功加载后才生效） |
 | `register_service(name, handler)` | 跨包服务（见 §6） |
 | `override_primitive(name, handler)` / `disable_primitive(name)` | 原语覆盖 / 禁用（见 §5） |
 | `register_primitive_filter(name, filter, *, label="")` | 原语过滤器（见 §5） |
@@ -224,7 +224,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `clear_position(entity_id)` | 让实体**离开世界**（下线 / 收进容器 / 传送中间态）——**写 `core:position` 的受控入口**（与 `set_perception` 同性质，不受分派表影响）。组件 / 标签 / 账户绑定全保留，只去掉位置；幂等。放回世界用 `move_entity`。见 §10 / D36 |
 | `interact(entity_id, target_id, action, args)` | 交互（**可被覆盖/禁用**）。**没有 `item_id` 槽位**（D37）：物品标识放 `args`，如 `args={"item": "apple"}`——内核不解释其内容 |
 | `emit(event, data, log=False)` | 自定义事件（SSE 推送；`log=True` 写 world_log） |
-| `place_entity(kind=None, map_id=None, row=None, col=None, *, name=None, desc="", components=None, tags=None)` / `remove_entity(entity_id)` | 实体生命周期（D14；**绑定了账户的实体不可 remove**，D42）。**能力 = 组件**（D41）：`kind` / `tags` 是**输入便利**（裸名解析），`place_entity("slime", ..., tags=["spawner"])` = 带上 `bestiary:slime` + `xxx:spawner` 两个组件（数据 `{}`）；两者都可省（没有能力组件的实体也合法）。**位置三参数可选（D36）**：全给 = 放进世界；**全不给 = 造一个不在世界上的实体**（物品放进容器、待投放的 NPC）；只给一部分 → 报错。不在世界上的实体**不出现在** `list_entities` / `query_entities` 的默认结果里（要它们传 `include_absent=True`，该参数 API 上**有**），移动会被拒绝。`components` = 初始组件（dict，键写全名 `source:name`，`core:` 一律拒绝）。**`name` / `desc` 是输入便利**：折进 `core:info` 组件（实体没有顶层名字字段；读回用 `entity.name` / `entity.desc`，§10） |
+| `place_entity(kind=None, map_id=None, row=None, col=None, *, name=None, desc="", components=None, tags=None)` / `remove_entity(entity_id)` | 实体生命周期（D14；**绑定了账户的实体不可 remove**，D42）。**能力 = 组件**（D41）：`kind` / `tags` 是**输入便利**（裸名解析），`place_entity("slime", ..., tags=["spawner"])` = 带上 `bestiary:slime` + `xxx:spawner` 两个组件（数据 `{}`）；两者都可省（没有能力组件的实体也合法）。**位置三参数可选（D36）**：全给 = 放进世界；**全不给 = 造一个不在世界上的实体**（物品放进容器、待投放的 NPC）；只给一部分 → 报错。不在世界上的实体**不出现在** `list_entities` / `query_entities` 的默认结果里（要它们传 `include_absent=True`，该参数 API 上**有**），移动会被拒绝。`components` = 初始组件（dict，键写全名 `source:name`；`core:` 里数据组件（`core:info`）可给，协议组件一律拒绝）。**`name` / `desc` 是输入便利**：折进 `core:info` 组件（实体没有顶层名字字段；读回用 `entity.name` / `entity.desc`，§10） |
 | `add_component(entity_id, component, data=None)` / `set_component(entity_id, component, data=None)` / `remove_component(entity_id, component)` | 加 / 换 / **摘**能力组件（D41：加能力就是加组件，摘能力要显式删——空组件是纯能力标记，不会自己消失）。`add` 对已存在的键报错；`set` 是整块替换 |
 | `call_service(play_id, name, **params)` | 跨包服务调用（§6） |
 | `call_default_primitive(name, *args, **kwargs)` | super 通道：显式调内核默认实现（覆盖者前置/后置用） |
@@ -304,7 +304,8 @@ await api.import_bundle(
 `caller()`：**当前调用者以哪具实体行动**（MCP 工具 handler / 交互 / 事件回调内有效；身份经请求 `_meta` 注入）。
 **没有化身时返回 `None`**——那是合法常态（D45/D46），不是"没认证"。
 
-`caller_principal()`：当前调用者的**主体**（账户）id；围观凭据 → `None`。这是**稳定的键**：
+`caller_principal()`：当前调用者的**主体**（账户）id；**不在请求上下文里时 `None`**（v0.9 删除了
+`read` 围观档，所以"只有围观身份"那种情况不再存在）。这是**稳定的键**：
 同一主体换化身、重登都不变，适合做 roster 的索引；`caller()` 则会跟着切换变。
 `caller_name()`：主体显示名（只用于文案）。
 
@@ -619,7 +620,9 @@ SSE 推送；`log=True` 才写 world_log（高频事件勿写，5000 条上限�
 `entity.component("组件名")`，缺失 = 空 dict；**当只读看待，别改内部引用**）。
 原来的 `attrs`（玩法数据）与 `state`（动态状态）**两个扁平容器都已删除**——
 **不再有 attrs / state 之分**，只有组件；实体可以带**任意**组件（沿用原 D9
-"可写任意未声明字段"的开放模型）——**`core:` 除外**（内核保留，写不进）。
+"可写任意未声明字段"的开放模型）——`core:` **按组件分两档**：数据组件（`core:info`）
+写得进，协议 / 动作组件（`core:position` / `core:account` / `core:perception`）写不进，
+只能走动作入口（见下文「`core:` 写入口径」）。
 
 **实体形态**（v2 / D41 / DESIGN §12.4）：`to_dict()` / JSON / SSE 投影都是**5 键**——
 
@@ -650,7 +653,9 @@ name, desc, uid = entity.name, entity.desc, entity.user_id
 - `entity.name` / `entity.desc` / `entity.user_id` / `entity.map_id` / `entity.row` /
   `entity.col` 都是**只读 property（派生视图）**，缺失依次兜底为 `id` 前 8 位 /
   `""` / `None` / `None`——**别再给它们赋值**（没有 setter），
-  玩法包也**写不进** `core:info` / `core:account`（`core:` 保留命名空间，写入直接报错）
+  玩法包**写不进** `core:account` / `core:position` / `core:perception`（`core:` 里
+  有语义的协议组件，写入直接报错并提示该用哪个动作入口）；`core:info` 是**数据组件**，
+  可以直写（改名 / 改描述 = `api.set_data(eid, "name", …, component="core:info")`）
 - **能力（`kind` / `tags`）已随 D41 折叠为组件**：实体的 `kind` / `tags` 属性
   **不存在**（`AttributeError`），两张表列也删了（表 v11 / 4 列）；
   `core:player` 从未引入（D42：身份概念整个删除，判据是"带没带 `core:account`"），
@@ -670,7 +675,7 @@ entity.components == {
 
 | source | 说明 |
 |---|---|
-| `core` | **内核保留命名空间**（仅内核可写）——玩法包写入**直接报错**（`WorldError`）；它的写入还**绕过分派表**（玩法包拦不住） |
+| `core` | **内核保留命名空间，按组件两档**（K-7）：数据组件（`core:info`）**可直写**；协议 / 动作组件（`core:position` / `core:account` / `core:perception`）写入**直接报错**并提示该用的动作入口。**缺省拦截**——未列出的 `core:` 组件一律拒绝。它的写入也**绕过分派表**（玩法包拦不住） |
 | `local` | 编辑器 / 人手写的本地命名空间——管理端编辑虚构组件的落点（保证"信封必填"无例外）。**玩法包当前也写得进**（D43 暂不收紧） |
 | `<自己的 play_id>` | 自己的组件——**推荐用它作 source**，天然不撞名 |
 | `<别人的 play_id>` | **写不进**（D43：包名写在键里就是真规则，不是命名约定）。要影响别人的数据走 `call_service`（让对方自己写）或事件；**声明期**的跨包扩展走 `add_tag_fields`（"扩展可以，但要留痕"） |
@@ -681,13 +686,20 @@ entity.components == {
   `core:position`（`map_id` / `row` / `col`，可选，见 §「不在世界上」）、`core:perception`
   （`invisible` / `see_invisible`，见下）。**能力 = 组件的存在**（D41：没有"基底类型"
   这回事，`kind` / `tags` 已折叠为组件、两张表列已删——表 v11 / 4 列）
-- **`core:` 读得到、写不了**：`get_component` / `list_components` 读 `core:` 不受限；
-  写只有内核能做——**但正当能力走窄口**：目前有四个入口
-  **`api.set_perception(...)`** / **`api.clear_position(...)`** /
-  **`api.claim_avatar(...)`** / **`api.release_avatar(...)`**（见 §4 与 §14）；`core:info` /
-  `core:account` 其余情形由内核侧写入
-  （`place_entity(name=…, desc=…)`、身份服务、管理端 `PATCH /admin/entities/{id}`），
-  玩法包不直接改——**名字是内核文案**（lint / 删除保护 / 日志），D40
+- **`core:` 写入口径（K-7：按组件声明，不按命名空间一刀切）**：`get_component` /
+  `list_components` 读 `core:` 不受限；写入分两档——
+
+  | 组件 | 玩法包能否直写 | 为什么 |
+  |---|---|---|
+  | `core:info`（`name` / `desc`） | ✅ **能** | 写它就是改数据：合并 + 存储 + 发 `on_entity_changed`，和写任何包组件一样，**没有不变量要保护**。改名 / 改描述用它 |
+  | `core:position` | ❌ 只能走 `api.move_entity` / `api.clear_position` | 直写**不发 `on_entity_move` / `on_entity_enter`** —— 订阅移动的包会漏掉 |
+  | `core:account` | ❌ 只能走 `api.claim_avatar` / `api.release_avatar` | 直写可把**任意实体绑到任意账户** → 绕过 D14 保护与两本账 |
+  | `core:perception` | ❌ 只能走 `api.set_perception` | 直写绕过 G12 可见性语义 |
+  | 其它 `core:*` | ❌ 一律拒绝 | **缺省拦截**：失败模式必须是"少一个能力"，不能是"多一个后门" |
+
+  报错会直接告诉作者该用哪个入口（如 `——请用 move_entity / clear_position`）。
+  `core:info` 虽然可直写，它同时也是**内核文案**（lint / 删除保护 / 日志）的来源（D40），
+  所以名字别写成长文本或控制字符。
 
 ### 组件级 API（整块）
 
@@ -784,11 +796,15 @@ await api.remove_data(entity_id, "gold", component="local:stat")    # 删字段�
   `name` / `desc` / `user_id`（v9 删）、`map_id` / `row` / `col`（v10 删，搬进
   `core:position`）、`kind` / `tags_json`（v11 删，能力 = 组件）**都已不在表里**；
   地图表 `maps` 的 `spawn_row` / `spawn_col` 也在 **v12 删除**（D45：内核不存在出生点）
-- 表结构版本 **v12**（`store.SCHEMA_VERSION`）：旧版本库**拒绝启动**
+- 表结构版本 **v13**（`store.SCHEMA_VERSION`）：旧版本库**拒绝启动**
   （`IncompatibleDataError`，消息里指明删 `world.db`），**没有迁移**，也不再
   "缺列就 ALTER 补上"。另有**「不该存在的列」检查**：库里还带着上面那些删掉的列
   （含 `maps.spawn_row` / `spawn_col`）同样**拒绝启动**——多出来的旧列 = 数据还在
-  老位置，载入会成功而**名字 / 描述 / 账户绑定 / 位置 / 能力被静默丢掉**
+  老位置，载入会成功而**名字 / 描述 / 账户绑定 / 位置 / 能力被静默丢掉**。
+- **v13（D55）改的是"存的数据"而不是表结构**：`worlds.play_ids_json` 现在允许
+  JSON `null`——`null` = **全部启用**（新世界的默认）、`[]` = **一个都不启用**、
+  数组 = 只启用这些。旧库的 `[]` 原本表示"全部"，新语义下表示"一个都不启用"，
+  所以同样**拒绝启动**而不是静默重解释（否则那个世界的玩家会突然什么都看不见）。
 - `last_active_ts` **不落库**（在线状态只在内存，重启从 0 起）
 
 ## 11. 约定与规范
@@ -806,6 +822,13 @@ await api.remove_data(entity_id, "gold", component="local:stat")    # 删字段�
   `api.apply_ui_hooks` 服务端展开；部件包 hook 追加自己的面板（背包面板 = list
   子块，provider 内调服务读取数据）。**软依赖天然**：部件包未装 → hook 不存在
   → 玩家视图无该面板，无需任何探测代码
+- **注入的块也会被展开（v0.9 / K-2）**：跨包嵌套可以有**任意层**——装备包注入的
+  「装备栏」还能被饰品包 hook（`register_ui_hook("equip:panel", "after", …)`）。
+  ⚠ 两道熔断：**同一个钩子沿一条展开路径只应用一次**（自引用钩子不会无限递归），
+  以及深度上限 32。所以"A 往 kind=A 注入 kind=A"是安全的，但也**只注入一层**
+- **块的 `icon`（v0.9 / K-8）**：`UiBlock(kind=…, title="我", icon="🙋")`——宿主把块
+  当成"标签条目"渲染（抽屉条目、底栏 tab）时用它当图标；内核不解释这个字段。
+  和 `title` 配套用即可，**不要塞进 `data` 自己约定**
 - **软依赖（玩家壳零部件引用）**：部件信息通道归部件包——文本 = 部件包自己
   的工具（如背包工具）；面板 = `ui_hook` 注入。**玩家壳不 import、不探测、
   不调用部件包**（夹具示范：`worlditor_play_demo` 的 `world_whoami` 只产出
@@ -817,6 +840,44 @@ await api.remove_data(entity_id, "gold", component="local:stat")    # 删字段�
   `on_world_edited` 给新玩家发初始金币（`"gold" not in entity.component("local:stat")`
   即"只发一次"的标记）；部件面板注入 = `world_whoami` 的 `character` 块 +
   `apply_ui_hooks`（见 §12）
+
+### 壳层挂载点：页眉抽屉（v0.9 / K-1）
+
+玩家端**页眉右侧的抽屉**是内核提供的**挂载点**，玩法包往里放条目：
+
+```python
+from worlditor_mcp.world.model import CORE_SHELL_MENU  # "core:shell.menu"
+
+async def _me_entry(api, block):
+    return [
+        UiBlock(
+            kind="worlditor_play_player:me",
+            title="我",                # ← 抽屉列表上显示的字
+            icon="🙋",                 # ← 图标
+            data={"view": "player"},   # ← 点它跳到哪个视图 key
+        )
+    ]
+
+api.register_ui_hook(CORE_SHELL_MENU, "after", _me_entry)   # 零新 API
+```
+
+**条目协议**（写法约定，内核不强制）：
+
+| 字段 | 作用 | 缺省 |
+|---|---|---|
+| `title` | 列表上显示的字 | 显示「未命名」 |
+| `icon` | 图标 | 显示 `•` |
+| `data["view"]` | 点它跳哪个**视图 key**（`register_view` 注册的那个） | 点了没反应 |
+
+⚠ **不要用 `action`**——`UiBlock.action` 至今**没有执行者**（渲染器只 `emit`，壳层无人消费），导航走 `data`。
+
+**壳层不放内容，也不会被玩法包接管**：
+
+- 没有包注入 → 列表为空，但**抽屉照常打开**；底部「退出登录」/「永久注销」是**壳层写死的**（挪给玩法包就没有出口了）
+- 所以**内核永远不需要知道"玩家包"存在**——装不装玩家包，壳层都正常工作（D48 的红线）
+- 条目按 **D15 世界过滤**：你的包在玩家所在世界没启用 → 你的条目不出现；provider 抛异常只跳过你这一条，不影响别的包
+
+**端点**：`GET /chrome` → `{"blocks": [...]}`。**要认证**（play / admin）——它会执行你的 provider，返回内容可能是有权限的（与免认证的 `/views` 不同）。
 
 ### 命名契约（G6，社区共同遵守）
 

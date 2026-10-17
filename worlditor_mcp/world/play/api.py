@@ -12,7 +12,7 @@ from typing import Any
 
 from ..engine import WorldEngine
 from ..errors import WorldError
-from ..model import COMPONENT_LOCAL, is_core_component
+from ..model import COMPONENT_LOCAL, CORE_COMPONENTS, is_core_component
 
 
 class WorlditorPlayAPI:
@@ -399,9 +399,13 @@ class WorlditorPlayAPI:
     # 不依赖包自觉；读（get_component / list_components）不受限。
 
     def _guard_component(self, component: str) -> str:
-        """组件写入的命名空间守卫（D33 / D43）。
+        """组件写入的命名空间守卫（D33 / D43 / K-7）。
 
-        - `core:` —— 内核保留，玩法包一律拒写（D33）；
+        - `core:` —— **按组件声明**（K-7），判据是"写它有没有语义"而不是"它在
+          ``core:`` 里"。数据组件可直写（`core:info`：和写任何包组件一样，只是
+          改数据）；协议 / 动作组件拒写，并**告诉作者该走哪条内核动作入口**
+          （`CORE_COMPONENTS`）。**缺省拦截**——未声明的 `core:` 组件一律拒绝，
+          因为失败模式必须是"少一个能力"，不能是"多一个后门"。
         - **`<别人的 play_id>:` —— 拒写**（D43）：包名写在键里就该是真规则，
           不能只是"命名约定"。要影响别人的组件，走 `call_service`（让对方自己写）、
           事件，或在**声明期**用 `add_tag_fields` 显式登记扩展（"扩展可以，但要留痕"）；
@@ -409,8 +413,12 @@ class WorlditorPlayAPI:
           夹具与文档例子都在写它，收紧留到以后单独一步）。
         """
         if is_core_component(component):
+            spec = CORE_COMPONENTS.get(component)
+            if spec is not None and spec.writable:
+                return component
+            hint = f"——请用 {spec.use}" if spec is not None and spec.use else ""
             raise WorldError(
-                f"core: 是内核保留的组件命名空间，玩法包不得写入（{component}）"
+                f"core: 是内核保留的组件命名空间，玩法包不得写入（{component}）{hint}"
             )
         source = str(component).split(":", 1)[0]
         if source not in (COMPONENT_LOCAL, self.play_id):
@@ -675,10 +683,21 @@ class WorlditorPlayAPI:
         title: str,
         icon: str = "",
         provider: dict | None = None,
+        layout: str = "default",
     ) -> None:
-        """注册 WebUI 视图（G3：provider = {type:"component", url:"web/xxx.js"}）。"""
+        """注册 WebUI 视图（G3：provider = {type:"component", url:"web/xxx.js"}）。
+
+        ``layout``（K-6）：``default`` = 壳层页眉照常；``fullscreen`` = 这个视图
+        **自带整个屏幕**（不画页眉、不进顶栏 tab 条，入口与返回按钮都由包自己提供）。
+        只在玩家端生效；管理端预览忽略。
+        """
         self._engine.register_view(
-            key, title=title, icon=icon, provider=provider, play_id=self.play_id
+            key,
+            title=title,
+            icon=icon,
+            provider=provider,
+            layout=layout,
+            play_id=self.play_id,
         )
 
     def list_views(self) -> list[dict]:

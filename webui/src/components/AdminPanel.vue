@@ -191,11 +191,12 @@ const current = computed(() => {
   };
 });
 
-// 当前世界的激活集合：空 = 全部启用（D15）
+// 当前世界的激活集合（D55 三态）：null = 全部启用；[] = 一个都不启用；数组 = 这些
 function activeInWorld(playId) {
   const w = currentWorld.value;
-  if (!w || !w.play_ids || !w.play_ids.length) return true;
-  return w.play_ids.includes(playId);
+  if (!w) return true;
+  if (w.play_ids === null || w.play_ids === undefined) return true; // 全部
+  return w.play_ids.includes(playId); // [] 自然全 false = 一个都不启用
 }
 
 const visiblePages = computed(() =>
@@ -205,7 +206,8 @@ const visiblePages = computed(() =>
 const activationNote = computed(() => {
   const w = currentWorld.value;
   if (!w) return "";
-  if (!w.play_ids || !w.play_ids.length) return "全部";
+  if (w.play_ids === null || w.play_ids === undefined) return "全部";
+  if (!w.play_ids.length) return "全关";
   return `${w.play_ids.length}/${loadedCount.value}`;
 });
 

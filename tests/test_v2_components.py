@@ -119,6 +119,45 @@ def test_play_api_cannot_write_core_but_engine_can(tmp_path):
     _run(fn())
 
 
+def test_core_info_is_writable_but_protocol_components_are_not(tmp_path):
+    """K-7：`core:` 写入**按组件声明**——数据组件可直写，有语义的走动作入口。
+
+    判据是"写它有没有语义"。`_set_data_default` 对 `core:info` 做的事和写任何
+    玩法包组件完全一样（合并 + 存储 + 发 `on_entity_changed`），没有不变量要保护；
+    而 `core:position` / `core:account` / `core:perception` 直写会绕过真实语义
+    （移动不发事件、账户绕过两本账、感知绕过 G12），所以仍然只能走动作入口。
+    """
+
+    async def fn():
+        engine = WorldEngine(WorldStore(tmp_path / "world.db"))
+        await engine.initialize()
+        try:
+            await seed_test_world(engine)
+            e = await engine.place_entity("thing", "default", 0, 0, name="箱子")
+            api = WorlditorPlayAPI(engine, "worlditor_play_probe")
+
+            # 数据组件：可直写，写的是同一个字段（只读派生视图跟着变）
+            await api.set_data(e.id, "name", "阿福", component=CORE_INFO)
+            assert engine.get_component(e.id, CORE_INFO)["name"] == "阿福"
+            assert engine.get_entity(e.id).name == "阿福"
+
+            # 协议 / 动作组件：拒写，且**报错告诉作者该用哪个入口**
+            with pytest.raises(WorldError, match="move_entity"):
+                await api.set_component(e.id, CORE_POSITION, {})
+            with pytest.raises(WorldError, match="claim_avatar"):
+                await api.set_component(e.id, CORE_ACCOUNT, {})
+            with pytest.raises(WorldError, match="set_perception"):
+                await api.set_component(e.id, CORE_PERCEPTION, {})
+
+            # 缺省拦截（fail-closed）：未声明的 core: 组件一律拒绝
+            with pytest.raises(WorldError, match="内核保留"):
+                await api.set_component(e.id, "core:whatever", {})
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
 def test_component_write_primitives_are_dispatchable():
     """组件写入进分派表（可覆盖/禁用），只读的不进（D26 口径）。"""
     for name in ("add_component", "set_component", "remove_component"):
@@ -223,9 +262,9 @@ def test_play_cannot_write_other_plays_namespace(tmp_path):
             # local: 暂不收紧（夹具与文档例子都在写它）→ 放行
             await api.set_data(e.id, "gold", 1, component="local:stat")
             assert engine.get_component(e.id, "local:stat") == {"gold": 1}
-            # core: 一如既往拒（D33 不变）
+            # core: 的**受保护**组件仍然拒（D33 / K-7：core:info 是数据组件、已放开）
             with pytest.raises(WorldError, match="内核保留"):
-                await api.set_component(e.id, CORE_INFO, {"name": "x"})
+                await api.set_component(e.id, CORE_PERCEPTION, {"invisible": True})
         finally:
             await engine.terminate()
 

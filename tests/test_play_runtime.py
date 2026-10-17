@@ -357,6 +357,24 @@ def test_register_view_via_api(tmp_path):
             views = engine.list_views()
             assert views[0]["key"] == "bag"
             assert views[0]["provider"]["url"] == "/plays/pkg_a/web/bag.js"
+            # K-6：layout 默认 default，可声明 fullscreen（受控取值，写错报错）
+            assert views[0]["layout"] == "default"
+            api.register_view(
+                "me",
+                title="我",
+                icon="🙋",
+                provider={"type": "component", "url": "/plays/pkg_a/web/me.js"},
+                layout="fullscreen",
+            )
+            me = next(v for v in engine.list_views() if v["key"] == "me")
+            assert me["layout"] == "fullscreen"
+            with pytest.raises(WorldError, match="layout"):
+                api.register_view(
+                    "bad_layout",
+                    title="坏",
+                    provider={"type": "component", "url": "/plays/pkg_a/web/x.js"},
+                    layout="panel",
+                )
             # 冲突拒绝（同 D2 风格）
             api2 = WorlditorPlayAPI(engine, "pkg_b")
             engine.attach_play_api("pkg_b", api2)

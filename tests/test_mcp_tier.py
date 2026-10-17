@@ -88,8 +88,8 @@ async def _call_tool(client, token: str, name: str, args: dict) -> dict:
         return {"text": text}
 
 
-def test_read_tier_rejected_play_tier_allowed(tmp_path):
-    """read 档调工具 → 明确拒绝；play 档调同一工具 → 正常返回。"""
+def test_play_tier_can_call_tools(tmp_path):
+    """play 档调工具 → 正常返回（read 围观档已随 v0.9 删除，没有"只能看"的档位了）。"""
 
     async def run():
         engine = WorldEngine(WorldStore(tmp_path / "world.db"))
@@ -104,9 +104,9 @@ def test_read_tier_rejected_play_tier_allowed(tmp_path):
         mcp = build_mcp_server(engine)
         engine.attach_mcp(mcp)
         app = build_http_app(mcp, identity, engine=engine, loader=loader)
-        read = await identity.create_read_token()
         player = await identity.register_agent("探针")
-        assert read.tier == "read" and player.tier == "play"
+        assert player.tier == "play"
+        assert not hasattr(identity, "create_read_token")  # v0.9：围观档已删除
         # D45/D46：play 档要有化身才调得动"需要身体"的工具（造 → 认领 → 指过去）
         await give_avatar(engine, player, name="探针")
 
@@ -127,8 +127,6 @@ def test_read_tier_rejected_play_tier_allowed(tmp_path):
             async with httpx.AsyncClient(
                 base_url=f"http://127.0.0.1:{port}", timeout=20.0, trust_env=False
             ) as client:
-                denied = await _call_tool(client, read.token, "world_whoami", {})
-                assert "围观" in denied.get("text", ""), denied
                 allowed = await _call_tool(client, player.token, "world_whoami", {})
                 assert "我是" in allowed.get("text", ""), allowed
         finally:
@@ -140,15 +138,16 @@ def test_read_tier_rejected_play_tier_allowed(tmp_path):
 
 
 def test_tools_require_identity(tmp_path):
-    """无实体绑定的凭据（read）在工具入口被拒——不依赖具体档位实现。"""
+    """没有化身的 play 凭据是合法状态（D45）；工具闸门看的是"有没有身体"，不是档位。"""
 
     async def run():
         engine = WorldEngine(WorldStore(tmp_path / "world.db"))
         await engine.initialize()
         await seed_test_world(engine)
         identity = IdentityService(engine, auth_mode="open")
-        read = await identity.create_read_token()
-        assert read.entity_id == ""
+        # v0.9：read 围观档删除——"能读但没有身体"的最小身份就是 play 档
+        info = await identity.register_agent("还没身体")
+        assert info.tier == "play" and info.entity_id == ""
         await engine.terminate()
 
     asyncio.run(run())

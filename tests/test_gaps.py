@@ -162,9 +162,9 @@ def test_map_visibility_state_filter(tmp_path):
             == "home_a"
             for e in state["entities"]
         )
-        # read 档（无实体）看不到 private
-        read = (await client.get("/auth/read-token")).json()["token"]["token"]
-        hr = {"Authorization": f"Bearer {read}"}
+        # 无化身的玩家（v0.9：read 围观档已删除，用"注册了但还没化身"的 play 凭据）
+        c = await identity.register_human("carol", "pass123")
+        hr = {"Authorization": f"Bearer {c.token}"}
         state = (await client.get("/state", headers=hr)).json()
         assert {m["id"] for m in state["maps"]} == {"default"}
         # /scene 也必须遵守 private 地图授权；B 在场后可读

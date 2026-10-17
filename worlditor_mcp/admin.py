@@ -230,11 +230,16 @@ async def _world_update(request: Request) -> Response:
     _require_admin(request)
     data = await _json_body(request)
     try:
+        # D55：`play_ids` 三态——**键不存在 = 不变**；`null` = 全部启用；
+        # `[]` = 一个都不启用。不能用 `data.get()` 当"不变"，那样传 null 就改不动了。
+        extra = {}
+        if "play_ids" in data:
+            extra["play_ids"] = data["play_ids"]
         world = await _engine(request).update_world(
             request.path_params["world_id"],
             name=data.get("name"),
             desc=data.get("desc"),
-            play_ids=data.get("play_ids"),
+            **extra,
         )
     except WorldError as e:
         return _err(e)

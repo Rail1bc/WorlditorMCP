@@ -32,7 +32,8 @@ def test_default_world_seeded(tmp_path):
         try:
             world = engine.get_world(DEFAULT_WORLD_ID)
             assert world is not None and world.name == "默认世界"
-            assert world.play_ids == []  # 空 = 全部激活
+            # D55：None = 全部启用（新世界的默认），[] = 一个都不启用
+            assert world.play_ids is None
             # v0.2.0：内核不再内置演示世界——地图/地块/实体全由玩法包导入
             assert engine.list_maps() == []
             assert engine.list_locations() == []
@@ -49,8 +50,40 @@ def test_default_world_seeded(tmp_path):
     _run(fn())
 
 
+def test_world_plays_tristate(tmp_path):
+    """D55：世界激活集合的**三态各自可表达**，且默认是"全部启用"。
+
+    旧版用"空列表"同时表示"还没配"和"全部启用"，于是"这个世界一个包都不启用"
+    根本无法表达（只能塞一个不存在的包名，靠 `in` 判断碰巧为 False）。
+    """
+
+    async def fn():
+        engine = await _engine(tmp_path)
+        try:
+            await seed_test_world(engine)
+            await engine.assign_map("default", DEFAULT_WORLD_ID)
+            e = await engine.place_entity("npc", "default", 0, 0, name="甲")
+
+            # 默认（None）= 全部启用
+            assert engine.get_world(DEFAULT_WORLD_ID).play_ids is None
+            assert engine.play_active_for_entity(e.id, "任意包") is True
+
+            # [] = 一个都不启用（旧版做不到的状态）
+            await engine.update_world(DEFAULT_WORLD_ID, play_ids=[])
+            assert engine.play_active_for_entity(e.id, "任意包") is False
+
+            # 名单 = 只启用这些
+            await engine.update_world(DEFAULT_WORLD_ID, play_ids=["pkg_a"])
+            assert engine.play_active_for_entity(e.id, "pkg_a") is True
+            assert engine.play_active_for_entity(e.id, "pkg_b") is False
+        finally:
+            await engine.terminate()
+
+    _run(fn())
+
+
 def test_world_crud_and_activation(tmp_path):
-    """世界 CRUD + 激活集合更新。"""
+    """世界 CRUD + 激活集合更新（D55 三态）。"""
 
     async def fn():
         engine = await _engine(tmp_path)
@@ -60,9 +93,14 @@ def test_world_crud_and_activation(tmp_path):
             )
             assert isinstance(world, World)
             assert engine.get_world("pvp").play_ids == ["worlditor_play_fight"]
-            # 更新激活集合
+            # 更新激活集合：[] = 一个都不启用；None = 全部启用（D55 三态）
             await engine.update_world("pvp", play_ids=[])
             assert engine.get_world("pvp").play_ids == []
+            await engine.update_world("pvp", play_ids=None)
+            assert engine.get_world("pvp").play_ids is None
+            # 不传 = 不变（这里只改名字，激活集合不受影响）
+            await engine.update_world("pvp", name="竞技世界2")
+            assert engine.get_world("pvp").play_ids is None
             assert {w.id for w in engine.list_worlds()} == {DEFAULT_WORLD_ID, "pvp"}
             # 重复创建报错
             with pytest.raises(WorldError, match="已存在"):

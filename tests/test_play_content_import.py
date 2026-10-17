@@ -191,7 +191,11 @@ def test_import_bundle_validates_text_schedule(tmp_path):
 
 
 def test_import_bundle_api_rejects_core_components(tmp_path):
-    """玩法包不得写 core:（D33）——实体组件在 API 边界就被拒。"""
+    """玩法包不得写**受保护**的 core: 组件（D33 / K-7）——在 API 边界就被拒。
+
+    K-7 之后 `core:` 不再一刀切：`core:info` 是数据组件、可直写；这里用
+    `core:perception`（有语义，只能走 `set_perception`）来验证守卫仍然生效。
+    """
 
     async def fn():
         engine, api = await _make(tmp_path)
@@ -204,7 +208,7 @@ def test_import_bundle_api_rejects_core_components(tmp_path):
                         {
                             "row": 0,
                             "col": 0,
-                            "components": {"core:info": {"name": "偷写"}},
+                            "components": {"core:perception": {"invisible": True}},
                         }
                     ],
                 )
