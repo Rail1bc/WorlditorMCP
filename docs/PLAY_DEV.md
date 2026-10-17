@@ -150,8 +150,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `capabilities(entity)` | 某实体的能力：`components / active_components / inactive_components / **orphan_components** / **fictional_components** / interactions / fields`——`fields` 是 **`{组件键: [字段]}`**（按组件分组）。四象限（D44）：生效 / 本世界未启用 / **声明它的包不在了**（停用、加载失败、已卸载）/ **虚构组件**（`local:` 且无声明——本来就没有行为，不是坏了）。**不再有阻挡键**（阻挡机制已移除，见 §10） |
 | `register_interaction(action, handler, *, label=None)` | 全局交互动作；`async (api, req) -> InteractionResult`。⚠ 同名动作**报错拒绝**（不会静默顶掉别人的） |
 | `register_world_event(event, handler, *, interval=0.0, phase="simulate", order=0)` | 事件订阅；on_tick 必须给 interval（秒）；**phase/order 声明跨包执行顺序**（D27，见 §5.3） |
-| `register_ui_hook(block_kind, position, provider)` | UiBlock 注入（before/after/replace，**可用**；服务端展开，见 §11） |
-| `register_ui_hook(block_kind, position, provider)` | UiBlock 注入（before/after/replace，可用）；自定义页面请使用 `register_view` + provider（§8）。`UiBlock(kind="custom")` 只保留 fallback 数据结构，不提供组件注册 API |
+| `register_ui_hook(block_kind, position, provider)` | UiBlock 注入（`before` / `after` / `replace`；**服务端展开**，锁内）。**注入的块也会被继续展开**（v0.9 / K-2）→ 跨包嵌套**任意层**。自定义页面请用 `register_view` + provider（§8）——`UiBlock(kind="custom")` 只保留 fallback 数据结构，**没有**组件注册 API |
 | `apply_ui_hooks(block)` | 对一棵 UiBlock 树应用全部已注册钩子（服务端展开，锁内）；玩家壳生成角色卡后调它，部件包的面板即被追加（§11） |
 | `register_tool(name, handler, *, description="", params=None)` | MCP 工具（见 §7） |
 | `register_view(key, *, title, icon="", provider=None, layout="default")` | WebUI 视图（见 §8）；`title` 必填且**只能关键字传**。`layout`：`"default"` = 壳层页眉照常；`"fullscreen"` = 这个视图**自带整个屏幕**（不画页眉、不进顶栏 tab 条，**入口与返回按钮都由包自己负责**；只在组件成功加载后才生效） |
@@ -327,6 +326,28 @@ if entity_id is None:
 > 也别再造"player 实体"、别写 `local:player`：那个组件已随 D45 删除，"是不是人"一律看
 > `core:account`（D42）。⚠ **`api.act_as()` 只在工具 handler 里有凭据上下文**
 > （事件回调里没有）——"登录后接着玩"因此只能做成惰性接管，见 §14.4 第 5 点。
+
+### 显示名（`core:info.name`）的约束（v0.9 / K-11）
+
+内核**校验**写进去的名字——因为名字会出现在**内核自己的展示面**（`/scene` 的 peers、
+管理端实体列表、世界日志）。写之前知道这四条，不然会撞报错：
+
+| 规则 | 说明 |
+|---|---|
+| **去首尾空白** | `"  张三  "` 存成 `"张三"` |
+| **1–24 个字符** | 中文按 1 个算；超了报「名称最多 24 个字符」 |
+| **不能有控制字符** | 换行 / 制表（Unicode `Cc`）会被拒——单行渲染的地方会劈开 |
+| **不能有双向文本 / 零宽字符** | `U+202A–202E`、`U+2066–2069`、`U+200B–200D`、`U+FEFF`（Unicode `Cf`）——它们能让名字**反序显示**或**伪装成另一个名字**。**唯一放行 ZWJ**（`U+200D`），否则 👨‍👩‍👧 这类 emoji 序列不可用 |
+
+**不校验的**：`desc`（多行长文本，随便写）、**组件 `label` 派生的名字**（作者数据——
+`place_entity(kind=…)` 不带 `name` 时取 label，长 label 不会失败）。
+
+**所有写入点都拦**（六条）：`place_entity(name=…)`、`import_bundle`、
+`update_entity(name=…)`、`update_entity(components=…)`、`set_data(…, "name", component="core:info")`、
+`set_component` / `add_component`。**改名冷却不归内核**——那是玩法规则，你自己在包里做。
+
+> 中文没有问题（`str.isalnum()` 对中文为 `True`，账户名那套规则也允许中文）；
+> 被挡的是"会让显示和实际不一致"的字符，不是语言。
 
 **账户生命周期（内核提供，玩法包感知）**：
 - 玩家可永久注销（`POST /auth/delete-account`，级联吊销凭据 + **删除该主体的全部化身**）；
@@ -554,11 +575,13 @@ Vue 组件选项）：
   免写组件；复杂界面直接写 Vue）
 - **视图注入两种通道**（DESIGN §4.4）：
   - `ui_hook`（UiBlock 树，**服务端展开**）：注册 `register_ui_hook(block_kind,
-    position, provider)`——交互弹窗等 UiBlock 渲染前注入（已接线，G18 解决）；
-    玩法包无需知道 UI 细节
-  - **挂载点 slot**（自定义组件视图，**设计稿**）：`register_view_slot(view_key,
-    slot_name, provider)` + 视图组件 `<slot name>`——快捷栏/手持按钮等需要
-    注入到自定义 Vue 组件时再实现（G4）
+    position, provider)`——交互弹窗等 UiBlock 渲染前注入（G18 已解决）；注入的块
+    **也会被继续展开**（v0.9 / K-2）→ 跨包嵌套任意层。玩法包无需知道 UI 细节
+  - **视图插槽**（`<slot>` 式，**已否决，不是"待实现"**）：曾计划 `register_view_slot
+    (view_key, slot_name, provider)` + 视图组件 `<slot name>`。**结论：不做**——
+    成本比"壳层挂载点"（K-1）高一个数量级，解决的是同一个问题，还要一个**没有归属的
+    跨包命名约定**，并且会让宿主包成为自己扩展性的守门人。需要"往别人的界面里放东西"
+    就两种途径：`ui_hook`（UiBlock 数据）或各家独立视图（`register_view`）
 - 兜底：无任何视图时 WebUI 显示内核"无视图"提示（D7）
 - **样式约定（v0.1.17）**：WebUI 是**暗色主题**，视图组件**不得硬编码浅色**
   （白底/浅灰底与主题冲突 → "整片发白、白底白字"）；统一用内核样式基石：
@@ -873,11 +896,26 @@ api.register_ui_hook(CORE_SHELL_MENU, "after", _me_entry)   # 零新 API
 
 **壳层不放内容，也不会被玩法包接管**：
 
-- 没有包注入 → 列表为空，但**抽屉照常打开**；底部「退出登录」/「永久注销」是**壳层写死的**（挪给玩法包就没有出口了）
+- 没有包注入 → 列表为空，但**抽屉照常打开**；底部的**出口**（「退出登录」）是**壳层写死的**（挪给玩法包就没有出口了）。「永久注销」当前也在那里，**位置待定**——别在你的包里放任何"注销/退出"，那是壳层的事
 - 所以**内核永远不需要知道"玩家包"存在**——装不装玩家包，壳层都正常工作（D48 的红线）
 - 条目按 **D15 世界过滤**：你的包在玩家所在世界没启用 → 你的条目不出现；provider 抛异常只跳过你这一条，不影响别的包
 
 **端点**：`GET /chrome` → `{"blocks": [...]}`。**要认证**（play / admin）——它会执行你的 provider，返回内容可能是有权限的（与免认证的 `/views` 不同）。
+
+### 界面放哪：顶栏 tab 还是「我」的底栏？
+
+**这不是规则，是建议**——两种写法（`register_view` 进顶栏 / `ui_hook` 进别人的底栏）都开着，
+**你自己选**。内核不为还不存在的生态立法。之所以还写在这里，是因为**容量是硬事实**：
+
+| 层 | 合理容量 | 放什么 |
+|---|---|---|
+| 顶栏 tab 条 | **3–5** | **看世界**：场景 / 地图 / 日志 / 聊天 |
+| 视图内的底栏 | **4–6** | **看我**：属性 / 背包 / 技能 / 装备 |
+| 子页内部 | 不限 | 具体分类：背包分页、技能流派——**靠 K-2 的嵌套** |
+
+- 顶栏是 `overflow-x: auto`——**手机上 4–5 个 tab 就要横滑**，横滑意味着后面的没人发现
+- 再细的分类往子页里嵌（K-2 支持任意层），不要再开一个顶栏 tab
+- **同一个功能只允许一个入口**——防生态长歪的关键一条：背包包既能进顶栏又能进底栏，玩家的世界里就会出现两个背包，且两条路径的数据可能不同步
 
 ### 命名契约（G6，社区共同遵守）
 

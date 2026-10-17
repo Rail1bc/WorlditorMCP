@@ -75,6 +75,7 @@ from .model import (
     WorldFolder,
     WorldMap,
     WorldTemplate,
+    check_display_name,
     is_core_component,
     location_to_dict,
     parse_location,
@@ -83,6 +84,9 @@ from .model import (
     parse_path,
     parse_text_schedule,
     split_component_key,
+    validate_core_components,
+    validate_core_field,
+    validate_core_payload,
 )
 from .store import DEFAULT_WORLD_ID, WorldStore
 
@@ -3087,7 +3091,7 @@ class WorldEngine:
         Returns:
             ``(实体, 本次由 kind/tags 解析出的能力组件键)``。
         """
-        payload = _clean_components(components)
+        payload = validate_core_components(_clean_components(components))
         ability: list[str] = []
         if kind is not None:
             # None = 不带能力组件；空串是**写错了**（`_resolve_component_key` 报"不能为空"），
@@ -3096,9 +3100,14 @@ class WorldEngine:
         ability.extend(self._resolve_component_key(t) for t in parse_names(tags))
         spec = self._tag_specs.get(ability[0]) if ability else None
         if name is None or not str(name).strip():
+            # 派生名（组件 label / 能力键）是**作者数据**，不走昵称校验——K-11
+            # 针对的是"玩家填的名字"；作者给 label 起多长属于内容问题，不该让
+            # `place_entity(kind=…)` 因为一个长 label 直接失败。
             name = (
                 (spec.label if spec and spec.label else ability[0]) if ability else ""
             )
+        else:
+            name = check_display_name(name)
         # 能力组件进实体（数据 {} 是"纯能力标记"；components 里已给数据就保留）
         for key in ability:
             payload.setdefault(key, {})
@@ -3489,7 +3498,9 @@ class WorldEngine:
         self, entity_id: str, component: str, data: dict | None = None
     ) -> None:
         component = _clean_component(component)
-        payload = _clean_component_data(component, data)
+        payload = validate_core_payload(
+            component, _clean_component_data(component, data)
+        )
         async with self._lock:
             entity = self._require_entity(entity_id)
             if component in entity.components:
@@ -3515,7 +3526,9 @@ class WorldEngine:
         self, entity_id: str, component: str, data: dict | None = None
     ) -> None:
         component = _clean_component(component)
-        payload = _clean_component_data(component, data)
+        payload = validate_core_payload(
+            component, _clean_component_data(component, data)
+        )
         async with self._lock:
             entity = self._require_entity(entity_id)
             existed = component in entity.components
@@ -3587,6 +3600,10 @@ class WorldEngine:
         """默认字段写：合并写组件内的一个字段（组件不存在则隐式建出）。"""
         name = _clean_required(name, "字段名")
         component = _clean_component(component)
+        # K-11：字段级校验（`core:info.name` 的长度 / 控制字符 / 双向文本）。
+        # 放在**默认实现**里就够了——`core:` 的写入跳过玩法包分派表（D33），
+        # 所以任何包都绕不过这一个点。
+        value = validate_core_field(component, name, value)
         async with self._lock:
             entity = self._require_entity(entity_id)
             data = dict(entity.component(component))
@@ -3738,7 +3755,7 @@ class WorldEngine:
             WorldError: 实体不存在 / 没有主体（空 account_id）/ 已属于另一个主体。
         """
         if not str(account_id or ""):
-            raise WorldError("没有主体上下文，无法认领化身（围观凭据不能认领）")
+            raise WorldError("没有主体上下文，无法认领化身（进程内直调 / 无身份请求）")
         async with self._lock:
             entity = self._require_entity(entity_id)
             owner = entity.user_id
@@ -4179,17 +4196,22 @@ class WorldEngine:
         ``add_component`` / ``remove_component`` 原语，免得整块替换时丢数据。
 
         v2 / D32（§12.4）：``name`` / ``desc`` 写在 ``core:info`` 里（★只动这两个键，
-        不碰同一组件下的其它数据）；传空串等于把该键删掉（``name`` 随即回落到
-        ``id`` 前 8 位的兜底）——**不静默丢**同一组件的其它字段。
+        不碰同一组件下的其它数据）；``desc`` 传空串 = 把该键删掉。``name`` **不能为空**
+        （K-11：空名字会让实体在列表里没有可读标识，所以是报错而不是删除）；要让它
+        回落到 ``id`` 前 8 位，请用 ``remove_component`` / ``components=`` 显式去掉
+        ``core:info``——不静默丢同一组件的其它字段。
         """
         async with self._lock:
             entity = self._require_entity(entity_id)
             if components is not _UNSET:
-                entity.components = _clean_components(components)
+                # K-11：整块替换也可能改 `core:info.name`，一起校验
+                entity.components = validate_core_components(
+                    _clean_components(components)
+                )
             if name is not _UNSET or desc is not _UNSET:
                 info = dict(entity.component(CORE_INFO))
                 if name is not _UNSET:
-                    new_name = _clean_required(name, "名称")
+                    new_name = check_display_name(_clean_required(name, "名称"))
                     info["name"] = new_name
                 if desc is not _UNSET:
                     new_desc = str(desc or "")

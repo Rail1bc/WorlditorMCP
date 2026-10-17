@@ -70,8 +70,11 @@
   视图组件声明 `<slot name="...">`，WebUI 渲染时挂载插槽组件（纯增量协议）
 - **成本**：内核注册表 + WebUI 渲染器，中等
 - **状态**：UiBlock 路径已闭环（**G18 已解决**：ui_hook 已接线到 interact 结果，
-  服务端展开）；组件视图注入 = **挂载点 slot 设计稿**（DESIGN §4.4 视图注入表，
-  表达力不足时再实现）
+  服务端展开；v0.9 / K-2 起注入的块也会继续展开 → 跨包嵌套任意层）；
+  **组件视图注入（`<slot>` 式）已否决**——成本比"壳层挂载点"（DESIGN D52）高一个
+  数量级、解决的是同一个问题，且要求一个**没有归属的跨包命名约定**，还会让宿主包
+  成为自己扩展性的守门人。**不是"表达力不足时再实现"**（DESIGN.md §4.4 与
+  `docs/PLAY_DEV.md` 已同步改口径）
 - **当前绕道**：世界视图用 UiBlock 构建；或各包独立视图 + goto_view 跳转
 
 ### G5 玩法包后台任务生命周期约定
@@ -184,22 +187,23 @@
 ## 待决策（安全审查记录，2026-09——已记录，暂缓）
 
 ### G16 认证端点零防护
-- **触发**：全面审查——`/auth/login` / `register` / `agent-register` / `read-token`
+- **触发**：全面审查——`/auth/login` / `register` / `agent-register`
   全公开（http.py 公共路径白名单）且无失败计数/退避/锁定；register 报
   「用户名已存在」+ login 对不存在账户跳过 PBKDF2（计时侧信道）→ 用户名
-  可枚举；open 模式 `read-token` 无限签发且 token 无 TTL（只查 revoked）
+  可枚举；~~open 模式 `read-token` 无限签发且 token 无 TTL（只查 revoked）~~
+  （**v0.9 已随 `read` 围观档删除 `GET /auth/read-token`**，这一半作废；其余仍成立）
 - **影响**：6288 公网端口可无限制爆破/枚举/膨胀 tokens 表；单次 login 为
   200k 次 PBKDF2（身份/identity.py:31），并发请求即 CPU 放大 DoS
 - **方案**：按用户名+IP 失败计数指数退避（内存级即可，默认单 worker）；
-  统一 401/403 文案 + 不存在账户跑假 PBKDF2；read-token 配额或 TTL；
+  统一 401/403 文案 + 不存在账户跑假 PBKDF2（~~read-token 配额或 TTL~~——端点已删）；
   启动防呆 WARNING（open + 0.0.0.0 + 空 ADMIN_KEY 三连）
 - **状态**：⏸ 暂缓（记录于 2026-09 安全审查——**报告未入库**，本条即 P0-2 正文；
   2026-09-24 复核：无失败计数/退避/锁定、`identity.py` 里 login 对不存在账户
-  短路跳过 PBKDF2、read-token 无 TTL/配额——**全部仍成立**）
+  短路跳过 PBKDF2——**仍成立**；read-token 那一半已于 v0.9 随档位删除而消失）
 
 ### G17 G1 可见性只实现了一端（/scene + SSE + 交互缺口）
 - **触发**：全面审查——`/state` 按 `map_visible_to` 过滤（G1 部分解决，见 G1 尾巴），
-  但 `/scene`（http.py:210-245）不检查——read 档持任意 entity_id 可读 private
+  但 `/scene`（http.py:210-245）不检查——**任何持 `play` 档的凭据**拿任意 entity_id 可读 private
   地图场景与动作菜单；SSE `_event_payload`（engine.py:1760-1798）对
   private 地图事件全量下发实体位置（play 档订阅可跟踪）；`interact` /
   `list_actions` 亦不做地图可见性检查
@@ -1155,12 +1159,12 @@
 ## 本轮审查新增暂缓项（无行为整改）
 
 ### G58 认证端点抗滥用：暂缓
-- **范围**：登录、注册、agent 注册、公开 read-token 目前没有失败退避、速率限制、
-  账户锁定、read-token 配额或 TTL；不存在账户的登录路径也未做等成本密码校验。
+- **范围**：登录、注册、agent 注册目前没有失败退避、速率限制、
+  账户锁定（~~read-token 配额或 TTL~~：v0.9 已删除该端点）；不存在账户的登录路径也未做等成本密码校验。
 - **原因**：这是公网安全策略与部署模型决策，不是无副作用修复；内存限流、代理限流、
   多 worker 共享状态和错误文案都需要先定口径。
 - **触发条件**：准备公网长期运行、开放注册或接入不受信任用户时处理。建议方案：按用户名/IP
-  失败计数与指数退避，统一认证错误文案，read-token 配额或 TTL，并补启动配置防呆。
+  失败计数与指数退避，统一认证错误文案，并补启动配置防呆。
 - **当前缓解**：生产建议 `auth_mode=invite`，管理端口保持本机监听，并在反向代理增加限流。
 
 ### G59 玩法包间名字级契约：暂缓
@@ -1199,8 +1203,8 @@
 
 ### G63 `/state` 把所有人的 `core:account` 一起发出去
 - **范围**：`/state` 的实体投影含全部组件，其中 `core:account.user_id` 是**账户 id**；
-  任何能读 `/state` 的凭据（含 `read` 围观档）都能看到**每个在场实体的账户 id**；
-  `/scene` 的 `peers` 同理。
+  任何能读 `/state` 的凭据都能看到**每个在场实体的账户 id**（v0.9 删除了 `read` 围观档，
+  所以范围收窄到 `play` / `admin`，但"玩家能互相看到账户 id"这一点没变）；`/scene` 的 `peers` 同理。
 - **为什么是问题**：账户 id 是管理端 `PATCH/DELETE /admin/accounts/{id}` 的路径参数——
   虽然那些端点另有 admin 校验（拿到 id 也不能越权），但它把"谁是谁"暴露给了所有人，
   而玩家端根本不需要这个字段（要判断"是不是人"只需布尔）。
@@ -1211,8 +1215,13 @@
 ### G64 第一个玩法包（内置玩家包）落地清单：守卫迁移 / 夹具合一 / 文档表述
 
 - **状态**：方向已定（DESIGN **D48**：玩家包内置、"玩家在地图上行动"留给第二个包），
-  **未开工**。本条只登记"落地时必须一起做"的清单——不做的话会出现"文档与守卫盯着另一个副本"，
-  而且**不报错**。
+  **内置化未开工**。⚠ 但**包本体已经存在**——`tests/fixtures/plays/worlditor_play_player/`
+  （413 行 `main.py` + 165 行 `web/view.js`：五个工具 / 三个服务锚点 / `local:avatar` /
+  kv 续玩 / `on_principal_deleted` / 落点策略 / 一个 `register_view("player")`）。
+  所以这一步是**改造 + 迁移**，不是从零写；**要补的界面层清单**（抽屉入口 / `layout="fullscreen"` /
+  底栏 / 属性页 / 返回按钮 / 改名）与**发布前必须冻结的四个名字**见
+  `docs/PLAYER_PAGE_PLAN.md` §4。本条只登记"迁移时必须一起做"的东西——不做的话会出现
+  "文档与守卫盯着另一个副本"，而且**不报错**。
 - **迁移清单**：
   1. **源码只能有一份**：`tests/fixtures/plays/worlditor_play_player/` →
      `worlditor_mcp/builtin_plays/worlditor_play_player/`。夹具侧不再留副本：
@@ -1248,5 +1257,12 @@
 - **顺带（不在本条范围）**：G62（`call_service` 无世界过滤 + `requires.plays` 全局）与
   G63（`/state` 泄露 `core:account.user_id`）——玩家包内置后更容易被别的包硬依赖，
   这两条的影响面会跟着变大（D48 的"默认零依赖"口径正是为了拖住这件事）。
+- **界面层残留（登记在 `docs/PLAYER_PAGE_PLAN.md` §5，不在这里重复）**：
+  **K-5** 未命中的 `ui_hook` 静默不触发、**K-10** 默认落地视图（Q-11 已明确 =
+  进场流程，见 `PLAYER_PAGE_PLAN` §11）、**P7** 视图资源没有 `Cache-Control` / `ETag`。
+  **前两条建议排在玩家包发布之前。**
+- **已还的一笔（K-11）**：昵称字符校验（`core:info.name` 的长度 / 控制字符 / 双向文本）
+  ✅ 已实现——`CoreComponent.validate` + 六个写入出入口，回归 `tests/test_display_name.py`。
+  它之前是"文档说已定、代码里没有"，现已对齐。
 
 

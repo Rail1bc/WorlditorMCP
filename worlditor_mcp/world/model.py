@@ -18,6 +18,7 @@ import json
 import math
 import random
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -55,6 +56,58 @@ CORE_ACCOUNT = "core:account"
 """内核协议组件：``{user_id}``——实体与账户的绑定（原 ``entities.user_id`` 列）。"""
 
 
+DISPLAY_NAME_MAX = 24
+"""实体显示名（``core:info.name``）的长度上限（K-11）。"""
+
+_FORBIDDEN_CHAR_CATEGORIES = frozenset({"Cc", "Zl", "Zp", "Cf"})
+"""名字里禁止的字符类别（K-11）：
+
+- ``Cc`` 控制字符（`\\n` / `\\t` / `\\r` …）——单行渲染（tab 条 / 抽屉 / 日志）会被劈开
+- ``Cf`` 格式字符——**双向文本控制符**（U+202A–202E、U+2066–2069、U+200E/200F）能让
+  名字**整体反序**（直接冒充他人），零宽字符（U+200B–200D、U+FEFF）能让两个不同的名字
+  **看起来一模一样**
+- ``Zl`` / ``Zp`` 行/段分隔符——破坏单行渲染，比 `\\n` 更隐蔽
+"""
+
+_ALLOWED_FORMAT_CHARS = frozenset({"\u200d"})
+"""``Cf`` 里唯一放行的：**ZWJ**。它是 👨‍👩‍👧 / 👩‍💻 这类 emoji 序列的连接符，禁掉会让
+昵称里常见的表情直接不可用。**代价已记录**：ZWJ 仍可用来做"零宽冒充"——但同形字冒充
+（西里尔 `а` 冒充拉丁 `a`）内核本来就挡不住，挡它属于安全剧场（D49：内核"只保证不污染
+内核文案，不保证名字是真的"）。"""
+
+
+def check_display_name(value: object) -> str:
+    """显示名（``core:info.name``）的规范化 + 校验（K-11 / D56）。
+
+    做四件事，**只做这四件**：去首尾空白、拒空、限长、拒"会改变显示效果"的字符。
+
+    不做：同形字 / confusables 折叠（要全表，成本远超收益）、重名检查（Q-5 已定
+    **用 id 区分**）、NFKC 归一（会改写用户输入）。
+
+    **写入侧校验，读侧不校验**——旧数据由表结构版本策略兜住（D13 无迁移、删库重建）。
+    """
+    if not isinstance(value, str):
+        raise WorldError("名称必须是字符串")
+    text = value.strip()
+    if not text:
+        raise WorldError("名称不能为空")
+    if len(text) > DISPLAY_NAME_MAX:
+        raise WorldError(f"名称最多 {DISPLAY_NAME_MAX} 个字符（当前 {len(text)} 个）")
+    for ch in text:
+        if ch in _ALLOWED_FORMAT_CHARS:
+            continue
+        if unicodedata.category(ch) in _FORBIDDEN_CHAR_CATEGORIES:
+            raise WorldError(
+                "名称不能包含控制字符或双向文本（它们会破坏显示顺序，或伪装成别的字符）"
+            )
+    return text
+
+
+def _check_info_field(name: str, value: Any) -> Any:
+    """``core:info`` 的字段校验：**只校验 ``name``**——``desc`` 是多行长文本，合法。"""
+    return check_display_name(value) if name == "name" else value
+
+
 @dataclass(frozen=True)
 class CoreComponent:
     """``core:`` 组件的写入策略（K-7：**按组件声明**，不再按命名空间一刀切）。
@@ -66,14 +119,19 @@ class CoreComponent:
     - **协议 / 动作组件**（``core:position`` / ``core:account`` / ``core:perception``）：
       直写会绕过语义（移动不发 ``on_entity_move``、账户绑定绕过两本账、感知绕过
       G12），所以**只能走内核的动作入口**——``use`` 就是"该用哪个"。
+
+    ``validate``（K-11）：**字段级过滤器**，签名 ``(字段名, 值) -> 值``，写入前调用。
+    放在这里而不是硬编码在引擎里，理由和 ``writable`` 一样——"这个组件有什么约束"
+    应该是组件自己的声明；加新 ``core:`` 组件时顺手声明，不用再找散落的校验点。
     """
 
     writable: bool = False
     use: str = ""
+    validate: Callable[[str, Any], Any] | None = None
 
 
 CORE_COMPONENTS: dict[str, CoreComponent] = {
-    CORE_INFO: CoreComponent(writable=True),
+    CORE_INFO: CoreComponent(writable=True, validate=_check_info_field),
     CORE_POSITION: CoreComponent(writable=False, use="move_entity / clear_position"),
     CORE_ACCOUNT: CoreComponent(writable=False, use="claim_avatar / release_avatar"),
     CORE_PERCEPTION: CoreComponent(writable=False, use="set_perception"),
@@ -81,6 +139,31 @@ CORE_COMPONENTS: dict[str, CoreComponent] = {
 """内核组件的写入策略表。**缺省拦截**（fail-closed）：未列出的 ``core:`` 组件一律
 拒绝——守卫的意义就是防"忘了声明"，而失败模式必须是"少一个能力"，
 不能是"多一个后门"。"""
+
+
+def validate_core_field(component: str, name: str, value: Any) -> Any:
+    """写入前按组件声明校验**一个字段**（K-11）。未声明校验的组件 → 原样返回。"""
+    spec = CORE_COMPONENTS.get(component)
+    if spec is None or spec.validate is None:
+        return value
+    return spec.validate(name, value)
+
+
+def validate_core_payload(component: str, payload: dict) -> dict:
+    """写入前按组件声明校验**整块**组件数据（``add_component`` / ``set_component`` /
+    ``update_entity`` 用）。"""
+    spec = CORE_COMPONENTS.get(component)
+    if spec is None or spec.validate is None:
+        return payload
+    return {k: spec.validate(k, v) for k, v in payload.items()}
+
+
+def validate_core_components(components: dict[str, dict]) -> dict[str, dict]:
+    """整块组件字典里的 ``core:`` 校验（``update_entity(components=…)`` 用）。"""
+    return {
+        key: (validate_core_payload(key, data) if key in CORE_COMPONENTS else data)
+        for key, data in components.items()
+    }
 
 
 CORE_SHELL_MENU = "core:shell.menu"
