@@ -48,5 +48,5 @@ line-length = 88
 target-version = "py310"  # 与 requires-python >=3.10 对齐
 
 [tool.ruff.lint]
-select = ["F", "W", "E", "ASYNC", "C4", "Q", "I", "UP"]
+select = ["F", "W", "E", "ASYNC", "C4", "Q", "I", "UP", "BLE"]
 ignore = ["F403", "F405", "E501", "ASYNC230", "ASYNC240"]
