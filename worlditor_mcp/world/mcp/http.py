@@ -16,6 +16,7 @@ WebUI 与远程 MCP 客户端的**单一连接源**：
 
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
 import urllib.parse
@@ -590,8 +591,15 @@ async def _play_web(request: Request) -> Response:
     if not target.is_relative_to(web_dir) or not target.is_file():
         raise HTTPException(404, "资源不存在")
     content = target.read_bytes()
+    # P7：内容哈希 ETag + no-cache 重校验。玩家端每次刷新都会取「我」的组件，
+    # 内容没变就回 304——不重复下载，也不会拿到旧版本（no-cache = 每次都校验）。
+    etag = '"' + hashlib.sha256(content).hexdigest() + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    inm = request.headers.get("if-none-match", "")
+    if inm and etag in {v.strip() for v in inm.split(",")}:
+        return Response(status_code=304, headers=headers)
     media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-    return Response(content=content, media_type=media_type)
+    return Response(content=content, media_type=media_type, headers=headers)
 
 
 # ---------- 组装 ----------

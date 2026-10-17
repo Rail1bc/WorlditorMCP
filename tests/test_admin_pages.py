@@ -199,6 +199,16 @@ def test_admin_page_web_and_uninstall(tmp_path):
         # 服务的是仓库提交在案的参考组件（夹具从 tests/fixtures 复制而来）
         assert "AdminShop" in resp.text
         assert f"/admin/play-pages/{PLAY_ID}/shop" in resp.text
+        # P7：内容哈希 ETag + no-cache；内容没变回 304（不重复下载、也不吃旧版本）
+        etag = resp.headers.get("etag")
+        assert etag and etag.startswith('"')
+        assert resp.headers.get("cache-control") == "no-cache"
+        again = await admin_client.get(
+            f"/plays/{PLAY_ID}/web/admin-shop.js",
+            headers={**h, "If-None-Match": etag},
+        )
+        assert again.status_code == 304
+        assert again.content == b""
         # uninstall → 注册清理 + 资源 404
         resp = await admin_client.post(f"/admin/plays/{PLAY_ID}/uninstall", headers=h)
         assert resp.status_code == 200, resp.text
@@ -501,3 +511,26 @@ async def _accounts_search_body(admin_client, identity):
     resp = await admin_client.get("/admin/accounts?sort=created_asc", headers=h)
     usernames = [a["username"] for a in resp.json()["accounts"]]
     assert usernames == sorted(usernames, key=lambda u: u)
+
+
+def test_admin_ui_hooks_endpoint_reports_hits(tmp_path):
+    """K-5：管理端能查到每个界面钩子的命中次数（从未命中 = 多半 kind 写错）。"""
+
+    async def body(admin_client, _play_client, identity, engine, _loader):
+        from worlditor_mcp.world.model import UiBlock
+
+        async def provider(api, block):
+            return [UiBlock(kind="text", text="我")]
+
+        engine.register_ui_hook("core:shell.menu", "after", provider, play_id="p1")
+        engine.register_ui_hook("core:shell.menu", "before", provider, play_id="p1")
+        await engine.apply_ui_hooks(UiBlock(kind="core:shell.menu"))
+
+        h = {"Authorization": f"Bearer {await _admin_token(identity)}"}
+        resp = await admin_client.get("/admin/ui-hooks", headers=h)
+        assert resp.status_code == 200
+        got = {(r["kind"], r["position"]): r["hits"] for r in resp.json()["ui_hooks"]}
+        assert got[("core:shell.menu", "after")] == 1
+        assert got[("core:shell.menu", "before")] == 1
+
+    _run(_scenario(tmp_path, body))
