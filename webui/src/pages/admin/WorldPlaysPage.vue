@@ -183,6 +183,34 @@
           </table>
         </div>
 
+        <!-- 界面钩子（K-5：从未命中 = 多半 kind 写错，或目标视图没人打开过） -->
+        <div v-if="tab === 'hooks'" class="tab-body">
+          <p v-if="!hooksOfPlay.length" class="dim">
+            该玩法包没有注册界面钩子
+          </p>
+          <table v-else class="table">
+            <thead>
+              <tr>
+                <th>目标块</th>
+                <th>位置</th>
+                <th>命中</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="hk in hooksOfPlay" :key="hk.kind + hk.position">
+                <td><code>{{ hk.kind }}</code></td>
+                <td>{{ hk.position }}</td>
+                <td :class="{ dim: !hk.hits }">
+                  {{ hk.hits ? hk.hits + " 次" : "从未命中" }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="dim">
+            「从未命中」有两种可能：kind 写错，或目标块从没被渲染（比如视图没人打开）。
+          </p>
+        </div>
+
         <!-- 全局（代码层）操作：影响所有世界 -->
         <details class="global-ops">
           <summary>高级：全局加载状态（影响所有世界）</summary>
@@ -275,6 +303,7 @@ const components = ref([]); // 组件诊断（D44：按 source 的四象限 + �
 const tools = ref([]);
 const services = ref([]);
 const views = ref([]);
+const uiHooks = ref([]);
 const overrides = ref([]);
 const filters = ref([]);
 const world = ref(null);
@@ -289,6 +318,7 @@ const tabs = [
   { key: "tools", title: "工具" },
   { key: "services", title: "服务" },
   { key: "views", title: "视图" },
+  { key: "hooks", title: "钩子" },
   { key: "primitives", title: "原语" },
 ];
 
@@ -327,6 +357,9 @@ const servicesOfPlay = computed(() =>
 );
 const viewsOfPlay = computed(() =>
   views.value.filter((v) => v.play_id === selected.value)
+);
+const hooksOfPlay = computed(() =>
+  uiHooks.value.filter((hk) => hk.play_id === selected.value)
 );
 const primsOfPlay = computed(() => [
   ...overrides.value
@@ -369,7 +402,7 @@ async function load() {
   busy.value = true;
   error.value = "";
   try {
-    const [worlds, pl, tl, sv, vw, ov, comp] = await Promise.allSettled([
+    const [worlds, pl, tl, sv, vw, ov, comp, hk] = await Promise.allSettled([
       apiGet("/admin/worlds"),
       apiGet("/admin/plays"),
       apiGet("/admin/tools"),
@@ -377,6 +410,7 @@ async function load() {
       apiGet("/admin/views"),
       apiGet("/admin/overrides"),
       apiGet("/admin/orphan-components"),
+      apiGet("/admin/ui-hooks"),
     ]);
     if (worlds.status === "fulfilled") {
       const list = worlds.value.worlds || [];
@@ -401,6 +435,7 @@ async function load() {
       filters.value = ov.value.filters || [];
     }
     if (comp.status === "fulfilled") components.value = comp.value.components || [];
+    if (hk.status === "fulfilled") uiHooks.value = hk.value.ui_hooks || [];
   } finally {
     busy.value = false;
   }

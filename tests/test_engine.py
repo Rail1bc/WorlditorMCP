@@ -672,6 +672,51 @@ def test_apply_ui_hooks_positions(tmp_path):
     _run(_scenario(tmp_path, fn))
 
 
+def test_ui_hook_hits_are_observable(tmp_path):
+    """K-5：注册了却一次没命中的钩子要能看见——kind 是开放命名空间，静默最恼人。
+
+    内核不做静态校验（块在运行时才构造：壳层挂载点 / 交互结果 / 包自造块），
+    只把"命中过几次"摆出来。``hits == 0`` 可能是 kind 写错，也可能是目标视图
+    没人打开过——所以是观测，不是判定。
+    """
+
+    from worlditor_mcp.world.model import UiBlock
+
+    async def fn(engine: WorldEngine, clock=None):
+        engine.register_ui_hook(
+            "core:shell.menu",
+            "after",
+            _hook_provider([UiBlock(kind="text", text="我")]),
+            play_id="player",
+        )
+        engine.register_ui_hook(
+            "core:shell.menuu",  # 手滑：永远不会被查到
+            "after",
+            _hook_provider([UiBlock(kind="text", text="不出现")]),
+            play_id="player",
+        )
+
+        rows = {r["kind"]: r for r in engine.list_ui_hooks()}
+        assert rows["core:shell.menu"]["hits"] == 0
+        assert rows["core:shell.menuu"]["hits"] == 0
+        assert rows["core:shell.menu"]["position"] == "after"
+
+        await engine.apply_ui_hooks(UiBlock(kind="core:shell.menu"))
+        rows = {r["kind"]: r for r in engine.list_ui_hooks()}
+        assert rows["core:shell.menu"]["hits"] == 1
+        assert rows["core:shell.menuu"]["hits"] == 0
+
+        # 返回非 list：不再静默（记 warning），也不计命中
+        engine.register_ui_hook(
+            "page", "before", _hook_provider("not-a-list"), play_id="p2"
+        )
+        await engine.apply_ui_hooks(UiBlock(kind="page"))
+        rows = {r["kind"]: r for r in engine.list_ui_hooks()}
+        assert rows["page"]["hits"] == 0
+
+    _run(_scenario(tmp_path, fn))
+
+
 def test_ui_block_icon_round_trips():
     """K-8：``UiBlock`` 有 ``icon``——抽屉条目 / 底栏 tab 需要"标题 + 图标"。
 

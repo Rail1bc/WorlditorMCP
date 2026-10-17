@@ -170,10 +170,16 @@ class _InteractionBinding:
 
 @dataclass
 class _UiHookBinding:
-    """一次界面钩子注册（B9：before/after/replace）。"""
+    """一次界面钩子注册（B9：before/after/replace）。
+
+    ``hits``（K-5）记录这条钩子**被应用过多少次**：注册了却一次都没命中，
+    是"kind 写错"与"目标视图没人打开"的共同症状，静默不报——所以只观测、
+    不判定（见 ``list_ui_hooks``）。
+    """
 
     play_id: str
     provider: UiHookProvider
+    hits: int = 0
 
 
 @dataclass
@@ -1969,6 +1975,28 @@ class WorldEngine:
                 block, entity_id, self._active_play_set(entity_id)
             )
 
+    def list_ui_hooks(self) -> list[dict]:
+        """全部界面钩子及命中次数（K-5：管理端"注册了怎么没显示"的第一现场）。
+
+        ``hits == 0`` 有两种可能，内核**故意不判定**：目标块从没被渲染过（正常，
+        视图没人打开）、或 ``block_kind`` 写错/对不上（真问题）。注册时静态校验
+        做不到——块是运行时构造的（壳层挂载点、交互结果、包自造块都在开放命名
+        空间里），所以只观测、不猜测。
+        """
+        return sorted(
+            (
+                {
+                    "play_id": binding.play_id,
+                    "kind": kind,
+                    "position": position,
+                    "hits": binding.hits,
+                }
+                for (kind, position), bindings in self._ui_hooks.items()
+                for binding in bindings
+            ),
+            key=lambda row: (row["play_id"], row["kind"], row["position"]),
+        )
+
     async def shell_menu(self, *, entity_id: str | None = None) -> Any:
         """**壳层挂载点**：页眉抽屉的块（K-1）。
 
@@ -2061,7 +2089,17 @@ class WorldEngine:
                     )
                     continue
                 if not isinstance(injected, list):
+                    # K-5：返回了非 list 等于"什么也没注入"，同样不能静默
+                    logger.warning(
+                        "[worlditor] ui_hook(%s/%s) 的 provider 返回 %s，应为 list"
+                        "——已跳过（%s）",
+                        block.kind,
+                        position,
+                        type(injected).__name__,
+                        binding.play_id,
+                    )
                     continue
+                binding.hits += 1
                 fired.add(hook_key)
                 if position == "replace" and injected:
                     replaced = injected[0]

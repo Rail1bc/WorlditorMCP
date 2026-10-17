@@ -189,6 +189,12 @@ async def _services(request: Request) -> Response:
     return JSONResponse({"services": _engine(request).list_services()})
 
 
+async def _ui_hooks(request: Request) -> Response:
+    """界面钩子与命中次数（K-5：诊断"注册了怎么没显示"）。"""
+    _require_admin(request)
+    return JSONResponse({"ui_hooks": _engine(request).list_ui_hooks()})
+
+
 # ---------- 世界与组织树（D15） ----------
 
 
@@ -983,6 +989,7 @@ def build_admin_app(
         Route("/admin/tools", _tools),
         Route("/admin/views", _views),
         Route("/admin/services", _services),
+        Route("/admin/ui-hooks", _ui_hooks),
         Route("/meta", _meta),
         Route("/admin/worlds", _worlds_list),
         Route("/admin/worlds", _world_create, methods=["POST"]),
