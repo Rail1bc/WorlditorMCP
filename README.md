@@ -151,6 +151,8 @@ disable/过滤器链，D11/G14）、跨包服务（M3）、放置/编辑实体�
 - `docs/PLAY_DEV.md`：玩法包开发指南（API 全量 + 约定 + 示例）
 - `docs/HTTP_API.md`：HTTP 端点参考（玩家端口 + 管理端口：路径 / 档位 / 请求体 / 示例）
 - `docs/NGINX_DEPLOY.md`：域名 + HTTPS 反向代理部署（含双端口暴露边界）
+- `docs/PLAYER_PAGE_PLAN.md`：玩家包与界面扩展（剩余工作 / K-5·K-10·P7 / 进场流程）；
+  `docs/PLAYER_MODEL_PLAN.md`、`docs/ENTITY_FOLD_PLAN.md` 是已完成的施工档案
 - `docs/CORE_AUDIT.md`：内核边界审查（零玩法包视角）+ 决策记录（其 §4 待办多数已收编进 `GAPS.md` G26/G49–G52）
 - `DESIGN.md`：设计/协议/路线（唯一权威）
 - `GAPS.md`：平台缺口清单（历史与观察项）

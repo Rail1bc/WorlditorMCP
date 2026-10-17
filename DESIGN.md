@@ -546,7 +546,7 @@ fields       = **按组件分组**：{组件键: [该组件声明的字段 + 别
   能工作"的硬依赖（如出生礼包包发货必须调背包包的服务）
 - **身份与位置永不依赖部件**：实体存在/移动/身份永远可用（层面归属内核）
 
-**落地状态**：阶段 1 = starter 拆分 + player 零依赖壳（✅ 已落地）；阶段 3 =
+**落地状态**：阶段 1 = starter 拆分 + player 零依赖壳（曾以内置包落地，**v0.7.0 随 D31 一起废弃**；D48 只把其中的玩家包重新内置）；阶段 3 =
 视图挂载点（**已落地**：`ui_hook` 接线 G18 + 壳层挂载点 D52；~~G4 插槽~~**已否决**）+
 按需内核级部件注册表
 （register_player_part：声明/冲突仲裁/管理页挂载清单——等真实多部件需求）。
@@ -712,7 +712,7 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
    构建推送 ghcr.io/rail1bc/worlditor）——v0.1.0 起已多次走通
 ```
 
-## 9. 决策记录（D1–D31，已全部确认）
+## 9. 决策记录（D1–D56，已全部确认）
 
 > **编号说明（读文档前先看这三行）**：
 > - `D*` = 本文件的决策号，唯一权威，一条一个结论。
@@ -861,7 +861,7 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 - ECS 框架普遍假设"世界是进程内产物、可重启重建"；worlditor 的前提是**世界必须持久化
   且可被管理端治理**（编辑器 / 模板 / 级联清理 / 身份保护）。
 
-## 12. 实体模型 v2：实体 = id + 组件（D32–D40 已落地）
+## 12. 实体模型 v2：实体 = id + 组件（D32–D44 已落地）
 
 > **状态**：✅ **D32–D44 已落地**（2026-10-14 立项；实体模型 v2 已完成）。
 > **第 1 期已落地**：数据面组件化（`components` + 信封 + `core:` 命名空间 + 组件原语）
@@ -889,9 +889,9 @@ M4 验证与收尾：一个"替代玩法包"（如同方向延伸视野 / 朝向
 
 | 期 | 内容 | 状态 |
 |---|---|---|
-| **1** | 数据面组件化：`components` + 信封 + `core:` 命名空间 + **无必填** + 组件原语（`add` / `set` / `remove` / `get` / `list_component`）+ `core:perception` | ✅ **已落地**（`components` 落 `components_json`；当时收窄为"数据面容器 + 感知组件"，表结构 v8——现为 **v10 / 7 列**，见 12.3） |
+| **1** | 数据面组件化：`components` + 信封 + `core:` 命名空间 + **无必填** + 组件原语（`add` / `set` / `remove` / `get` / `list_component`）+ `core:perception` | ✅ **已落地**（`components` 落 `components_json`；当时收窄为"数据面容器 + 感知组件"，表结构 v8——**现在表结构 v13 / entities 4 列**，见 12.3） |
 | **1b** | **阻挡机制整体移除**（D34 的一半，原排第 2 期） | ✅ **已落地**（`block_move` / `_is_blocking` / `_blocker_at` / `core:state` 全删，见 12.7） |
-| **1c** | **名字 / 描述 / 账户绑定进组件**（原属第 2 期）：`core:info`（`name` / `desc`）+ `core:account`（`user_id`） | ✅ 已落地（历史表结构 v9；当前为表结构 v11 / 4 列，见 12.3 / 12.4） |
+| **1c** | **名字 / 描述 / 账户绑定进组件**（原属第 2 期）：`core:info`（`name` / `desc`）+ `core:account`（`user_id`） | ✅ 已落地（历史表结构 v9；**现在表结构 v13 / 4 列**，见 12.3 / 12.4） |
 | **1d** | **位置进组件**：`core:position`（`map_id` / `row` / `col`）+ **D36"不在任何地方"**（原属第 2 期） | ✅ **已落地**（表结构 **v10**、`entities` **7 列**——位置三列删除；`Entity.map_id` / `row` / `col` 变**只读 property**（缺失 → `None`，**不是** `""` / `0`），新增 `has_position()` / `pos_key()` / `require_position()`；`list_entities` / `query_entities` 默认 `include_absent=False` 跳过无位置实体；`move()` 对无位置实体报错"实体不在任何地块"；前端位置读点收进 `entity.js` 的 `entityPosition()` / `positionLabel()` / `positionSortKey()`） |
 | ~~**2（旧提案）**~~ | ~~`kind` / `tags` 折叠为组件 + `core:player`~~ | 历史方案，已由 D41–D44 取代并落地；`core:player` 未引入，身份判据为 `core:account`（D42）。 |
 | **2** | **能力面折叠（D41–D44）**：`kind` / `tags` 删两列 + 声明合并 + 裸名解析 + 身份移除 + 写入边界 + 删摊平与分类字段 + 卸载/清理语义 | ✅ **已落地（D41–D44 + 前端）**。落地面：表 **v11 / 4 列**（`id` / `components_json` / `revision` / `changed_tick`，`kind` / `tags_json` 进禁列名单，`last_active_ts` 改为只在内存）、`to_dict()` **5 键**、**能力 = 组件的存在**（`Entity.has_component()`；无"基底类型"字段）、声明只有一套 `declare_component`（`register_entity_kind` / `register_entity_tag` / `register_entity_type` 为等价旧名，`register_entity_kind(tags=…)` 作废 → 报错，预设归实体模板）、字段**按组件分组**（`capabilities()["fields"]` 是 `{组件键: [字段]}`）、`add_category_fields` 删除、同组件内同名字段重复声明报错、`/admin/kinds` 只剩一张组件清单。**D44**：`capabilities()` 四象限（`active` / `inactive` / `orphan` / `fictional`）、`diagnose_components()` + `GET /admin/orphan-components` + `POST /admin/orphan-components/purge`（服务端只接受"包真的不在了"、默认 dry-run、`local:` 永不可清）、**`_tag_owner` 已删**（归属读键 + `spec.play_id`）、前端"玩法包"页两栏（停用=不可清 / 已卸载=可清）。⚠ 原"2a 不改表 + 2b 改表"的两步切分**已放弃**：中间态不是设计要的形态，而 D13 本就"删库重来"、无历史数据要兼容——**一步做到位** |
@@ -966,7 +966,7 @@ Entity(
 ### 12.3 落库形态
 
 ```sql
--- 当前落库形态（v11 / D41）：4 列
+-- 当前落库形态（entities 自 v11 / D41 起为 4 列；当前表结构 v13）
 CREATE TABLE entities (
     id              TEXT PRIMARY KEY,
     components_json TEXT NOT NULL DEFAULT '{}',  -- 唯一的数据**与能力**单位（含 core:position / core:info / core:account）

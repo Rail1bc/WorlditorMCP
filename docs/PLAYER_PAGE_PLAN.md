@@ -126,7 +126,7 @@ register_view("player", title="我", icon="🙋", provider=..., layout="fullscre
 | 你要的 | 现状 | 证据 |
 |---|---|---|
 | 页眉显示**当前世界 + 地图名** | ✅ | `engine.where` `engine.py:2691` → `GET /where` `http.py:561` |
-| 页眉右侧按钮开抽屉 | ✅ | `App.vue:16`（`☰`）、`:49`（遮罩）、`:52`（面板） |
+| 页眉右侧按钮开抽屉 | ✅ | `App.vue:18`（`☰`）、`:49`（遮罩）、`:52`（面板） |
 | 抽屉主体留给玩法包 | ✅ **机制** | `engine.shell_menu` `engine.py:1972`；`GET /chrome` `http.py:545`（**要求 play/admin**） |
 | 抽屉底部退出登录 | ✅ | `App.vue:65` |
 | 抽屉里有「我」 | ⬜ 需玩家包本体 | 机制在（D52），**入口未写** |

@@ -88,7 +88,7 @@ def test_docs_drop_removed_capability_key():
 
 
 def test_docs_state_current_schema_version():
-    """面向作者的文档必须说对表结构版本（v11 / 4 列）。"""
+    """面向作者的文档必须说对表结构版本（当前 v13）。"""
 
     from worlditor_mcp.world.store import SCHEMA_VERSION
 

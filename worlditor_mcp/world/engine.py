@@ -2080,13 +2080,9 @@ class WorldEngine:
         # K-2：注入的块**也展开**。原先这里是 ``before + block.blocks + after``，
         # 注入进去的块从此是叶子——装备包注入的装备栏无法再被饰品包扩展。
         block.blocks = (
-            await self._expand_children(
-                before, entity_id, active, depth, downstream
-            )
+            await self._expand_children(before, entity_id, active, depth, downstream)
             + block.blocks
-            + await self._expand_children(
-                after, entity_id, active, depth, downstream
-            )
+            + await self._expand_children(after, entity_id, active, depth, downstream)
         )
         return block
 

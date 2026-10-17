@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS world_log (
     data_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_world_log_entity ON world_log(entity_id);
--- 身份（B13 自助注册 / B4 token 三档）
+-- 身份（B13 自助注册 / B4 token 两档）
 CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
@@ -590,9 +590,7 @@ class WorldStore:
                 raise self._incompatible_error(where, "play_ids_json", e) from e
             if play_ids is not None and (
                 not isinstance(play_ids, list)
-                or not all(
-                    isinstance(play_id, str) and play_id for play_id in play_ids
-                )
+                or not all(isinstance(play_id, str) and play_id for play_id in play_ids)
             ):
                 raise self._incompatible_error(
                     where,
@@ -1232,20 +1230,6 @@ class WorldStore:
         )
         await self._commit()
         self.invite_codes[code]["used"] = used
-        return True
-
-    async def consume_invite_code(self, code: str) -> bool:
-        """原子消费未使用的邀请码；调用方必须持有引擎锁。"""
-        assert self._conn is not None
-        if code not in self.invite_codes:
-            return False
-        cursor = await self._conn.execute(
-            "UPDATE invite_codes SET used = 1 WHERE code = ? AND used = 0", (code,)
-        )
-        if cursor.rowcount != 1:
-            return False
-        await self._commit()
-        self.invite_codes[code]["used"] = True
         return True
 
     # ---------- 世界元数据（world_meta 表） ----------

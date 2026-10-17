@@ -111,11 +111,16 @@ def test_every_write_path_rejects_bad_name(tmp_path):
             # 合法的仍然能写：门没被焊死
             await api.set_data(entity.id, "name", "李四", component=CORE_INFO)
             assert engine.store.entities[entity.id].name == "李四"
-            assert engine.store.entities[entity.id].component(CORE_INFO)["name"] == "李四"
+            assert (
+                engine.store.entities[entity.id].component(CORE_INFO)["name"] == "李四"
+            )
 
             # desc 不受影响：描述本来就是多行长文本
             await api.set_data(entity.id, "desc", "第一行\n第二行", component=CORE_INFO)
-            assert "第二行" in engine.store.entities[entity.id].component(CORE_INFO)["desc"]
+            assert (
+                "第二行"
+                in engine.store.entities[entity.id].component(CORE_INFO)["desc"]
+            )
 
             # 边界：恰好 24 个字符可以，25 个不行
             await api.set_data(
@@ -123,7 +128,10 @@ def test_every_write_path_rejects_bad_name(tmp_path):
             )
             with pytest.raises(WorldError, match="最多"):
                 await api.set_data(
-                    entity.id, "name", "长" * (DISPLAY_NAME_MAX + 1), component=CORE_INFO
+                    entity.id,
+                    "name",
+                    "长" * (DISPLAY_NAME_MAX + 1),
+                    component=CORE_INFO,
                 )
         finally:
             await engine.terminate()

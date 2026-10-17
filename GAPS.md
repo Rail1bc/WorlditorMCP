@@ -11,6 +11,36 @@
 
 ---
 
+## 0. 当前未结（先看这张表）
+
+> 本表之外按时间保留了**全部原始条目**（含已结、已失效与设计存档）。查"还差什么"
+> 只看本表；查"当时怎么想的"再往下翻。
+
+| # | 事项 | 状态 | 详见 |
+|---|---|---|---|
+| **G64** | 内置玩家包（第一个玩法包）：UI 层 + 内置化 | **方向已定，未开工**——唯一的主体工作 | 本条 + `docs/PLAYER_PAGE_PLAN.md` §4 / §9 |
+| K-5 | 未命中的 `ui_hook` 静默不触发 | 未做；玩家包发布前的自检 | `PLAYER_PAGE_PLAN` §5 |
+| K-10 | 视图 `landing` 默认落地 | 未做；Q-11 已定为「进场流程」 | `PLAYER_PAGE_PLAN` §5 / §11 |
+| P7 | `/plays/*/web/*` 没有 `ETag` / `Cache-Control` | 未做 | `PLAYER_PAGE_PLAN` §5 |
+| G62 | `call_service` 没有世界过滤 | **要处理**（语义变更，等第二个包） | 本条 |
+| G63 | `/state` 把所有人的 `core:account.user_id` 发出去 | 待决策 | 本条 |
+| G36 | 编辑器 / 前端可用性清单 | 部分已修（`PlayPageHost`）；其余逐条未复核 | 本条 |
+| G37 | 工程 / 流程：CI 比对已提交的 `dist`、浏览器 E2E 入库、Python 3.10 真跑 | 未做 | 本条 |
+| G26 | 管理端健壮性收尾 | 部分已修 | 本条 |
+| G52 / G61 | 实体模板按世界激活过滤 | 待做 | 本条 |
+| G23 | 文件夹多选 / 复制 | 唯一残留（撤销重做已明确不做，D24） | 本条 |
+| G16 / G58 | 认证端点抗滥用（退避 / 限流 / 等成本校验） | ⏸ 暂缓（同一件事的两条记录） | 本条 |
+| G59 | 玩法包间名字级契约（`provides` / `consumes`） | ⏸ 暂缓 | 本条 |
+| G60 | 不可信玩法包隔离 | ⏸ 暂缓 | 本条 |
+| G3 / G5 / G9 / G10 / G25 / G27 | tick 粒度 / `spawn_task` / instructions 片段 / resources·prompts / 世界包更新语义 / 管理页守卫 | 观察，等真实需求 | 各条 |
+
+**已结、但容易被当成"未结"的**：G1（G17 已补全）、G2、G6、G7、G8、G11、G12、G13、G14、
+G15、G18、G19（机制仍在，但已无内置包可覆盖）、G20、G21、G22、G24、G35、G38–G40、G42、
+G43、G46–G51、G53–G57。**设计存档**（不排期）：G41（多格实体）、G44（阻挡组件）、
+G45（堆叠表示）。
+
+---
+
 ## 已解决（本轮核心审查修复）
 
 - 复合地图移动、复制、删除及创建时归属已收束到单事务提交，避免失败留下半成品；
@@ -28,9 +58,10 @@
   - 玩法包 API 读自家/成员家不受限；`list_maps` 带可见性过滤参数
   - 管理端口可见全部
 - **成本**：~20 行内核 + /state 过滤 + 测试（事实层轻扩展，不违背红线）
-- **状态**：⚠ **部分解决**（地图 `visible` 字段 + `/state` 在场过滤，admin 全见）；
-  文档方案里的"`list_maps` 带可见性过滤参数"**没做**（`engine.list_maps()` 无参数），
-  `/scene`、SSE 已补目标地图授权；HTTP 交互入口仍需继续收束 viewer 上下文，`list_actions` 仍未过滤 → 真实尾巴记在 **G17**
+- **状态**：✅ **已解决**——`/state` 按 `map_visible_to` 过滤（admin 全见）、`/scene` 走
+  `can_observe_entity`、SSE 按订阅者过滤、动作菜单带 viewer 上下文（**G17 已补**，见本节
+  末尾的更正）。原方案里的"`list_maps` 带可见性过滤参数"**不采纳**：可见性治理归玩法包
+  （D14 / D17），内核不替包做 ACL——包要过滤就自己按 `map.visible` 筛
 
 ### G2 delete_map 缺失
 - **触发**：自有世界玩法——家地图生命周期需要删除，但 engine 只有
@@ -210,9 +241,9 @@
 - **方案**：`/scene` 补 `map_visible_to` 过滤（~5 行）；SSE 订阅对象带
   订阅者身份按可见性过滤（~30 行接口变更，admin 全见）；interact 前置
   检查；各补 HTTP 级测试
-- **状态**：⏸ 暂缓（记录于 2026-09 安全审查——**报告未入库**，本条即 P0-3 正文；
-  2026-09-24 复核：`map_visible_to` 全仓唯一调用点仍是 `http.py` 的 `_state`，
-  `/scene`／SSE／interact／`list_actions` 四处缺口**全部仍成立**）
+- **状态**：✅ **已修**（以本节末尾「G17 私有地图可见性：已修」的更正为准）——
+  `/scene` 走 `engine.can_observe_entity()`、SSE 按订阅者过滤、动作菜单带 viewer
+  上下文；下面 2026-09-24 的复核已过期，保留作历史（原文见上行方案与影响）
 
 ### G18 ui_hook 未接线（已解决）
 - **触发**：P0-1 修复期间核查——`apply_ui_hooks` 在生产路径无调用者
@@ -551,6 +582,11 @@
 
 ### G35 内核 / 内置包的小口子（静默或低危）
 
+> **本节已结（保留作历史）**：① `register_interaction` 同名现在**报错**（见本节末尾
+> 「G35 交互动作静默覆盖：已修」）；② `demo_world` 的"续跑"分支已随 `import_bundle`
+> 单事务重写为**明确跳过**（幂等是设计，不再是"不可达的承诺"）；③/④ 所属的 items 包
+> v0.7.0 已废弃（D31）；⑤ `_ui_components` 已删；⑥ 注释漂移已随 D41 统一。
+
 - **交互动作注册静默覆盖**：`engine.py` 的 `self._interactions[action] = …` 无冲突
   检查（工具/视图/服务/管理页/原语都有 D2 式报错）→ 两个包注册同名 action 时
   后者**静默顶掉**前者（G19 同族）。
@@ -574,11 +610,10 @@
 - **网格按包围盒稠密渲染、无上限**（`MapGrid.vue` 双层循环）：坐标框允许输入任意
   值，建完 (0,0) 再输 (5000,5000) ⇒ 2500 万按钮，浏览器冻死。修法：加渲染上限
   （超出提示"缩放/平移查看"）或虚拟滚动。
-- **玩法包管理页切换不重载组件**（`PlayPageHost.vue:87-91`）：标题换成新包、
-  内容仍是上一个包的组件（`hashchange` 只同步 ref，不重新加载 `comp`）。
-- **`addEventListener` 不清理**：`MapEditorPage.vue`、`PlayPageHost.vue`、
-  `AdminPanel.vue` 在 `onMounted` 注册 `hashchange` 却无 `onUnmounted`
-  （`MapGrid.vue` 是正确写法）→ 组件卸载后旧闭包常驻、重复注册。
+- ✅ **已修**：~~玩法包管理页切换不重载组件~~——`PlayPageHost.vue` 现在
+  `watch([playId, pageKey], load)` 并在加载前清空上一个 `comp`，用 `loadSeq` 丢弃过期结果。
+- **`addEventListener` 不清理**：`MapEditorPage.vue`、`AdminPanel.vue` 仍无
+  `onUnmounted`（`PlayPageHost.vue` / `MapGrid.vue` 已正确清理）→ 组件卸载后旧闭包常驻。
 - **`localStorage` 无兜底**（`api.js`、`AdminPanel.vue`、各视图 js）：隐私模式下
   `getItem` 直接抛 → 启动全白。
 - **玩法包视图硬编码 `/world/mcp`**（`view.js`/`bag.js`/`log.js`/`profile.js`）与
@@ -958,12 +993,13 @@
     （判能力用 `has_component`）；`declare_component` 为唯一声明入口（旧名为等价别名）；
     `register_entity_kind(tags=…)` 作废（预设归实体模板）；字段按组件分组、分类字段删除；
     `capabilities()` 报 `components` / `active_components` / `inactive_components` /
-    `unknown_components` / `interactions` / 分组 `fields`；`list_kinds()` 只剩一张组件清单。
+    `orphan_components` / `fictional_components` / `interactions` / 分组 `fields`；
+    `list_kinds()` 只剩一张组件清单。
     **实现时补的一条（原设计没写）**：`local:` 是**内容与跨包协作的公共命名空间**——
     世界内容用 `local:` 写实体组件，行为包**声明 `local:<同键>`** 即可对接
     （否则"世界包 + 行为包"这对软依赖会**依赖加载顺序**：内容先导入就落 `local:`、
     行为包先声明就落 `<play_id>:`，同一份内容两种键）。见 DESIGN §12.6 落地补充
-  - **仍未做（D44 / G48）**：四象限诊断（`orphan` 与 `fictional` 分开报）、
+  - **已随 D44 补齐（见 G48）**：四象限诊断（`orphan` 与 `fictional` 分开报）、
     孤儿组件清理端点、删 `_tag_owner`
 
 ### G48 组件四象限诊断与孤儿清理（**✅ 已落地**，D44）

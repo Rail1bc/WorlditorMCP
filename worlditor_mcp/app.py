@@ -44,7 +44,7 @@ class WorlditorService:
     Attributes:
         settings: 服务配置。
         engine: 世界引擎（事实层 + 原语 + 事件总线）。
-        identity: 身份服务（账户 / token 三档 / 邀请码）。
+        identity: 身份服务（账户 / token 两档 / 邀请码）。
         play_loader: 玩法包加载器（内置包 + 数据目录 plays/）。
         mcp_server: FastMCP 实例（工具已注册）。
     """

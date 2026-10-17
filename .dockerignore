@@ -8,3 +8,11 @@ __pycache__
 .pytest_cache
 node_modules
 data
+
+# 本地开发 / 验证的私有目录（不该进构建上下文）
+.venv
+venv
+.uitools
+.smoke_data
+.idea
+.vscode

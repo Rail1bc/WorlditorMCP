@@ -20,7 +20,7 @@
 ## ✅ 检查清单 / Checklist
 
 <!--如果分支被合并，您的代码将成为本服务的一部分！在提交前，请核查以下几点内容。-->
-<!--If merged, your code will be part of this plugin! Please double-check the following items before submitting.-->
+<!--If merged, your code will be part of this project! Please double-check the following items before submitting.-->
 
 - [ ] 😊 如果 PR 中有新加入的功能，已经通过 Issue / 邮件等方式和作者讨论过。/ If there are new features added in the PR, I have discussed it with the authors through issues/emails, etc.
 - [ ] 👀 我的更改经过了良好的测试（`pytest` 全绿 + `ruff check`），**并已在上方提供了"运行截图"或"测试日志"**。/ My changes have been well-tested (`pytest` + `ruff check`), **and "Screenshots" or "Test Logs" have been provided above**.

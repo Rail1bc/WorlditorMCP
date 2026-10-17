@@ -6,7 +6,7 @@
 
 连接身份验证（token → 主体 + 行动实体）：
 - HTTP（streamable HTTP）：认证中间件校验 ``Authorization: Bearer <token>``，
-  把 ``{entity_id, tier, account_id, username}`` 注入每个 JSON-RPC 请求的
+  把 ``{entity_id, tier, account_id, username, token}`` 注入每个 JSON-RPC 请求的
   ``params._meta``，工具经 ``ctx.request_context.meta`` 读取。
 - **``entity_id`` 可以为空**（D45/D46）：它只表示"这次请求以哪具实体行动"，
   为空 = 这个主体还没有化身（或还没选定）。要不要身体由工具自己声明
@@ -36,7 +36,6 @@ logger = logging.getLogger("worlditor")
 
 # MCP 工具返回：结构化 JSON 字符串（ensure_ascii=False，LLM/UI 双端消费）
 _META_ENTITY_KEY = "worlditor_entity_id"
-_META_TIER_KEY = "worlditor_tier"
 _META_ACCOUNT_KEY = "worlditor_account_id"
 _META_USERNAME_KEY = "worlditor_username"
 _META_TOKEN_KEY = "worlditor_token"
@@ -89,12 +88,6 @@ def _meta_of(ctx: Context) -> Any:
         return ctx.request_context.meta if ctx.request_context else None
     except ValueError:  # Context 不在请求内（进程内 call_tool 等场景）
         return None
-
-
-def _tier_of(ctx: Context) -> str:
-    """连接凭据档位（HTTP 经 _meta 注入；进程内直调等场景为空串 = 不校验）。"""
-    tier = getattr(_meta_of(ctx), _META_TIER_KEY, None)
-    return tier if isinstance(tier, str) else ""
 
 
 def _entity_id(ctx: Context) -> str:

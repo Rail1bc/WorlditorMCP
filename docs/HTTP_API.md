@@ -43,7 +43,7 @@
 | POST | `/auth/logout` | 本人凭据 | 吊销当前 token |
 | POST | `/auth/change-password` | 本人凭据 | 改密（改后旧凭据失效） |
 | POST | `/auth/delete-account` | 本人凭据 | 永久注销（级联吊销凭据 + **删除该主体的全部化身** + 发 `on_principal_deleted`，不可恢复） |
-| GET | `/plays/{play_id}/web/{path}` | read / play / admin | 玩法包 `web/` 资源（视图 / 管理页组件；仅限本包目录） |
+| GET | `/plays/{play_id}/web/{path}` | play / admin | 玩法包 `web/` 资源（视图 / 管理页组件；仅限本包目录） |
 
 ## 2. 管理端口（6289）
 
