@@ -152,10 +152,11 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `register_interaction(action, handler, *, label=None)` | 全局交互动作；`async (api, req) -> InteractionResult`。⚠ 同名动作**报错拒绝**（不会静默顶掉别人的） |
 | `register_world_event(event, handler, *, interval=0.0, phase="simulate", order=0)` | 事件订阅；on_tick 必须给 interval（秒）；**phase/order 声明跨包执行顺序**（D27，见 §5.3） |
 | `register_ui_hook(block_kind, position, provider)` | UiBlock 注入（`before` / `after` / `replace`；**服务端展开**，锁内）。**注入的块也会被继续展开**（v0.9 / K-2）→ 跨包嵌套**任意层**。自定义页面请用 `register_view` + provider（§8）——`UiBlock(kind="custom")` 只保留 fallback 数据结构，**没有**组件注册 API |
-| `apply_ui_hooks(block)` | 对一棵 UiBlock 树应用全部已注册钩子（服务端展开，锁内）；玩家壳生成角色卡后调它，部件包的面板即被追加（§11） |
+| `apply_ui_hooks(block)`（**async，要 `await`**） | 对一棵 UiBlock 树应用全部已注册钩子（服务端展开，锁内）；玩家壳生成角色卡后调它，部件包的面板即被追加（§11） |
 | `register_tool(name, handler, *, description="", params=None, requires_entity=True)` | MCP 工具（见 §7）；`requires_entity=False` = 没有化身也能调（自举工具） |
 | `register_view(key, *, title, icon="", provider=None, layout="default")` | WebUI 视图（见 §8）；`title` 必填且**只能关键字传**。`layout`：`"default"` = 壳层页眉照常；`"fullscreen"` = 这个视图**自带整个屏幕**（不画页眉、不进顶栏 tab 条，**入口与返回按钮都由包自己负责**；只在组件成功加载后才生效） |
 | `register_service(name, handler)` | 跨包服务（见 §6） |
+| `register_admin_page(key, *, title, icon="", component_url, actions)` | 管理端**管理页**（§13）：`actions` = `{名字: 可调用}`，管理台按 `(play_id, key)` 排序并代理调用 |
 | `override_primitive(name, handler)` / `disable_primitive(name)` | 原语覆盖 / 禁用（见 §5） |
 | `register_primitive_filter(name, filter, *, label="")` | 原语过滤器（见 §5） |
 
@@ -178,25 +179,27 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 
 | API | 说明 |
 |---|---|
-| `get_entity(entity_id)` / `list_entities(map_id, row, col, viewer_id, *, include_absent=False)` | 实体（位置筛选，宽松：地图不存在 = 空列表）；**viewer_id 感知过滤（G12）**：隐藏 `core:perception` 里 `invisible` 为真的实体，viewer 自身 `see_invisible` 真视（§10）。`include_absent=True` 连**不在世界上**的实体一起拿（D36，见 `place_entity` 那行） |
+| `get_entity(entity_id)` / `list_entities(map_id=None, row=None, col=None, viewer_id=None, *, include_absent=False)` | 实体（位置筛选，宽松：地图不存在 = 空列表）；**viewer_id 感知过滤（G12）**：隐藏 `core:perception` 里 `invisible` 为真的实体，viewer 自身 `see_invisible` 真视（§10）。`include_absent=True` 连**不在世界上**的实体一起拿（D36，见 `place_entity` 那行） |
 | `list_components(entity_id)` / `get_component(entity_id, component)` | 组件整块读（**只读，不进原语分派表**）：组件名列表（稳定排序）/ 组件数据（不存在 = `None`）；见 §10 |
-| `query_entities(*, tags, exclude_tags, map_id, world_id, row, col, viewer_id, changed_since_tick, changed_since_revision, where, limit, include_absent=False)` | **实体查询（D26，见 §5.2）**：按标签查一批实体，不再需要"全量拿 + 自己筛"；同样支持 `include_absent` |
+| `query_entities(*, tags=None, exclude_tags=None, map_id=None, world_id=None, row=None, col=None, viewer_id=None, changed_since_tick=None, changed_since_revision=None, where=None, limit=None, include_absent=False)` | **实体查询（D26，见 §5.2）**：按标签查一批实体，不再需要"全量拿 + 自己筛"；同样支持 `include_absent` |
 | `current_tick()` / `world_revision()` | 变更游标（D28）：tick 窗口号 / 全局变更号（见 §5.4） |
 | `get_location(map_id, row, col)` / `get_map(map_id)` | 地块 / 地图（Location 含 connections） |
 | `list_locations(map_id=None)` / `list_maps()` | 地块 / 地图**清单**（只读，深拷贝）。**"人从哪来"是玩法的事**（D45：内核没有出生点）——想把人放进世界的包得先看得见地块与地图，否则只能猜坐标 |
 | `list_actions(target_id, *, viewer_id=None, tier="")` | 目标可用动作按钮（UI 菜单）。传 `viewer_id`（+`tier`）时先过观察权限：看不见的目标（隐身 / 私有地图）返回**空菜单**——玩法包自建界面也能按感知过滤 |
 | `list_worlds()` / `get_world(world_id)` / `entity_world(entity_id)` / `map_world(map_id)` | 世界与归属（D15） |
-| `list_folders(world_id)` / `list_maps_by_folder(world_id, folder_id)` | 组织树（按容器内序号排序） |
+| `list_folders(world_id)` / `list_maps_by_folder(world_id, folder_id=None)` | 组织树（按容器内序号排序） |
 | `list_admin_pages()` | 管理端管理页清单（§13；导航/调试用） |
 | `kv_get(key, default=None, *, world_id=None)` / `kv_set(key, value, *, world_id=None)` | 玩法数据 KV（namespace = 本包）。⚠ `kv_get` 是**同步**、`kv_set` 是 **async**（`await`） |
-| `list_world_log(limit=100)` | 世界日志（最新在前） |
+| `list_world_log(limit=100)`（**async，要 `await`**） | 世界日志（最新在前） |
 | `list_primitive_overrides()` / `list_primitive_filters()` / `list_services()` / `list_views()` | 注册表状态（管理页同源） |
 
 > **同步 / 异步的界线**：**走原语分派表的一律 `async`**（`set_data` / `get_data` /
 > `remove_data` / `add_component` / `set_component` / `remove_component` /
 > `move` / `move_entity` / `interact` / `place_entity` / `remove_entity` /
 > `set_perception` / `clear_position` / `kv_set` / 地图编辑 / `emit` /
-> `call_service` / `call_default_primitive`），**纯读取与注册一律同步**。
+> `call_service` / `call_default_primitive`），**纯读取与注册基本同步**——
+> 例外只有两个：`list_world_log`（读库）与 `apply_ui_hooks`（钩子内部可 `await`），
+> 都要 `await`。
 > 注意 `get_component`（同步）与 `get_data`（async）是一对**不一致**的读接口——
 > 后者确实要 `await`；`kv_get` / `kv_set` 同理。
 
@@ -222,8 +225,8 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `release_avatar(entity_id)` | **退掉自己的化身**（`claim_avatar` 的反向）：只允许解绑当前主体自己的；顺手清空指向它的凭据指针；**不删实体**——调用方随后自己 `remove_entity`（那时它不绑账户了）。两步分开是为了让"解绑"在事件流里留痕 |
 | `act_as(entity_id \| None)` | 把**当前凭据**的行动实体指向某具实体（`None` = 解除指向）——D46 窄口。写的是**凭据行**，所以多端各记各的。⚠ **内核不校验归属**：玩法包必须先用自己的 roster 确认"这具是我的"，**绝不能**把客户端传来的 `entity_id` 原样交上来 |
 | `clear_position(entity_id)` | 让实体**离开世界**（下线 / 收进容器 / 传送中间态）——**写 `core:position` 的受控入口**（与 `set_perception` 同性质，不受分派表影响）。组件 / 标签 / 账户绑定全保留，只去掉位置；幂等。放回世界用 `move_entity`。见 §10 / D36 |
-| `interact(entity_id, target_id, action, args)` | 交互（**可被覆盖/禁用**）。**没有 `item_id` 槽位**（D37）：物品标识放 `args`，如 `args={"item": "apple"}`——内核不解释其内容 |
-| `emit(event, data, log=False)` | 自定义事件（SSE 推送；`log=True` 写 world_log） |
+| `interact(entity_id, target_id, action, args=None)` | 交互（**可被覆盖/禁用**）。**没有 `item_id` 槽位**（D37）：物品标识放 `args`，如 `args={"item": "apple"}`——内核不解释其内容 |
+| `emit(event, data=None, *, log=False)` | 自定义事件（SSE 推送；`log=True` 写 world_log） |
 | `place_entity(kind=None, map_id=None, row=None, col=None, *, name=None, desc="", components=None, tags=None)` / `remove_entity(entity_id)` | 实体生命周期（D14；**绑定了账户的实体不可 remove**，D42）。**能力 = 组件**（D41）：`kind` / `tags` 是**输入便利**（裸名解析），`place_entity("slime", ..., tags=["spawner"])` = 带上 `bestiary:slime` + `xxx:spawner` 两个组件（数据 `{}`）；两者都可省（没有能力组件的实体也合法）。**位置三参数可选（D36）**：全给 = 放进世界；**全不给 = 造一个不在世界上的实体**（物品放进容器、待投放的 NPC）；只给一部分 → 报错。不在世界上的实体**不出现在** `list_entities` / `query_entities` 的默认结果里（要它们传 `include_absent=True`，该参数 API 上**有**），移动会被拒绝。`components` = 初始组件（dict，键写全名 `source:name`；`core:` 里数据组件（`core:info`）可给，协议组件一律拒绝）。**`name` / `desc` 是输入便利**：折进 `core:info` 组件（实体没有顶层名字字段；读回用 `entity.name` / `entity.desc`，§10） |
 | `add_component(entity_id, component, data=None)` / `set_component(entity_id, component, data=None)` / `remove_component(entity_id, component)` | 加 / 换 / **摘**能力组件（D41：加能力就是加组件，摘能力要显式删——空组件是纯能力标记，不会自己消失）。`add` 对已存在的键报错；`set` 是整块替换 |
 | `call_service(play_id, name, **params)` | 跨包服务调用（§6） |
@@ -269,7 +272,7 @@ await api.import_bundle(
 - 参考实现：内置世界包 `worlditor_play_demo_world`（41 地块 + 3 实体一次导入）
 
 **模板（D22：地块与实体共用一个"模板"概念）**：
-- `register_entity_template(template_id, name, data, label="")` —— 注册本包自带的**实体模板**
+- `register_entity_template(template_id, name, data, *, label="")` —— 注册本包自带的**实体模板**
   （内存注册表，随包卸载消失）；`data = {name, desc, components}`
   ——`components` = `{"组件键": {字段: 值}}` 组件字典（§10）；顶层 `name` / `desc` 是
   **输入便利**，套用时折进 `core:info`（实体本身没有这两列）。
@@ -870,7 +873,7 @@ await api.remove_data(entity_id, "gold", component="local:stat")    # 删字段�
 玩家端**页眉右侧的抽屉**是内核提供的**挂载点**，玩法包往里放条目：
 
 ```python
-from worlditor_mcp.world.model import CORE_SHELL_MENU  # "core:shell.menu"
+CORE_SHELL_MENU = "core:shell.menu"  # 稳定契约名（直接写字面量，不要 import 内核内部模块）
 
 async def _me_entry(api, block):
     return [
@@ -893,7 +896,7 @@ api.register_ui_hook(CORE_SHELL_MENU, "after", _me_entry)   # 零新 API
 | `icon` | 图标 | 显示 `•` |
 | `data["view"]` | 点它跳哪个**视图 key**（`register_view` 注册的那个） | 点了没反应 |
 
-⚠ **不要用 `action`**——`UiBlock.action` 至今**没有执行者**（渲染器只 `emit`，壳层无人消费），导航走 `data`。
+⚠ **不要用 `actions`**——`UiBlock.actions`（以及 `MenuButton.action`）在**内核壳层没有执行者**（渲染器只 `emit`，无人消费），导航走 `data["view"]`。
 
 **壳层不放内容，也不会被玩法包接管**：
 

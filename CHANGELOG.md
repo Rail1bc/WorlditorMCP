@@ -48,11 +48,42 @@
 - **`CHANGELOG` 自身**：v0.5.2 / v0.6.0 / v0.8.0 的日期对齐实际发版提交
   （此前分别写成 09-24 / 09-24 / 10-18，与 bump 提交不一致）。
 
+### 文档整理（本轮：清理过时文档 + 精简）
+
+- **归档**：三份已完成的施工 / 审查档案移入 `docs/archive/`（`CORE_AUDIT` /
+  `ENTITY_FOLD_PLAN` / `PLAYER_MODEL_PLAN`），各加"仅作历史、行号是施工期快照"的提示；
+  `docs/` 根目录只剩在用的四份。
+- **`README`**：文档入口改成「读它干什么」表，并写明权威顺序（`DESIGN` > 面向作者的
+  文档 > `CHANGELOG`；`GAPS` 只记未结项）。
+- **`GAPS` 精简：1317 行 → 495 行**。只留未结项（22 条：11 待做 + 8 暂缓/观察 + 3 设计存档）
+  与设计存档；**已结的 42 条压缩成 §9 一行索引**（编号 + 一句话结论 + 版本/落点），
+  明细指向 `CHANGELOG` 与 `git log -- GAPS.md`；未结项正文逐字保留。
+- **`PLAY_DEV` 签名纠偏（9 处）**：`list_world_log` / `apply_ui_hooks` 实为 `async`
+  （补 `await`，并把"纯读取与注册一律同步"改成带两条例外）；`emit` 的 `log`、
+  `register_entity_template` 的 `label` 是 keyword-only；`interact` / `list_entities` /
+  `list_maps_by_folder` / `query_entities` 的可选参数补默认值；§4 补 `register_admin_page`；
+  壳层挂载点示例不再 `import` 内核 `model`（直接写字面量，与 §0 的 SDK 出口约束一致）；
+  `UiBlock.action` → `actions`。
+- **`DESIGN` 现状陈述纠偏（8 处）**：§12.2 的 `core:` 写入仍停在 D49 之前（"仅内核"、
+  "窄口只有 `set_perception`"）；§12.7 的 `block_move` 测试观测点（早已改用
+  `interactions`）；§3.0 的 `maps` 列（实际是独立的 `world_maps` 表）；
+  §4.4 的"唯一提交在案的视图组件"（现有 demo / player / probe 三份）；
+  D22 的实体模板负载（实为 `{name, desc, components}`）；D29 的 `remove_state` 与
+  `attrs_removed`（前者从未落地，后者实为 `fields_removed`）；D35 的"字段覆盖顺序定死"
+  （D41 起按组件分组、不跨组件摊平）。
+- **`HTTP_API`**：`/scene` 的 `entity` 额外带 `actions`、`peers` 是 `[{entity, actions}]`
+  包装（原文笼统写"形态同 `/state`"）。
+- **`README`**：修"空库只有一个空的默认世界"与内置世界包矛盾的说法——示例内容由
+  `worlditor_play_demo_world` 导入。
+- **`CHANGELOG`**：v0.7.0 的日期 `2026-09-25` → **`2026-10-14`**（该版 bump 提交与 tag
+  都在 10-14）。
+
 ### 验证
 
 - `429 passed`（新增事件过滤回归 1 条）；`ruff check` / `ruff format --check` 全过。
-- 文档审计：59 处 API 签名、80 处 `file:line`（历史引用除外）、343 处 `§` 引用、
-  表格列数 / 代码围栏 / 标题层级——0 问题。
+- 文档审计：60 处 API 签名逐条比对 `inspect.signature`（0 不一致）；全文 G 编号引用
+  都能在 `GAPS` 查到（64 个）；表格列数 / 代码围栏 / 标题层级 / UTF-8 编码——0 问题。
+- 结构审计：`docs/` 根只剩在用的 4 份；`GAPS` §9 索引 42 行 = 已结项数（逐条核对）。
 
 ## v0.9.1（2026-10-18）
 
@@ -574,7 +605,7 @@
   `GAPS.md` G40 已同步为完成状态。**D40 的边界照旧不实现**——内核不做通用实体渲染、
   不做 `/components` 声明端点、不做组件渲染器（见 G43）。
 
-## v0.7.0（2026-09-25）
+## v0.7.0（2026-10-14）
 
 **废弃全部内置行为玩法包（BREAKING，D31 / GAPS G39）**——内置目录里不再有"官方玩法"。
 

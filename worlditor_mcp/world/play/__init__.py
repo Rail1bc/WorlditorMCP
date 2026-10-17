@@ -313,8 +313,8 @@ class PlayLoader:
         """清掉该包的模块缓存（``play_id`` 及其全部子模块）。
 
         模块是按**名字**缓存的：不清的话重装同名包会拿到上一次的模块对象
-        （目录都换了、代码还是旧的），包内的辅助模块也会一直挂着——CORE_AUDIT §4
-        记的"sys.modules 卸载残留"就是这条。
+        （目录都换了、代码还是旧的），包内的辅助模块也会一直挂着——`docs/archive/CORE_AUDIT.md`
+        §4 记的"sys.modules 卸载残留"就是这条。
         """
         stale = [
             name

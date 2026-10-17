@@ -1,6 +1,6 @@
 """玩家模型端到端验收（D45–D47 / v0.8.0）。
 
-守住的东西（对应 `docs/PLAYER_MODEL_PLAN.md` §1 的 R1–R9 与 §6 验收清单）：
+守住的东西（对应 `docs/archive/PLAYER_MODEL_PLAN.md` §1 的 R1–R9 与 §6 验收清单）：
 
 - **R2/R3**：注册不创建实体、不写 `local:player`；`token.entity_id` 为空是常态
 - **R8**：没有化身时**自举工具照样调得到**（`requires_entity=False`），

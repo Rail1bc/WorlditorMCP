@@ -83,8 +83,8 @@
  ├─ 页眉 .header-top（App.vue:15）
  │    ├─ 品牌 worlditor
  │    ├─ 位置 .header-where（:17）← GET /where（世界 · 地图；空态不显示）
- │    └─ ☰（:16）→ 抽屉
- ├─ 第二行 .view-tabs（:18-29；列表来自 tabViews :137）← /views 里 layout !== "fullscreen" 的视图
+ │    └─ ☰（:18）→ 抽屉
+ ├─ 第二行 .view-tabs（:20-31；列表来自 tabViews :137）← /views 里 layout !== "fullscreen" 的视图
  │
  ├─ 抽屉（遮罩 :49 / 面板 :52；不占路由，导航即关）
  │    ├─ 主体 .drawer-list（:53）= core:shell.menu 的 blocks  ← 挂载点 ①，可空

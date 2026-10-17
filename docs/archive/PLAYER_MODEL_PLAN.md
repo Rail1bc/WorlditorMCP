@@ -6,7 +6,7 @@
 > 规则已回写 `DESIGN.md`，本文件保留为施工档案、不再定义规则。
 > ⚠ **文中 `file:line` 是施工时的快照**——被本方案改写的代码早已不是那些行号；要查现状请
 > 按函数名在源码里找，不要按这里的行号。
-> 体例参照 `docs/ENTITY_FOLD_PLAN.md`。
+> 体例参照 `docs/archive/ENTITY_FOLD_PLAN.md`。
 
 ---
 
