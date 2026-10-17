@@ -929,7 +929,7 @@ class WorldStore:
 
         D45：注册**不再产生实体**，所以这里没有实体参数（原
         ``save_registration_bundle`` 的那个位置随"内核不诞生角色"一起消失）。
-        ``account=None`` = 只发凭据（开放模式的围观凭据走 ``save_token``）。
+        ``account=None`` = 只发凭据（不建账户）。
 
         邀请码在**同一事务**内消费：抢不到（rowcount != 1）就整个回滚——否则
         "注册失败但账户已落库"会留下一个占了用户名的空壳。

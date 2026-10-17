@@ -47,7 +47,7 @@ _caller_entity: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "worlditor_caller_entity", default=None
 )
 
-# 当前调用者的主体（账户）id；围观凭据没有主体 → None
+# 当前调用者的主体（账户）id；没有身份上下文（进程内直调）→ None
 _caller_principal: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "worlditor_caller_principal", default=None
 )
@@ -102,7 +102,7 @@ def _entity_id(ctx: Context) -> str:
 
     ⚠ 空值**不是认证失败**（D45/D46）：新注册的凭据本来就没有化身，"我还没有
     角色"是合法常态。以前这里直接抛 ``McpAuthError``（文案"连接未认证或凭据
-    只能围观"），于是零包安装下玩家连"创建角色"的工具都调不到——自举路径整个
+    只能围观"——那个档位 v0.9 已删除），于是零包安装下玩家连"创建角色"的工具都调不到——自举路径整个
     断掉。现在由工具自己声明要不要身体（``register_tool(requires_entity=…)``）。
     """
     entity_id = getattr(_meta_of(ctx), _META_ENTITY_KEY, None)
@@ -110,7 +110,7 @@ def _entity_id(ctx: Context) -> str:
 
 
 def _principal_id(ctx: Context) -> str:
-    """这次连接的主体（账户）id；围观凭据没有主体 → 空串。"""
+    """这次连接的主体（账户）id；没有身份上下文（进程内直调）→ 空串。"""
     account_id = getattr(_meta_of(ctx), _META_ACCOUNT_KEY, None)
     return account_id if isinstance(account_id, str) else ""
 
@@ -155,7 +155,9 @@ def build_dynamic_tool(engine: Any, binding: Any, name: str) -> Callable:
                 # 根本没有"这次连接是谁"这回事（进程内直调 / Context 不在请求内）：
                 # 与"有连接、只是还没有化身"必须分开说，否则用户会照着错的
                 # 那条提示去查（旧文案就是把这句用在两种情况上）。
-                return _result({"text": "连接未认证或凭据只能围观，无法执行动作"})
+                return _result(
+                    {"text": "连接未认证：这次调用没有身份上下文，无法执行动作"}
+                )
             return _result(
                 {
                     "text": "你还没有角色，暂时做不了这个动作："

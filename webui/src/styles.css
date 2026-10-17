@@ -287,11 +287,6 @@ body {
   font-size: 15px;
 }
 
-.watch-btn {
-  width: 100%;
-  margin-bottom: 10px;
-}
-
 .agent-register {
   text-align: left;
   margin-top: 14px;
@@ -623,13 +618,6 @@ body {
 
 .drawer-label {
   flex: 1;
-}
-
-.drawer-empty {
-  margin: 6px 4px;
-  color: var(--text-dim);
-  font-size: 13px;
-  line-height: 1.5;
 }
 
 .drawer-foot {

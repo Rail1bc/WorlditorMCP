@@ -589,7 +589,7 @@ class WorlditorPlayAPI:
         return _caller_entity.get()
 
     def caller_principal(self) -> str | None:
-        """当前调用者的**主体**（账户）id；围观凭据 → ``None``（D46）。
+        """当前调用者的**主体**（账户）id；没有身份上下文（进程内直调）→ ``None``（D46）。
 
         这是**稳定的键**：同一个主体无论换了几具化身、重登几次都不变，适合做
         roster 的索引；而 ``caller()`` 是"这次以哪具化身行动"，会跟着切换变。
@@ -643,10 +643,10 @@ class WorlditorPlayAPI:
           四处都拒绝对它动手），账户注销时也会被级联清理；
         - **只能认领给"自己"**（当前请求的主体）——不能替别人认领，内核不接受
           客户端指定的账户 id；
-        - 围观（read）凭据没有主体 → 报错。
+        - **没有主体上下文**（进程内直调，或请求没带身份）→ 报错。
 
         Raises:
-            WorldError: 没有主体上下文（围观凭据 / 进程内直调）/ 实体不存在 /
+            WorldError: 没有主体上下文（进程内直调 / 无身份请求）/ 实体不存在 /
                 该实体已属于另一个主体。
         """
         from ..mcp import _caller_principal

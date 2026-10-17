@@ -60,9 +60,6 @@
               <span class="drawer-icon">{{ b.icon || "•" }}</span>
               <span class="drawer-label">{{ b.title || "未命名" }}</span>
             </button>
-            <p v-if="!chromeBlocks.length" class="drawer-empty">
-              这里留给玩法包——装上带玩家页的包，入口会出现在这里。
-            </p>
           </div>
           <div class="drawer-foot">
             <button class="drawer-logout" @click="doLogout">退出登录</button>
@@ -192,9 +189,9 @@ const whereInfo = ref(null); // {entity_id, world, map, reason}
 
 const whereText = computed(() => {
   const w = whereInfo.value;
-  if (!w) return "";
-  if (w.reason === "no_avatar") return "还没有角色";
-  if (w.reason === "not_in_world") return "不在世界上";
+  // 空态**不显示占位文案**：页眉不是错误提示区，"还没有角色 / 不在世界上"这类
+  // 解释留在代码里就行，别占界面（D45 / D36 都说它们是合法状态，不是要提示的事）。
+  if (!w || w.reason) return "";
   return [w.world && w.world.name, w.map && w.map.name].filter(Boolean).join(" · ");
 });
 
@@ -254,7 +251,7 @@ async function refreshViews() {
 
 // ---------- SSE：玩法包注册表变化 → 视图 tab 自动跟随（不再要手动整页刷新） ----------
 // 玩家端口 GET /events（内核信号出口）。EventSource 不能带请求头，凭据只能走
-// ?token=（服务端支持 query token）；档位要求 play/admin，read 围观档会被 403。
+// ?token=（服务端支持 query token）；档位要求 play/admin（v0.9 已无 read 围观档）。
 // 管理端口**没有** /events（已知边界）→ mode==="play" 才连。
 
 function closeEvents() {

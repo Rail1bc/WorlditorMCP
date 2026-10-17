@@ -29,15 +29,6 @@
         </button>
       </form>
 
-      <button
-        v-if="store.mode === 'play'"
-        class="btn btn-ghost watch-btn"
-        :disabled="busy"
-        @click="watch"
-      >
-        以围观者身份进入（read 档）
-      </button>
-
       <details v-if="store.mode === 'play'" class="agent-register">
         <summary>agent / 脚本接入</summary>
         <form class="auth-form" @submit.prevent="submitAgent">
@@ -61,7 +52,7 @@
 
 <script setup>
 import { ref } from "vue";
-import { login, register, registerAgent, readToken, setToken } from "../api";
+import { login, register, registerAgent, setToken } from "../api";
 import { store } from "../store";
 
 const mode = ref("login");
@@ -87,19 +78,6 @@ async function submit() {
             inviteCode.value,
             adminKey.value,
           );
-    enter(data.token);
-  } catch (e) {
-    error.value = e.message;
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function watch() {
-  error.value = "";
-  busy.value = true;
-  try {
-    const data = await readToken();
     enter(data.token);
   } catch (e) {
     error.value = e.message;

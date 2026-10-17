@@ -1,7 +1,8 @@
-"""身份服务测试（B13 自助注册 / B4 token 三档）。
+"""身份服务测试（B13 自助注册 / B4 token **两档**）。
 
 覆盖：open/invite/closed 三模式、人类注册/登录/改密/注销、agent 注册、
-admin_key、read 档围观、凭据吊销、邀请码、持久化。
+admin_key、凭据吊销、邀请码、持久化；以及 **v0.9 删除 read 围观档**之后
+"签发方法不复存在"这条回归（D53）。
 """
 
 from __future__ import annotations

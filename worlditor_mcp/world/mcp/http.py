@@ -528,7 +528,7 @@ async def _views(request: Request) -> Response:
     ``play_active_for_entity("")`` 会回落到**默认世界**，于是"玩家在别的世界"
     就等于"什么视图都看不到"——包括"创建角色"的那个入口，人被困死在门口。
     宁可多显示几个 tab（点了会因为世界未启用而不可用，那是可理解的），
-    也不能让唯一的出路消失。围观（read）凭据同理。
+    也不能让唯一的出路消失。
     """
     engine = request.app.state.world_engine
     info = _identity_of(request.scope)

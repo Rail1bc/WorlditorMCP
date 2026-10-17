@@ -42,7 +42,7 @@ async function http(path, opts = {}) {
       /* ignore */
     }
     const err = new Error(message);
-    err.status = resp.status; // 供调用方区分 400（围观者无实体）等场景
+    err.status = resp.status; // 供调用方区分 400（如"没有化身"是 200 空态，401 才是没凭据）等场景
     throw err;
   }
   return resp;
@@ -92,7 +92,6 @@ export const register = (username, password, inviteCode = "", adminKey = "") =>
   });
 export const login = (username, password) => apiPost("/auth/login", { username, password });
 export const registerAgent = (name) => apiPost("/auth/agent-register", { name });
-export const readToken = () => apiGet("/auth/read-token");
 export const logout = () => apiPost("/auth/logout");
 export const deleteAccount = () => apiPost("/auth/delete-account", {});
 // 视图列表（G3：玩法包 register_view；免认证公共端点，登录页也要用）

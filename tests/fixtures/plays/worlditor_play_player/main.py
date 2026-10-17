@@ -125,11 +125,11 @@ async def _resume(api: WorlditorPlayAPI) -> str | None:
     ④ 多具且没有记忆 → **不猜**，留给 ``player_switch``（``player_whoami`` 会提示）。
 
     Returns:
-        接上的实体 id；没有可接的（围观凭据 / 一具都没有 / 需要玩家自己挑）→ ``None``。
+        接上的实体 id；没有可接的（没有主体上下文 / 一具都没有 / 需要玩家自己挑）→ ``None``。
     """
     principal = api.caller_principal() or ""
     if not principal:
-        return None  # 围观（read）凭据：没有主体，也就没有"续玩"
+        return None  # 没有主体上下文（进程内直调）：没有账户，也就没有"续玩"
     mine = {e.id: e for e in _avatars_of(api, principal)}
     current = api.caller()
     if current and current in mine:
@@ -263,7 +263,7 @@ async def _create(api: WorlditorPlayAPI, ctx, **kwargs) -> dict:
     """
     principal = api.caller_principal() or ""
     if not principal:
-        return {"text": "围观（read）凭据不能创建角色：请用玩家身份登录。"}
+        return {"text": "无法创建角色：这次调用没有身份上下文，请用玩家身份登录。"}
     name = str(kwargs.get("name") or "").strip() or (api.caller_name() or "无名者")
     tile = _pick_tile(api)
     if tile is None:
