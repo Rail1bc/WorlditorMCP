@@ -308,7 +308,11 @@ G45（堆叠表示）。
   - 部件 UI：`apply_ui_hooks` 按查看者世界过滤（注入方不在该世界 → 不注入）
   - **未归属世界的地图**改按**默认世界**的激活集合算（原先 = 全部激活，
     等于逃逸世界过滤）；管理端建图即归属当前世界 + 孤儿地图一键归属
-  - 测试：`tests/test_world_activation.py`（工具/视图端到端 + 原语/kind/ui_hook）
+  - ⚠ **v0.9.2 补**：事件分发曾对**未归属世界的地图**放行——`_binding_active`
+    把"实体没有位置"与"地图未归属世界"混用同一个 `map_world.get(...) is None`
+    判据，后者直接 `return True`。现已改为只对无位置实体放行、未归属地图照常按
+    默认世界判定；回归 `test_events_follow_default_world_for_unowned_map`
+  - 测试：`tests/test_world_activation.py`（工具/视图端到端 + 原语/kind/ui_hook/事件）
 - **仍留**（新的观察项，非本缺口）：
   - `world_list` / `world_travel` 跨世界传送未实现（设计见 DESIGN §3.0；⚠ D45 起
     "传到目标世界出生点"这句作废——出生点已不存在，改成"传送到指定地图/地块"）

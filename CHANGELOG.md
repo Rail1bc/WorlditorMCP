@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.9.2（2026-10-18）
+
+**一轮全项目审查的产物：一个跨世界事件漏洞、两处死代码、一批文档与实现不一致。**
+（无表结构变更、无新功能；行为上只修了事件过滤。）
+
+### 修复
+
+- **未归属世界的地图：事件绕过了世界激活过滤**。`DESIGN §3.0` 与 `GAPS G15` 都承诺
+  "未归属世界的地图按默认世界算、不会逃逸过滤"，但 `_binding_active` 把
+  「实体没有位置」与「地图未归属世界」混用同一个 `map_world.get(...) is None`
+  判据，后者直接放行 → 某世界停用了包，未归属地图上的事件仍会送给它。
+  改为**只对无位置实体放行**，未归属地图照常按默认世界判定。
+  回归：`tests/test_world_activation.py::test_events_follow_default_world_for_unowned_map`
+- **版本守卫有盲区**：`test_version_consistency` 的 `_view_client_versions()` 用
+  **文件名**（`view.js`）作键，demo 与 player 两份参考组件互相覆盖 → demo 的
+  `clientInfo.version` 停在 **0.7.3** 也没人发现。改按**相对路径**作键，并把两份
+  组件的版本串一起对齐。
+
+### 清理（无行为变更）
+
+- 删死代码：`mcp._tier_of` / `_META_TIER_KEY`（v0.9 删 `read` 档后没有读取者；
+  `tier` 仍由 HTTP 中间件写入 `_meta`）、`store.consume_invite_code`（注册路径早已
+  改成 `save_account` 内的原子 UPDATE，全仓零调用）。
+- 注释对齐：token "三档" → "两档"（`app.py` / `store.py`）；MCP `_meta` 注入字段
+  补上 `token`（实际 5 个）。
+- 工程卫生：`.dockerignore` 排除 `.venv` / `.uitools` / `.smoke_data` / `.idea` 等。
+
+### 文档（与实现逐项对齐）
+
+- **`play_ids` 三态**：`DESIGN §3.0` / `§4.3` 与 `PLAY_DEV §3` 还写着"空 = 全部启用"
+  （D55 已改为 `null` / `[]` / 名单）——4 处全部改正，另修两条测试注释。
+- **内核事件数**：`DESIGN §12.8` 的"现为 7 个" → 10（D47）；`PLAY_DEV §9` 把 10 个
+  事件都标成 `WORLD_EVENTS`，改为 `WORLD_EVENTS` 7 + `PRINCIPAL_EVENTS` 3。
+- **渲染**：`PLAY_DEV §9` 事件表里一个未转义的 `|` 会把 Markdown 表格切成多列。
+- **签名**：`PLAY_DEV §4` 的 `register_tool` 补 `requires_entity`。
+- **行号漂移**：`engine.py` 因格式化上移 4 行，`PLAYER_PAGE_PLAN` 与 `GAPS` 的引用
+  按函数名重定位（`where` / `no_avatar` / `_world_play_active` / K-2 展开）；
+  `GAPS` 更正里的 `http.py:289` → `:339`、`engine.py:1736` → `:1778`。
+- **`GAPS`**：新增 §0「当前未结」索引；G1（G17 已补）、G17 / G35（与文末更正矛盾）、
+  G47（四象限已由 G48 落地）的状态改实况；G26 的 `sys.modules`（v0.7.3 已修）与
+  `?token=`（已文档化）改标已结；G36 两条已修项标注；G27 补"参考实现
+  `admin-shop.js:56` 仍在用 `window.prompt`"。
+- **`CORE_AUDIT`**：§1 基线加"两条已被 D53/D45 推翻"的提示；§4 的"未处置"指向 G26。
+- **`PLAYER_MODEL_PLAN`**：头部加"行号是施工时快照"的警示。
+- **`README`**：补玩家包与施工档案的文档入口；PR 模板 "plugin" → "project"。
+- **`CHANGELOG` 自身**：v0.5.2 / v0.6.0 / v0.8.0 的日期对齐实际发版提交
+  （此前分别写成 09-24 / 09-24 / 10-18，与 bump 提交不一致）。
+
+### 验证
+
+- `429 passed`（新增事件过滤回归 1 条）；`ruff check` / `ruff format --check` 全过。
+- 文档审计：59 处 API 签名、80 处 `file:line`（历史引用除外）、343 处 `§` 引用、
+  表格列数 / 代码围栏 / 标题层级——0 问题。
+
 ## v0.9.1（2026-10-18）
 
 **v0.9.0 的修补 + 昵称校验落地 + 一轮文档清理**（无新功能、无表结构变更）。

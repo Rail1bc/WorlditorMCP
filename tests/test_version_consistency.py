@@ -52,7 +52,9 @@ def _view_client_versions() -> dict[str, str]:
         text = path.read_text(encoding="utf-8")
         match = re.search(r'clientInfo:\s*\{[^}]*version:\s*"([^"]+)"', text)
         if match:
-            out[path.name] = match.group(1)
+            # 键必须是**相对路径**而不是文件名：两份参考组件都叫 view.js，
+            # 用文件名作键会互相覆盖——demo 的版本串曾停在 0.7.3 而测试照绿。
+            out[str(path.relative_to(root))] = match.group(1)
     return out
 
 
