@@ -161,7 +161,7 @@ disable/过滤器链，D11/G14）、跨包服务（M3）、放置/编辑实体�
 | `docs/PLAY_DEV.md` | 写玩法包：API 全量 + 约定 + 示例 + 玩家包契约 |
 | `docs/HTTP_API.md` | 双端口所有 HTTP 端点（路径 / 档位 / 请求体 / 已知边界） |
 | `docs/NGINX_DEPLOY.md` | 域名 + HTTPS 反代部署（含双端口暴露边界） |
-| `docs/PLAYER_PAGE_PLAN.md` | 玩家包与界面扩展的**剩余工作**（K-5 / K-10 / P7 / 进场流程） |
+| `docs/PLAYER_PAGE_PLAN.md` | 玩家包与界面扩展的**剩余工作**（K-10 / 进场流程；K-5、P7 已结） |
 | `GAPS.md` | 平台未结缺口与设计存档（已结项只有一行索引） |
 | `CHANGELOG.md` | 每个版本改了什么 |
 | `docs/archive/` | **已完成**的施工与审查档案（只作历史，不再维护） |

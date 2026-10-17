@@ -151,7 +151,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `capabilities(entity)` | 某实体的能力：`components / active_components / inactive_components / **orphan_components** / **fictional_components** / interactions / fields`——`fields` 是 **`{组件键: [字段]}`**（按组件分组）。四象限（D44）：生效 / 本世界未启用 / **声明它的包不在了**（停用、加载失败、已卸载）/ **虚构组件**（`local:` 且无声明——本来就没有行为，不是坏了）。**不再有阻挡键**（阻挡机制已移除，见 §10） |
 | `register_interaction(action, handler, *, label=None)` | 全局交互动作；`async (api, req) -> InteractionResult`。⚠ 同名动作**报错拒绝**（不会静默顶掉别人的） |
 | `register_world_event(event, handler, *, interval=0.0, phase="simulate", order=0)` | 事件订阅；on_tick 必须给 interval（秒）；**phase/order 声明跨包执行顺序**（D27，见 §5.3） |
-| `register_ui_hook(block_kind, position, provider)` | UiBlock 注入（`before` / `after` / `replace`；**服务端展开**，锁内）。**注入的块也会被继续展开**（v0.9 / K-2）→ 跨包嵌套**任意层**。自定义页面请用 `register_view` + provider（§8）——`UiBlock(kind="custom")` 只保留 fallback 数据结构，**没有**组件注册 API |
+| `register_ui_hook(block_kind, position, provider)` | UiBlock 注入（`before` / `after` / `replace`；**服务端展开**，锁内）。**注入的块也会被继续展开**（v0.9 / K-2）→ 跨包嵌套**任意层**。自定义页面请用 `register_view` + provider（§8）——`UiBlock(kind="custom")` 只保留 fallback 数据结构，**没有**组件注册 API。命中次数在管理端「玩法包 → 钩子」可见（K-5）：`hits: 0` 多半是 `block_kind` 写错，或目标视图没人打开过 |
 | `apply_ui_hooks(block)`（**async，要 `await`**） | 对一棵 UiBlock 树应用全部已注册钩子（服务端展开，锁内）；玩家壳生成角色卡后调它，部件包的面板即被追加（§11） |
 | `register_tool(name, handler, *, description="", params=None, requires_entity=True)` | MCP 工具（见 §7）；`requires_entity=False` = 没有化身也能调（自举工具） |
 | `register_view(key, *, title, icon="", provider=None, layout="default")` | WebUI 视图（见 §8）；`title` 必填且**只能关键字传**。`layout`：`"default"` = 壳层页眉照常；`"fullscreen"` = 这个视图**自带整个屏幕**（不画页眉、不进顶栏 tab 条，**入口与返回按钮都由包自己负责**；只在组件成功加载后才生效） |

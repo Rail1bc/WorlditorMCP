@@ -67,6 +67,7 @@
 | GET | `/admin/tools` | 已注册 MCP 工具 |
 | GET | `/admin/views` | 已注册视图 |
 | GET | `/admin/services` | 跨包服务清单 |
+| GET | `/admin/ui-hooks` | 界面钩子清单 + 命中次数（`hits` = 0 表示从未命中，可能是 kind 写错或目标视图没人打开过） |
 
 ### 2.3 世界与组织树
 

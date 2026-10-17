@@ -36,7 +36,7 @@
         params: {
           protocolVersion: "2025-06-18",
           capabilities: {},
-          clientInfo: { name: "worlditor-webui", version: "0.9.2" },
+          clientInfo: { name: "worlditor-webui", version: "0.9.3" },
         },
       }),
     });
