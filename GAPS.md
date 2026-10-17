@@ -24,7 +24,7 @@
 | P7 | `/plays/*/web/*` 没有 `ETag` / `Cache-Control` | 未做 | `PLAYER_PAGE_PLAN` §5 |
 | G62 | `call_service` 没有世界过滤 | **要处理**（语义变更，等第二个包） | 本条 |
 | G63 | `/state` 把所有人的 `core:account.user_id` 发出去 | 待决策 | 本条 |
-| G36 | 编辑器 / 前端可用性清单 | 部分已修（`PlayPageHost`）；其余逐条未复核 | 本条 |
+| G36 | 编辑器 / 前端可用性清单 | 部分已修（`PlayPageHost` 两项）；其余抽查仍成立（监听清理、localStorage、`/world/mcp` 硬编码、lint 失败伪装） | 本条 |
 | G37 | 工程 / 流程：CI 比对已提交的 `dist`、浏览器 E2E 入库、Python 3.10 真跑 | 未做 | 本条 |
 | G26 | 管理端健壮性收尾 | 部分已修 | 本条 |
 | G52 / G61 | 实体模板按世界激活过滤 | 待做 | 本条 |
@@ -449,23 +449,27 @@ G45（堆叠表示）。
     统一 `.json()` 会崩）。**改法**：两个 app 都注册
     `exception_handlers={HTTPException: _http_error}` → 统一 `{"error": detail}`；
     回归测试 `test_http_errors_are_json`。
-  - `PUBLIC_PATHS` 用 `startswith` 前缀匹配（`http.py:95-97`）——将来新增
-    `/auth/read-token-xxx` 之类路径会**误免认证**；应改为精确匹配 + 显式前缀白名单
-  - ✅ **已修（v0.7.0）**：`/plays/{play_id}/web` 前缀校验用字符串 `startswith`
-    （原 `http.py:407`）——`<pkg>/web-evil/x.js` 会被判为"在 web/ 之内"。
-    改为 `Path.is_relative_to`（与 PlayLoader 的路径安全检查同语义）；
-    回归测试 `test_play_web_rejects_web_prefix_sibling`
-  - `?token=` 会进访问日志（SSE 的硬需求，不能删）——至少文档化 + 建议反代过滤
-  - 停用玩法包不清理 `sys.modules` 残留（同名包换目录重载时可能拿到旧模块）
+  - `PUBLIC_PATHS` 用带 `/` 边界的 `startswith` 匹配（`http.py:124`）：`/auth/login/xxx`
+    这类子路径会**免认证**——将来新增同名子路径有误放行风险；是否收紧（精确匹配 +
+    显式子路径白名单）待定
+  - ✅ **已修（v0.7.0）**：`/plays/{play_id}/web` 前缀校验用字符串 `startswith` 时，
+    `<pkg>/web-evil/x.js` 会被判为"在 web/ 之内"。改为 `Path.is_relative_to`
+    （与 PlayLoader 的路径安全检查同语义）；回归测试 `test_play_web_rejects_web_prefix_sibling`
+  - `?token=` 会进访问日志（SSE 的硬需求，不能删）——**已在 `HTTP_API.md` §4 文档化**
+    并建议反代过滤（不再作为缺陷）
+  - ✅ **已修（v0.7.3）**：停用玩法包不清理 `sys.modules` 残留——`PlayLoader._forget_modules`
+    现在连同子模块一起清（`play/__init__.py`），"改代码 → 停用 → 启用"能拿到新代码
   - **局部更新语义不完整**（v0.5.2 审计补充）：
     - ~~`PATCH /admin/maps/{id}` 只给 `spawn_row` 会把 `spawn_col` 重置为 0~~
       → **✅ 随 D45 消失**（v0.8.0：出生点两个字段整体删除，不再有这对参数）
     - `POST /admin/connections` 的 `enabled`/`paths` 实际都是必填（`admin.py` 恒传
       `data.get(...)`，缺省 None 被当"显式给值"）→ 只改一个方向不可行
     - `POST /admin/locations`（upsert）不带 `description` 会**清空**整段分时段描述
-- **状态**：部分已修（v0.7.0 修掉 `int()` → 400、`HTTPException` 统一 JSON、
-  `/plays/*/web` 路径校验三项）；其余（`PUBLIC_PATHS` 前缀匹配、`sys.modules`
-  残留、局部更新语义三条）仍待决策——低危但成串，适合一次"收尾清理"批次
+- **状态**：大部分已修（v0.7.0 修掉 `int()` → 400、`HTTPException` 统一 JSON、
+  `/plays/*/web` 路径校验；v0.7.3 修掉 `sys.modules` 残留；`?token=` 已文档化）。
+  **仍留**：`PUBLIC_PATHS` 的边界面收不收窄、以及"局部更新语义"两条（现在是
+  **已文档化的契约**，不是静默行为——`HTTP_API.md` 写明了 connections 两字段必填、
+  locations 缺 `description` 即清空）
 - **另（v0.7.0 审查补充）**：JSON-RPC **批处理请求**原先整段不注入身份
   （`http.py:_inject_identity` 的 `isinstance(obj, dict)` 判定），持合法 play
   凭据发批量 `tools/call` 会被判"未认证"且**静默失败**——已修，
@@ -474,16 +478,20 @@ G45（堆叠表示）。
 ### G27 玩法包管理页组件逃过前端守卫（原生 confirm + 样式守卫盲区）
 
 - **触发**：v0.5.1 前端审计——`worlditor_play_items/web/admin-items.js:118` 用了
-  **原生 `confirm()`**，违反 D17"管理端禁用原生 confirm/prompt/alert"（iframe/
-  沙箱下被浏览器屏蔽 → 删除操作**静默失效**）
-- **根因**：守卫 `tests/test_web_view_styles.py` 只扫 `webui/src`（`:166`），且
-  `_view_component_files()` 显式排除 `admin-*.js`（`:67`）——管理页组件不在防线内
+  **原生 `confirm()`**（该文件已随 D31 删除），违反 D17"管理端禁用原生
+  confirm/prompt/alert"（iframe/沙箱下被浏览器屏蔽 → 删除操作**静默失效**）
+- **现在仍在犯**：参考实现 `tests/fixtures/plays/worlditor_play_demo/web/admin-shop.js:56`
+  用 `window.prompt("新价格", …)` 改价——而它是 `PLAY_DEV` §12 让人照抄的样本
+- **根因**：守卫 `tests/test_web_view_styles.py::test_admin_pages_use_no_native_dialogs`
+  只扫 `webui/src`，且 `_view_component_files()` 显式排除 `admin-*.js`
+  （`test_web_view_styles.py:66-72`）——管理页组件不在防线内
 - **方案**：① 组件协议扩展——加载器把内核的 `askConfirm` 作为第三个注入参数
   （`new Function("Vue","UiBlock","askConfirm", code)`，DESIGN §4.6 修订）；
   ② 守卫扩到玩法包组件目录（v0.7.0 起为 `tests/fixtures/plays/*/web/*.js`，
   含 admin-*），样式类契约另行放宽；
   ③ 短期可让管理页组件自带行内确认（状态 + 两个按钮）
-- **状态**：待决策（等下一次管理页组件改动一并做；当前只有一个删除入口）
+- **状态**：待决策（等下一次管理页组件改动一并做；**参考实现自己还踩着这条**，
+  所以不是"将来可能出现"，是"照抄就会错"）
 
 ---
 
@@ -625,7 +633,8 @@ G45（堆叠表示）。
   空白处平移后下次点击被吞（`suppressClick` 未复位）；模板坐标清空 →
   `Number("")===0` 静默套用到 (0,0)；`WorldEditModal` 空 id 可提交、无 Esc、
   点遮罩丢输入；`EntityManager` 行点击无键盘可达、`ConfirmHost`/`DiffModal`
-  无 `role="dialog"`；`admin-items.js` 的 attrs 只校验"是合法 JSON"（放行数组/标量）。
+  无 `role="dialog"`；~~`admin-items.js` 的 attrs 只校验"是合法 JSON"~~
+  （该文件已随 D31 删除，样本改为 `admin-shop.js`——**它自己用 `window.prompt`**，见 G27）。
 - **零玩法包场景的界面审计已过期**：`.uitools/audit_no_plays_ui.mjs` 停在 v0.2.0，
   v0.5.x 编辑器重写后没在"停用全部玩法包"下再验过（后端有 `test_empty_state_*`，
   界面只有旧的本地脚本）。
@@ -1178,14 +1187,14 @@ G45（堆叠表示）。
 - 全仓库仍无 TODO/FIXME/HACK 标记；AST + grep 双证未发现其它可无损删除的运行时符号。
 
 ### G17 私有地图可见性：**已修**（本节更正 2026-09-24 的复核）
-- `/scene` 现在走 `engine.can_observe_entity()`（`mcp/http.py:289`，不可观察 → 404），
+- `/scene` 现在走 `engine.can_observe_entity()`（`mcp/http.py:339`，不可观察 → 404），
   动作菜单带 `viewer_id` / `tier`；SSE 按订阅者过滤（`engine._push_to_subscribers`
   逐个 `map_visible_to`）；`/state` 仍只挡私有地图、**不挡隐身实体**（G12 尾巴，见 G12）。
 - 因此 G17 正文里"四处缺口全部仍成立"与"`map_visible_to` 全仓唯一调用点仍是 `_state`"
   **已过期**（现为 3 个调用点：`/state`、SSE 推送、`can_observe_entity`）。
 
 ### G35 交互动作静默覆盖：**已修**（首条更正）
-- `engine.register_interaction` 现在同名**报错拒绝**（`engine.py:1736`，
+- `engine.register_interaction` 现在同名**报错拒绝**（`engine.py:1778`，
   "交互动作冲突：x（已由 pkg 注册）"，实测）。G35 首条"无冲突检查 → 后者静默顶掉前者"
   已过期；该条其余小项（`demo_world` 续跑分支、`_ui_components` 死注册表、
   注释里的 kind 口径）中，注释口径已在本轮统一，其余见 G35 原文与 G50/G51。

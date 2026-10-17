@@ -125,7 +125,7 @@ register_view("player", title="我", icon="🙋", provider=..., layout="fullscre
 
 | 你要的 | 现状 | 证据 |
 |---|---|---|
-| 页眉显示**当前世界 + 地图名** | ✅ | `engine.where` `engine.py:2691` → `GET /where` `http.py:561` |
+| 页眉显示**当前世界 + 地图名** | ✅ | `engine.where` `engine.py:2687` → `GET /where` `http.py:561` |
 | 页眉右侧按钮开抽屉 | ✅ | `App.vue:18`（`☰`）、`:49`（遮罩）、`:52`（面板） |
 | 抽屉主体留给玩法包 | ✅ **机制** | `engine.shell_menu` `engine.py:1972`；`GET /chrome` `http.py:545`（**要求 play/admin**） |
 | 抽屉底部退出登录 | ✅ | `App.vue:65` |
@@ -133,7 +133,7 @@ register_view("player", title="我", icon="🙋", provider=..., layout="fullscre
 | 「我」= 不含顶栏的完整界面 | ✅ **机制** | `VIEW_LAYOUTS` `engine.py:336`；`fullscreen` 计算 `App.vue:130` |
 | 「我」的底栏可被别的包扩展 | ✅ | `apply_ui_hooks` `engine.py:1944` |
 | 属性页可被武侠包扩展 | ✅ **且比原计划更省** | `capabilities` 的 `fields` `engine.py:1051`（见 §10.2） |
-| 装备栏**里面**再放饰品栏（跨包任意层） | ✅ | K-2 `engine.py:2080-2090` |
+| 装备栏**里面**再放饰品栏（跨包任意层） | ✅ | K-2 `engine.py:2080-2087` |
 | 别的包往抽屉/底栏放条目带图标 | ✅ | `UiBlock.icon` `model.py:1123`（K-8） |
 | 昵称/实体名**写进去会被校验** | ✅ | `check_display_name` `model.py:79`（K-11） |
 
@@ -145,16 +145,16 @@ register_view("player", title="我", icon="🙋", provider=..., layout="fullscre
 
 | 任务 | 实际做了什么 | 与原计划的差异 | 证据 |
 |---|---|---|---|
-| **K-2** | 注入的块**也展开** | ⚠️ 熔断从"只靠深度"改成**深度 + 钩子身份去重**，见 §3.1 | `engine.py:2080-2090`（注入展开）、`:2002`（`spent`） |
+| **K-2** | 注入的块**也展开** | ⚠️ 熔断从"只靠深度"改成**深度 + 钩子身份去重**，见 §3.1 | `engine.py:2080-2087`（注入展开）、`:2002`（`spent`） |
 | **K-6** | 视图 `layout` 字段（`default` / `fullscreen`）+ 组件就绪才生效 | 无 | `engine.py:336`、`:1392`；`App.vue:130` |
 | **K-7** | `core:` 写入改为**按组件声明**（`CORE_COMPONENTS`，fail-closed） | 最初只做了 `writable` / `use`，**校验补在 K-11** | `model.py:133`（`CORE_COMPONENTS`）；`api.py:401` |
 | **K-11** | **显示名校验**：`CoreComponent.validate` 钩子 + 六个写入出入口全接上 | 无（Q-5 的规则终于落地），见 §3.5 | `model.py:59` / `:79`；`tests/test_display_name.py` |
 | **K-8** | `UiBlock.icon` | 无 | `model.py:1123` |
 | **K-1** | `core:shell.menu` + `GET /chrome` + 页眉抽屉 | 无（认证档位随 K-9 定为 play/admin） | `engine.py:1972`；`http.py:545`；`App.vue:49-66` |
 | **K-9** | 全系统删除 `read` 档 | 无 | `_state`/`_scene`/`_play_web` 均为 play/admin（`http.py:278`、`:309`、`:578`） |
-| **K-3 + P4** | `GET /where` + 壳层消费位置事件 | ⚠️ **原计划是给 `/scene` 补 `map_name`**，见 §3.2 | `engine.py:2691`；`App.vue:187` |
+| **K-3 + P4** | `GET /where` + 壳层消费位置事件 | ⚠️ **原计划是给 `/scene` 补 `map_name`**，见 §3.2 | `engine.py:2687`；`App.vue:187` |
 | **P5-甲** | 生效包集合一次解析、逐层传递 | 无 | `engine.py:1988` |
-| **P5-丙** | 世界激活集合**三态**：`null`=全部 / `[]`=一个都不启用 / 名单 | 无（表结构 v12 → **v13**） | `engine.py:2203-2216`；`store.py:52` |
+| **P5-丙** | 世界激活集合**三态**：`null`=全部 / `[]`=一个都不启用 / 名单 | 无（表结构 v12 → **v13**） | `engine.py:2199-2212`；`store.py:52` |
 
 ### 3.1 K-2 的语义比原计划更保守（重要）
 
@@ -325,7 +325,7 @@ hook 记一条警告。**这是玩家包发布前最该有的一条自检。**
 
 | # | 风险 | 状态 / 说明 |
 |---|---|---|
-| **E-1** | ★ **新账号的第一屏是"没有角色"** | **仍然成立**。D45 之后注册不产生化身，`/where` 返回 `reason:"no_avatar"`（`engine.py:2703`）。页眉留空（已定：不显示文案），但「我」点进去显示什么还没定 → **Q-6** |
+| **E-1** | ★ **新账号的第一屏是"没有角色"** | **仍然成立**。D45 之后注册不产生化身，`/where` 返回 `reason:"no_avatar"`（`engine.py:2699`）。页眉留空（已定：不显示文案），但「我」点进去显示什么还没定 → **Q-6** |
 | **E-2** | **退出登录埋了两步** | **已接受**（抽屉 → 底部）。「永久注销」并排在旁 = **已定，维持现状**（Q-7：误点由二次确认兜住） |
 | **E-7** | ★ **落地页由 key 字母序决定** | **仍然成立** → **K-10 / Q-11 / §11** |
 

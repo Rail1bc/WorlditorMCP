@@ -243,7 +243,7 @@ def test_primitive_filter_follows_world(tmp_path):
             engine.register_primitive_filter("move", _no_north, play_id="pkg_filter")
             player = await engine.place_entity("player", "default", 0, 0, name="小明")
 
-            # 世界 A（默认世界，空 = 全部激活）：过滤器生效 → up 被改写成 down
+            # 世界 A（默认世界，play_ids = None → 全部启用）：过滤器生效 → up 被改写成 down
             scene = await engine.move(player.id, "up")
             assert seen == ["up"], seen
             assert (scene.row, scene.col) == (1, 0), (scene.row, scene.col)
@@ -355,6 +355,46 @@ def test_ui_hook_injection_follows_world(tmp_path):
             base = UiBlock(kind="character", text="角色卡")
             out = await engine.apply_ui_hooks(base, entity_id=player.id)
             assert out.blocks == [], "注入方未激活 → 不注入"
+        finally:
+            await engine.terminate()
+
+    asyncio.run(run())
+
+
+def test_events_follow_default_world_for_unowned_map(tmp_path):
+    """未归属世界的地图按**默认世界**算（DESIGN §3.0）——事件也不能逃逸过滤。
+
+    历史 bug：`_binding_active` 把「实体不在世界上」与「地图未归属世界」用同一个
+    `map_world.get(...) is None` 判据，后者直接放行 → 未归属地图上的事件绕过了
+    世界激活过滤（文档写"不会逃逸过滤"，代码逃了）。
+    """
+
+    async def run():
+        engine = WorldEngine(WorldStore(tmp_path / "world.db"))
+        await engine.initialize()
+        try:
+            # 默认世界：一个玩法包都不启用
+            await engine.update_world("default", play_ids=[])
+            await engine.create_map("loose", "未归属地图")
+            await engine.create_location("loose", 0, 0, "空地")
+            ent = await engine.place_entity(None, "loose", 0, 0, name="测试实体")
+
+            fired: list[dict] = []
+
+            async def _on_changed(api, entity, changed):
+                fired.append(changed)
+
+            api = WorlditorPlayAPI(engine, "pkg_events")
+            engine.attach_play_api("pkg_events", api)
+            api.register_world_event("on_entity_changed", _on_changed)
+
+            await api.set_component(ent.id, "pkg_events:mark", {"x": 1})
+            assert fired == [], "未归属地图的事件必须按默认世界（[]）过滤"
+
+            # 对照：默认世界启用该包 → 事件恢复
+            await engine.update_world("default", play_ids=["pkg_events"])
+            await api.set_component(ent.id, "pkg_events:mark", {"x": 2})
+            assert len(fired) == 1, "默认世界启用该包后事件应触发"
         finally:
             await engine.terminate()
 

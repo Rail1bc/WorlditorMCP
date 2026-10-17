@@ -104,9 +104,10 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 - **setup 可为同步或 async**（v0.2.0 起内核 `await` 返回值）：需要写世界的
   「世界包」用 `async def setup(...)`，例如内置 `worlditor_play_demo_world`
   在 setup 里导入地图/地块/实体（幂等，地图已存在则跳过、不覆盖用户改动）
-- **世界激活（D15 / v0.3.0 全路径生效）**：玩法包全局加载一次，**世界声明
-  激活集合**（`worlds.play_ids`，空 = 全部启用；管理端「世界 › 玩法包」里
-  逐个开关）。某世界未激活你的包时，你在**那个世界**整体不存在：
+- **世界激活（D15 / v0.3.0 全路径生效；v0.9 起三态 / D55）**：玩法包全局加载一次，
+  **世界声明激活集合**（`worlds.play_ids`：`null` = 全部启用（默认）、`[]` = 一个都不启用、
+  名单 = 只启用这些；管理端「世界 › 玩法包」里逐个开关）。某世界未激活你的包时，
+  你在**那个世界**整体不存在：
   | 你注册的东西 | 该世界里的表现 |
   |---|---|
   | MCP 工具 | 调用被拒："该世界未启用该玩法包"（不执行 handler） |
@@ -152,7 +153,7 @@ disable(play_id) / 服务关闭 → teardown(api) → 注册表按 play_id 清�
 | `register_world_event(event, handler, *, interval=0.0, phase="simulate", order=0)` | 事件订阅；on_tick 必须给 interval（秒）；**phase/order 声明跨包执行顺序**（D27，见 §5.3） |
 | `register_ui_hook(block_kind, position, provider)` | UiBlock 注入（`before` / `after` / `replace`；**服务端展开**，锁内）。**注入的块也会被继续展开**（v0.9 / K-2）→ 跨包嵌套**任意层**。自定义页面请用 `register_view` + provider（§8）——`UiBlock(kind="custom")` 只保留 fallback 数据结构，**没有**组件注册 API |
 | `apply_ui_hooks(block)` | 对一棵 UiBlock 树应用全部已注册钩子（服务端展开，锁内）；玩家壳生成角色卡后调它，部件包的面板即被追加（§11） |
-| `register_tool(name, handler, *, description="", params=None)` | MCP 工具（见 §7） |
+| `register_tool(name, handler, *, description="", params=None, requires_entity=True)` | MCP 工具（见 §7）；`requires_entity=False` = 没有化身也能调（自举工具） |
 | `register_view(key, *, title, icon="", provider=None, layout="default")` | WebUI 视图（见 §8）；`title` 必填且**只能关键字传**。`layout`：`"default"` = 壳层页眉照常；`"fullscreen"` = 这个视图**自带整个屏幕**（不画页眉、不进顶栏 tab 条，**入口与返回按钮都由包自己负责**；只在组件成功加载后才生效） |
 | `register_service(name, handler)` | 跨包服务（见 §6） |
 | `override_primitive(name, handler)` / `disable_primitive(name)` | 原语覆盖 / 禁用（见 §5） |
@@ -602,7 +603,7 @@ Vue 组件选项）：
 
 ## 9. 事件
 
-预置事件（WORLD_EVENTS，**共 10 个**，订阅签名）：
+预置事件（`WORLD_EVENTS` 7 个 + `PRINCIPAL_EVENTS` 3 个，**共 10 个**，订阅签名）：
 
 | 事件 | 签名 |
 |---|---|
@@ -612,7 +613,7 @@ Vue 组件选项）：
 | `on_interact` | `(api, request, result)` |
 | `on_entity_removed` | `(api, entity)` |
 | `on_entity_changed` | `(api, entity, changed)` |
-| `on_world_edited` | `(api, what)`——`{op: "place_entity"|"remove_entity"|..., entity_id}` |
+| `on_world_edited` | `(api, what)`——`{op: "place_entity" / "remove_entity" / …, entity_id}` |
 | `on_principal_login` | `(api, principal)`——主体登录成功（凭据已发） |
 | `on_principal_logout` | `(api, principal)`——一份**凭据**被吊销（改密/重登的批量吊销不算） |
 | `on_principal_deleted` | `(api, principal)`——账户永久注销（内核已删该主体的全部化身） |
@@ -664,7 +665,7 @@ SSE 推送；`log=True` 才写 world_log（高频事件勿写，5000 条上限�
 
 ```python
 info = entity.components.get("core:info") or {}
-name = info.get("name") or entity.id[:8]    # 缺失 → id 前 8 位（§12.4 既定语义）
+name = info.get("name") or entity.id[:8]    # 缺失 → id 前 8 位（DESIGN §12.4 既定语义）
 desc = info.get("desc") or ""               # 缺失 → 空串
 
 # 更省事：内核把同一份兜底逻辑做成了只读 property（推荐）
@@ -771,7 +772,7 @@ await api.remove_data(entity_id, "gold", component="local:stat")    # 删字段�
   什么时候用它：物品收进容器、玩家下线、传送中的中间态——**别用 (0,0) 当"没有位置"**，
   那会把"不在场"变成一个真实存在的坐标。
   > 这两个入口与 `set_perception` 同一性质：`core:` 直写对玩法包关闭（D33），但"下线 /
-  > 传送"本来就是玩法包的正当能力，所以内核给**窄口受控入口**（§12.2：规则不放宽，
+  > 传送"本来就是玩法包的正当能力，所以内核给**窄口受控入口**（DESIGN §12.2：规则不放宽，
   > 能力不丢失）。若没有 `clear_position`，"位置可缺失"就成了单向门——造得出、送不回去。
 - **物品不在内核**（v2 / D37）：原"物品定义同构（`ItemDef` + 字段）"作废——
   **类型 = 组件声明**（`declare_component` 的 `fields`，字段 schema 完全同构），

@@ -310,7 +310,7 @@ def test_world_activation_filter(tmp_path):
         await install_demo_world(engine)  # 演示世界：商贩·阿福在广场 (0,0)
         await loader.load_all()
         try:
-            # 默认世界 play_ids 空 = 全部激活 → 商贩可 talk
+            # 默认世界 play_ids = None（全部启用）→ 商贩可 talk
             # （D41：没有 kind——"是商贩" = 带 local:merchant 组件）
             merchant = [
                 e for e in engine.list_entities() if e.has_component("local:merchant")

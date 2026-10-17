@@ -1166,7 +1166,7 @@ class WorldEngine:
         return "active" if self._any_world_uses(source) else "inactive"
 
     def _any_world_uses(self, source: str) -> bool:
-        """该 source 的组件是否在**某个**世界生效（世界为空 = 全部启用）。"""
+        """该 source 的组件是否在**某个**世界生效（没有世界容器 = 不按世界过滤）。"""
         for world_id in self.store.worlds:
             if self._world_play_active(world_id, source):
                 return True
@@ -2191,10 +2191,13 @@ class WorldEngine:
                 entity = self.store.entities.get(request.entity_id) or request.target
         if entity is None:
             return True
-        world_id = self.store.map_world.get(entity.map_id)
-        if world_id is None:
+        # 「不在世界上」（无位置）没有世界可判定 → 不过滤。
+        # ⚠ 与「地图未归属世界」是两件事：后者按**默认世界**算（DESIGN §3.0）。
+        # 两者曾共用 `map_world.get(...) is None` 一个判据，于是未归属地图上的
+        # 事件**逃逸**了世界激活过滤（文档写"不会逃逸"，代码逃了）。
+        if entity.map_id is None:
             return True
-        return self._world_play_active(world_id, play_id)
+        return self._world_play_active(self.store.map_world.get(entity.map_id), play_id)
 
     def _world_play_active(self, world_id: str | None, play_id: str) -> bool:
         """世界激活集合判断（D15 / D55）。
