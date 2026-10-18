@@ -66,7 +66,7 @@
 
 - **状态**：方向已定（DESIGN **D48**：玩家包内置、"玩家在地图上行动"留给第二个包），
   **内置化未开工**。⚠ 但**包本体已经存在**——`tests/fixtures/plays/worlditor_play_player/`
-  （413 行 `main.py` + 165 行 `web/view.js`：五个工具 / 三个服务锚点 / `local:avatar` /
+  （413 行 `main.py` + 165 行 `web/view.js`：五个工具 / 三个服务锚点 / `local:avatar`（内置化时改名，见下）/
   kv 续玩 / `on_principal_deleted` / 落点策略 / 一个 `register_view("player")`）。
   所以这一步是**改造 + 迁移**，不是从零写；**要补的界面层清单**（抽屉入口 / `layout="fullscreen"` /
   底栏 / 属性页 / 返回按钮 / 改名）与**发布前必须冻结的四个名字**见
@@ -98,6 +98,9 @@
      `data/spawn.json` 就这么被静默漏掉（`git add` 不报错，只是文件永远不在库里）。
      已把规则收紧为 `/data/`（只锚定根目录的运行时数据目录）；内置化时要再确认一遍
      `builtin_plays/<包>/data/*` 真的进了库。
+  8. **组件改名**：`local:avatar` → `worlditor_play_player:avatar`（已定，`PLAYER_PAGE_PLAN` §11.3 f）。
+     玩家包不再使用 `local:`，三个组件全部带包名（`:avatar` / `:spawn` / `:last_place`）。
+     零读者、零真实用户，不需要数据迁移——旧世界里的 `local:avatar` 会变成"虚构组件"。
 - **前置（都属"开发之前"）**：
   - **惰性接管** —— ✅ 已随 v0.8.0 落地（`PLAY_DEV` §14.4 第 5 点 + 参考实现 `_resume()` +
     回归 `test_player_package.py::test_relogin_resumes_avatar_lazily`）。

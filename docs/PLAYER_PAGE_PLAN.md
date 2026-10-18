@@ -252,7 +252,7 @@ NFKC 归一（会改写用户输入）。**冷却仍在玩家包**（那是玩�
 |---|---|
 | `player_whoami` / `player_avatars` / `player_create` / `player_switch` / `player_retire` | 五个工具；**自举类一律 `requires_entity=False`**（没有化身也调得到） |
 | `avatars_of` / `active_avatar` / `switch_to` | 三个服务锚点（G59 软依赖） |
-| `local:avatar` 标记组件（`main.py:52`） | 本包眼里"什么算化身" |
+| `local:avatar` 标记组件（`main.py:52`） | 本包眼里"什么算化身"；**内置化时改名为 `worlditor_play_player:avatar`**（§11.3 f 已定） |
 | kv `active_avatar`（`main.py:48`）+ `_resume()` | 重登续玩（v0.8.0 落地） |
 | `on_principal_deleted` | 注销时清 KV |
 | `data/spawn.json` | 落点策略（`_pick_tile`） |
@@ -474,12 +474,15 @@ api.declare_component(                      # api.py:39 → engine.py:747
 
 | | 现状 |
 |---|---|
-| 标记组件 | `local:avatar`（`main.py:52`）——"本包眼里什么算化身"，不贡献能力；**拟改名 `worlditor_play_player:avatar`**（§11.3 f） |
+| 标记组件 | `local:avatar`（`main.py:52`）——"本包眼里什么算化身"，不贡献能力；**已定改名 `worlditor_play_player:avatar`**（§11.3 f） |
 | 续玩 | kv `active_avatar`（`main.py:48`） |
 | 属性组件 | **还没设计**——因为创建角色已搁置，而"创建时要填什么"正是这套组件的投影 |
 
-> 命名上 `PLAY_DEV.md` 建议新代码用自己的 `play_id` 前缀；`local:avatar` 是 v0.8.0 的历史值，
-> **内置化时一并考虑**（改名会影响已有的 kv / 世界数据）。
+> **命名原则（2026-10-18 已定）**：玩家包的组件**一律用自己的包名**，不用 `local:`——
+> 键里能直接看到归属。于是三个组件是 `worlditor_play_player:avatar` / `:spawn` / `:last_place`。
+> 影响面：改名只动一个常量 + 一处 `declare_component`；**零读者**（roster 走 `core:account`），
+> 也不需要数据迁移——旧世界里的 `local:avatar` 会变成"虚构组件"（还在，只是没声明）。
+> `local:` 留给**示范包**（`worlditor_play_demo*`）继续演示"内容方 + 行为方"对接（§12.6）。
 
 ### 10.4 ⏳ 未定：属性该"一包一组件"还是"共享组件"
 
@@ -659,7 +662,7 @@ api.declare_component(                      # api.py:39 → engine.py:747
 
 | 键 | 谁写 | 作用 |
 |---|---|---|
-| `worlditor_play_player:avatar` | 玩家包 | 本包眼里"这是一具化身"（纯标记，不贡献能力；建议从 `local:avatar` 改名，见 f 展开） |
+| `worlditor_play_player:avatar` | 玩家包 | 本包眼里"这是一具化身"（纯标记，不贡献能力）；**已定从 `local:avatar` 改名**（f） |
 | `worlditor_play_player:spawn` | 管理员；内容包要等 **G65** | 出生点候选，建议带 `{"label": "村口"}` |
 | `worlditor_play_player:last_place` | 玩家包 | 这具化身的上次位置 `{map_id, row, col}`，随化身删除清理 |
 | `core:account` | 内核窄口（`claim_avatar` / `release_avatar`） | "是不是人"的唯一判据（D42） |
@@ -688,7 +691,10 @@ api.declare_component(                      # api.py:39 → engine.py:747
 
 **内核侧唯一改动**：`_dynamic` 打点（更新 `last_active_ts`，几行，§5）。
 
-#### f 展开：`local:avatar` 该叫什么（建议改名，待你点头）
+#### f ✅ 已定（2026-10-18）：玩家包的组件一律用自己的包名
+
+**结论：`local:avatar` → `worlditor_play_player:avatar`。** 玩家包不再使用 `local:`——
+"能看到归属"比"省一个前缀"重要。三个组件因此是 `:avatar` / `:spawn` / `:last_place`。
 
 **它是什么**：玩家包 `declare_component("local:avatar", label="化身")`，`_create` 造实体时带上它。
 **全仓没有任何代码读它**——roster 走 `core:account`（D42），"是不是人"从不看它。所以它今天的
@@ -704,14 +710,14 @@ api.declare_component(                      # api.py:39 → engine.py:747
 | 选 | 做法 | 代价 |
 |---|---|---|
 | A 删掉 | 不再声明、不再写 | 编辑器少一个"这是玩家化身"的标签；将来要给它挂数据（外观等）得重建 |
-| **B 改名（建议）** | `worlditor_play_player:avatar` | 一个常量 + 一处声明；**零读者、零真实用户**，不需要迁移；旧数据里的 `local:avatar` 会变成"虚构组件"（还在，只是没声明） |
+| **B 改名（✅ 已选）** | `worlditor_play_player:avatar` | 一个常量 + 一处声明；**零读者、零真实用户**，不需要迁移；旧数据里的 `local:avatar` 会变成"虚构组件"（还在，只是没声明） |
 | C 不动 | 保持 `local:avatar` | 零成本，但键在说谎，且永远可被别的包写 |
 
-**为什么建议 B**：docstring 原话就是"纯属本包自己的内容约定"——自己的约定就该用自己的命名空间。
+**为什么选 B**：docstring 原话就是"纯属本包自己的内容约定"——自己的约定就该用自己的命名空间。
 改名后：键即归属、卸载可清、诊断里一眼看出是玩家包的东西。G65 若落地，守卫不再拦写，
 但**声明归属与清理语义**仍然按键走，所以改名依然有意义。
 
-**若你想极简**：A 也成立——今天真没人读它，唯一损失是编辑器里的那个标签。
+（A 也成立——今天真没人读它，唯一损失是编辑器里那个标签。B 选择了留下这个标签。）
 
 #### 还要继续想的（编号备查）
 
@@ -722,7 +728,7 @@ api.declare_component(                      # api.py:39 → engine.py:747
 | ~~c~~ | ✅ **已定**：**第一次必须创建角色**（独立创建流程保留，不静默造人）。幂等 create 只处理"已有一具还被调用一次" |
 | ~~d~~ | ✅ **已定**：**不拦截、照常执行**。生效与否由发起方玩法包决定：强制操作 → 生效；需要对方同意 → 不生效；消息类 → 留档，上线可见。玩家包不额外做 |
 | ~~e~~ | ✅ **已定**：**不管**。出生点实体按普通实体处理——不拒绝交互、不特殊标记 |
-| f | ⏳ **建议 B：改名为 `worlditor_play_player:avatar`**（分析见上；等你点头） |
+| ~~f~~ | ✅ **已定**：`local:avatar` → `worlditor_play_player:avatar`；玩家包的组件一律用自己的包名（分析见上） |
 | ~~g~~ | ✅ **已定**：幂等 create（§11.3 ③） |
 | ~~h~~ | ✅ **已定**：`move` 原语过滤器先恢复再放行（任何包的走路都能唤醒）；其他动作唤醒前可能失败一次，由 `player_whoami` 提示兜住 |
 | ~~i~~ | ✅ **已定**：固定档位 **15 / 30 / 60 / 180 分钟 / 永不下线**，默认 30；不让玩家填任意数字（校验与 UI 都省） |
