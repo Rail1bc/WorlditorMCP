@@ -4,8 +4,8 @@
 clientInfo），漏一处不会报错，只会让界面/日志里的版本号说谎。这个测试把它们
 全部对齐到 ``worlditor_mcp.__version__``，发版时哪个没改，CI 直接点名。
 
-v0.7.0：内置玩法包不再随仓库携带视图组件，视图组件的唯一来源是
-``tests/fixtures/plays/`` 下的参考实现（夹具包安装时复制进 tmp 玩法包目录）。
+v0.9.4：视图组件的来源有两处——内置玩法包（`worlditor_mcp/builtin_plays/`）
+与夹具参考包（`tests/fixtures/plays/`），两处都要对齐内核版本。
 """
 
 from __future__ import annotations
@@ -47,14 +47,19 @@ def _package_lock_versions() -> list[str]:
 
 def _view_client_versions() -> dict[str, str]:
     out: dict[str, str] = {}
-    root = _ROOT / "tests" / "fixtures" / "plays"
-    for path in sorted(root.glob("*/web/*.js")):
-        text = path.read_text(encoding="utf-8")
-        match = re.search(r'clientInfo:\s*\{[^}]*version:\s*"([^"]+)"', text)
-        if match:
-            # 键必须是**相对路径**而不是文件名：两份参考组件都叫 view.js，
-            # 用文件名作键会互相覆盖——demo 的版本串曾停在 0.7.3 而测试照绿。
-            out[str(path.relative_to(root))] = match.group(1)
+    roots = (
+        _ROOT / "worlditor_mcp" / "builtin_plays",
+        _ROOT / "tests" / "fixtures" / "plays",
+    )
+    for root in roots:
+        for path in sorted(root.glob("*/web/*.js")):
+            text = path.read_text(encoding="utf-8")
+            match = re.search(r'clientInfo:\s*\{[^}]*version:\s*"([^"]+)"', text)
+            if match:
+                # 键必须是**相对仓库根的路径**而不是文件名：多份参考组件都叫
+                # view.js，用文件名作键会互相覆盖——demo 的版本串曾停在 0.7.3
+                # 而测试照绿。
+                out[str(path.relative_to(_ROOT))] = match.group(1)
     return out
 
 

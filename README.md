@@ -5,8 +5,8 @@ Claude / Cursor / 自建 agent…）都可接入；自带 WebUI——人类玩�
 拥有者经独立管理端口可视化管理（双端口，D16）。
 
 内核纯数据：世界/组织树/地块/连接/实体（= 组件字典）/玩法数据，行为与**世界内容**
-都由**玩法包**承载（社区包放 `<数据目录>/plays/`；内置只剩 1 个世界内容包，
-行为玩法包的参考实现见 `tests/fixtures/plays/`——`docs/PLAY_DEV.md` §12）。
+都由**玩法包**承载（社区包放 `<数据目录>/plays/`；内置 2 个包——世界内容包 + 玩家包，
+其余行为包的参考实现见 `tests/fixtures/plays/`——`docs/PLAY_DEV.md` §12）。
 
 ## 快速开始（本地）
 
@@ -135,17 +135,19 @@ disable/过滤器链，D11/G14）、跨包服务（M3）、放置/编辑实体�
 ——注册/登录只产出凭据（`token.entity_id` 为空是常态）。内核只记两本账
 （"这次以哪具实体行动" + "这具实体属于哪个主体"），**"玩家是什么"归玩法包**：
 一具化身 = 一个带 `core:account` 的普通实体，创建 / 切换 / 退掉都走内核窄口
-（`api.claim_avatar` / `api.act_as` / `api.release_avatar`）。参考玩家包见
-`tests/fixtures/plays/worlditor_play_player/`，契约见 `docs/PLAY_DEV.md` §14。
+（`api.claim_avatar` / `api.act_as` / `api.release_avatar`）。玩家包是内置的：
+`worlditor_mcp/builtin_plays/worlditor_play_player/`（契约看包内 `README.md`，
+设计看包内 `DESIGN.md`）。
 
 安装方式：把包目录放进 `<数据目录>/plays/`，或在管理端
 「玩法包 → 安装玩法包（zip）」上传（zip 内单个顶层目录 `<play_id>/`，
 含 play.yaml 与 main.py）。
 
-- 内置包只有**世界内容包** `worlditor_play_demo_world`（示例主世界：41 地块 +
-  商贩·阿福/告示牌/木门；只导入内容，不注册行为）；行为玩法包（工具/视图/
-  服务/组件声明）不再随仓库分发，参考实现见 `tests/fixtures/plays/`
-  （`docs/PLAY_DEV.md` §12 / §14）
+- 内置包有**两个**：世界内容包 `worlditor_play_demo_world`（示例主世界：41 地块 +
+  商贩·阿福/告示牌/木门；只导入内容，不注册行为）与玩家包
+  `worlditor_play_player`（化身 / roster / 续玩）；其余行为玩法包（工具/视图/
+  服务/组件声明）不随仓库分发，参考实现见 `tests/fixtures/plays/`
+  （`docs/PLAY_DEV.md` §12）
 - 身份只有一种 `player`：人类玩家与 agent 不作区分（脚本/agent 可用登录页
   「agent / 脚本接入」无密码注册）；⚠ **v0.9.0 起表结构 v13——升级请删
   `world.db` 重建**（D13：无迁移，旧库会被明确拒绝并指名该删哪个文件）
@@ -158,10 +160,10 @@ disable/过滤器链，D11/G14）、跨包服务（M3）、放置/编辑实体�
 | 文档 | 读它干什么 |
 |---|---|
 | `DESIGN.md` | 设计 / 协议 / 路线，**决策唯一权威**（D1–D56 + §12 实体模型） |
-| `docs/PLAY_DEV.md` | 写玩法包：API 全量 + 约定 + 示例 + 玩家包契约 |
+| `docs/PLAY_DEV.md` | 写玩法包：API 全量 + 约定 + 示例（玩家包契约在包内 README） |
 | `docs/HTTP_API.md` | 双端口所有 HTTP 端点（路径 / 档位 / 请求体 / 已知边界） |
 | `docs/NGINX_DEPLOY.md` | 域名 + HTTPS 反代部署（含双端口暴露边界） |
-| `docs/PLAYER_PAGE_PLAN.md` | 玩家包与界面扩展的**剩余工作**（K-10 / 进场流程；K-5、P7 已结） |
+| `worlditor_mcp/builtin_plays/worlditor_play_player/DESIGN.md` | 内置玩家包的设计与剩余工作（K-10 / 进场流程） |
 | `GAPS.md` | 平台未结缺口与设计存档（已结项只有一行索引） |
 | `CHANGELOG.md` | 每个版本改了什么 |
 | `docs/archive/` | **已完成**的施工与审查档案（只作历史，不再维护） |

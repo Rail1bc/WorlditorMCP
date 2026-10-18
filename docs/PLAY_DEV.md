@@ -87,7 +87,7 @@ worlditor_play_xxx/
 - zip 安装（管理端上传）额外要求：顶层目录**只有一个**、目录名 **== `name`**、
   且匹配 `^[A-Za-z0-9_-]+$`（安装与卸载都按目录名定位，不一致会"装得上却卸不掉"）
 - `requires.plays`：依赖的玩法包 id 列表——加载拓扑保证先加载；enable 时自动先启用依赖；disable 时仍有依赖者则拒绝
-- **内置包 vs 社区包**：内置包随服务分发（只读，可停用不可卸载）；社区包在数据目录（可卸载：**删包目录**，不可逆）。**卸载不会删你的 `play_data` KV**（同名重装数据会回来；要清数据得自己动手，见 GAPS G49）。**内置目录 `worlditor_mcp/builtin_plays/` 现在只剩世界内容包** `worlditor_play_demo_world`——行为玩法包（工具/视图/服务/过滤器/组件声明）不再内置，参考实现见 §12
+- **内置包 vs 社区包**：内置包随服务分发（只读，可停用不可卸载）；社区包在数据目录（可卸载：**删包目录**，不可逆）。**卸载不会删你的 `play_data` KV**（同名重装数据会回来；要清数据得自己动手，见 GAPS G49）。**内置目录 `worlditor_mcp/builtin_plays/` 现在有两个包**：世界内容包 `worlditor_play_demo_world` 与玩家包 `worlditor_play_player`（见 §14）——其余行为玩法包（工具/视图/服务/过滤器/组件声明）不内置，参考实现见 §12
 
 ## 3. 生命周期
 
@@ -326,10 +326,12 @@ if entity_id is None:
 反过来会让它们**在运行期炸**。
 
 > ⚠ **内核不诞生角色**（D45）：注册 / 登录**只产出凭据**，`token.entity_id` 从空开始。
-> 玩家注册完是一个"没有化身的主体"——**把它带进世界是玩法包的活**（见 §14 玩家包契约）。
+> 玩家注册完是一个"没有化身的主体"——**把它带进世界是玩法包的活**（见 §14 与内置玩家包的
+> `README.md`）。
 > 也别再造"player 实体"、别写 `local:player`：那个组件已随 D45 删除，"是不是人"一律看
 > `core:account`（D42）。⚠ **`api.act_as()` 只在工具 handler 里有凭据上下文**
-> （事件回调里没有）——"登录后接着玩"因此只能做成惰性接管，见 §14.4 第 5 点。
+> （事件回调里没有）——"登录后接着玩"因此只能做成惰性接管，见内置玩家包 `README.md`
+> 「五个必须处理的点」第 5 条。
 
 ### 显示名（`core:info.name`）的约束（v0.9 / K-11）
 
@@ -628,7 +630,8 @@ Vue 组件选项）：
 ```python
 async def _on_login(api, principal):
     # 记"这个主体上次操作的是哪具"（本包自己的 KV），或让化身**入场**（move_entity）
-    # ⚠ 但**不能**在这里 act_as——事件回调里没有凭据上下文（§14.4 第 5 点）
+    # ⚠ 但**不能**在这里 act_as——事件回调里没有凭据上下文
+    # （见内置玩家包 README「五个必须处理的点」第 5 条）
     ...
 api.register_world_event("on_principal_login", _on_login)
 ```
@@ -986,9 +989,9 @@ api.register_ui_hook(CORE_SHELL_MENU, "after", _me_entry)   # 零新 API
 
 ## 12. 参考实现（测试夹具包）
 
-**v0.7.0 起 6 个内置领域包已删除**：仓库不再分发行为玩法包（工具/视图/服务/
-过滤器/组件声明）；内置目录 `worlditor_mcp/builtin_plays/` 只剩世界内容包。
-行为玩法包的参考实现搬到了测试夹具：
+**v0.7.0 起 6 个按内核机制切的内置领域包已删除**；v0.9.4 起内置目录里有**一个按玩法切的
+玩家包**（`worlditor_play_player`，见 §14）。其余行为玩法包（工具/视图/服务/过滤器/组件声明）
+不内置，参考实现放在测试夹具：
 
 - `tests/play_fixtures.py`——夹具源码：`install_demo_play(plays_root)` 把演示包
   `worlditor_play_demo` 写进临时目录（`play.yaml` / `main.py` / `data/shop.json` /
@@ -999,8 +1002,6 @@ api.register_ui_hook(CORE_SHELL_MENU, "after", _me_entry)   # 零新 API
   也是防回归测试 `tests/test_web_view_styles.py` 的对象。
 - `tests/fixtures/plays/worlditor_play_demo/web/admin-shop.js`——**管理页组件参考
   实现**（数据通道 = `fetch /admin/play-pages/{play_id}/{page_key}/{action}`）。
-- `tests/fixtures/plays/worlditor_play_player/`——**玩家包参考实现**（完整包：`play.yaml` /
-  `main.py` / `data/spawn.json` / `web/view.js`）。"玩家是什么"的示范都在这里，见 §14。
 
 夹具包 `worlditor_play_demo` 覆盖的机制（照它抄就够起步）：
 
@@ -1020,15 +1021,16 @@ api.register_ui_hook(CORE_SHELL_MENU, "after", _me_entry)   # 零新 API
 > 注册/调用用法见 §6，完整用例在 `tests/test_services.py`（`pkg_a` / `pkg_b`
 > 两个内联假包）。
 
-内置只剩一个世界内容包：
+内置包（两个）：
 
 | 包 | 能力 | 关键机制 |
 |---|---|---|
 | `worlditor_play_demo_world` | **世界内容包**：导入示例主世界（41 地块：广场/步行街/AstrBot大道/开源小区/迷雾森林 + 商贩·阿福/告示牌/木门） | `async setup` 读取本包 `world.json`（地图/地块/连接/实体），**一次 `api.import_bundle` 单事务导入**（§4「地图编辑」——要么全落盘、要么什么都不写）；**地图已存在则跳过**（不覆盖用户改动）；只导入内容，**不注册组件声明/交互/工具/视图**——行为由你自己的包（或夹具参考包）提供；换世界主题 = 停用本包换成你自己的世界包 |
+| `worlditor_play_player` | **玩家包**：化身的造 / 列 / 切 / 退 / 续玩（一具化身 = 带 `core:account` 的普通实体） | 自举工具 `requires_entity=False`；roster 从内核账本派生；落点自定（`data/spawn.json` → 坐标序最小地块）；惰性接管续玩。契约见包内 `README.md`，设计见包内 `DESIGN.md`（§14 只留指针） |
 
 > 想看真实代码？内容导入型包看 `worlditor_mcp/builtin_plays/worlditor_play_demo_world/`；
 > 行为玩法包看 `tests/play_fixtures.py`（Python）+ `tests/fixtures/plays/worlditor_play_demo/web/*.js`（组件）；
-> **玩家包看 `tests/fixtures/plays/worlditor_play_player/`**（§14）。
+> **玩家包看 `worlditor_mcp/builtin_plays/worlditor_play_player/`**（§14）。
 
 ## 13. 玩法包管理页（管理端注册协议，DESIGN §4.6）
 
@@ -1078,84 +1080,12 @@ api.register_admin_page(
 - 参考实现：`tests/fixtures/plays/worlditor_play_demo/web/admin-shop.js`（货单管理，
   `list` / `set_price` 两个 action；对应的 Python 在 `tests/play_fixtures.py`）。
 
-## 14. 玩家包契约（D45–D47）
+## 14. 内置玩家包
 
-**内核不认识"玩家"**：它只知道两件事——**这次请求以哪具实体行动**（凭据指针）和
-**哪些实体属于哪个主体**（实体上的 `core:account`）。"玩家是什么"（一具化身 / 多具 /
-没有 / 夺舍 / 共号）整个归玩法包。这一节是包与包之间的**名字级契约**（G59 提前落地的部分）。
+第一个行为玩法包，随内核分发：`worlditor_mcp/builtin_plays/worlditor_play_player/`。
 
-### 14.1 三个概念，别再混
+- **包契约**（三个概念 / 依赖强度 / 服务 / 自实现要点）：该包目录的 `README.md`
+- **设计现状**（1 主体 1 化身、离线/上线、出生点）：该包目录的 `DESIGN.md`
+- **测试**：`worlditor_mcp/builtin_plays/worlditor_play_player/tests/test_player.py`
 
-| 概念 | 是什么 | 从哪读 |
-|---|---|---|
-| **主体（principal）** | 可登录的账户；**稳定的键**（换化身、重登都不变） | `api.caller_principal()`；`/meta` 的 `principal` |
-| **行动实体** | 这次请求以哪具实体行动；**可以为空**（还没有化身） | `api.caller()`（`None` = 没有） |
-| **化身** | 属于某主体的普通实体（带 `core:account`） | `api.query_entities(include_absent=True, where=lambda e: e.user_id == principal)` |
-
-**没有 `local:player` 这种东西**（D45 已删除）：要判"这是不是人"一律看
-`entity.is_account_bound()` / `entity.user_id`。
-
-### 14.2 依赖强度：默认零依赖，只有需要 roster 才连玩家包
-
-| 强度 | 写法 | 谁需要 |
-|---|---|---|
-| **零依赖**（默认） | 直接 `api.caller()` 拿"我现在是谁" | 移动、交互、战斗、背包……绝大多数包 |
-| **软依赖** | `list_services()` 探测 + `call_service("<玩家包 id>", "avatars_of" / "active_avatar" / "switch_to", …)` | 需要"我的**全部**化身"的包：队伍面板、切换角色、共号 UI |
-| **硬依赖** | `requires.plays: ["<玩家包 id>"]` | 仅"没有玩家包就没有意义"的包 |
-
-⚠ **硬依赖的真实代价**（已核实，别踩）：`requires.plays` 是**全局包级**的——依赖未启用 →
-**依赖者直接加载失败**；`disable` / `uninstall` 在有依赖者时**直接拒绝**（停玩家包要先停所有
-依赖者）。而**世界激活是世界级**的（D15），`call_service` **不做世界过滤**——某世界没启用玩家包，
-依赖者照样调得到它的服务（跨世界串味，见 GAPS G62）。所以：**别让所有包硬依赖玩家包**，
-那会把它变成单点故障。
-
-### 14.3 参考实现对外只暴露三个服务
-
-`worlditor_play_player`（`tests/fixtures/plays/`）的口径，社区包按此对接即可：
-
-| 服务 | 参数 | 返回 |
-|---|---|---|
-| `avatars_of` | `principal=""`（缺省 = 当前调用方） | `[{entity_id, name, map_id, row, col, in_world}]` |
-| `active_avatar` | `principal=""` | 同上单条；没有则 `{}` |
-| `switch_to` | `entity_id` | 切换后的摘要；**只接受调用方自己的化身**，否则报错 |
-
-⚠ **在主体生命周期事件里要显式传 `principal`**：`on_principal_login` / `_logout` / `_deleted`
-是 HTTP/CLI 路径触发的，**没有"当前调用者"上下文**（`api.caller_principal()` 是 `None`），
-缺省解析出来是空的。另外 `switch_to` 这类服务拒绝时请抛 `WorldError`——
-`call_service` 的异常隔离会把其它异常统一换成"服务执行出错，请稍后再试"，
-只有 `WorldError` 的文案会原样透出（M3）。
-
-它的工具名（`player_whoami` / `player_avatars` / `player_create` / `player_switch` /
-`player_retire`）**不是契约**——玩家端界面按视图注册走，工具名由各包自定。
-
-### 14.4 自己实现一个玩家包时，五个必须处理的点
-
-1. **自举工具声明 `requires_entity=False`**（§7）：否则"创建第一具化身"自己就被挡住了。
-2. **roster 从内核账本派生**，别再维护第二份名单：两份名单迟早不一致。
-   要记的是**玩法状态**（"上次操作的是哪具"），那才放自己的 KV。
-3. **落点自己定**（D45：内核没有出生点）：用 `api.list_locations()` 挑，或读自己的内容文件。
-   挑不到（空世界）就造一具**不在世界上**的化身（合法状态，D36），等地图就绪再放进去。
-4. **`act_as` 之前先校验归属**：内核不校验"这具是不是你的"（它没有名单），
-   把客户端传来的 `entity_id` 直接交给 `api.act_as` 等于让任何人操控任何实体。
-   反方向的 `claim_avatar` / `release_avatar` 由内核把关（只能认领/退掉**自己主体**的）。
-5. **"登录后接着玩"只能做成惰性接管**（v0.8.0）：`api.act_as()` 写的是**凭据**指针，
-   而凭据上下文**只在 MCP 工具 handler 里**存在（`world/mcp/__init__.py` 的工具包装器
-   设置那几个 contextvar）——`on_principal_login` / `_logout` / `on_tick` 这些回调里
-   **没有凭据**，在那里调 `act_as` 会直接抛"需要连接上下文"。而登录签发的**新凭据**
-   `entity_id` 从空开始（§4 D-a 的固有代价）。两者一叠，能力边界是这样：
-
-   | 想做的事 | 能做的地方 |
-   |---|---|
-   | 记录"这个主体上次操作的是哪具"（本包 KV） | 任何地方（主体事件里也行） |
-   | 让化身**入场 / 移动**（`place_entity` / `move_entity`） | 任何地方（显式给 entity_id，不需要凭据） |
-   | **把凭据指向某具**（`act_as`） | **只有工具 handler** |
-
-   所以续玩要落在**读侧自举工具**上——谁先被调用谁完成接管。参考实现
-   `worlditor_play_player` 的 `_resume()` 是个可直接抄的顺序：
-   `caller()` 已指向**自己的**化身就不动（尊重本设备上次的显式选择）→ 查本包 KV 记的
-   那具 → 只有**一具**就直接接上 → **多具且无记忆就不猜**（挑哪具是玩法判断，
-   交给 `player_switch`）。它的视图在 `onMounted` 调一次 `player_whoami`，接管即完成。
-
-   ⚠ **代价（如实记）**：**别的包的工具不认"上次那具"**——玩家重登后先去点别人的工具，
-   会撞上工具门的"你还没有角色"。这是 D46 的必然结果（内核没有名单，就不可能替包选），
-   缓解办法只有"客户端先调一次玩家包的读侧工具"（内置 WebUI 的视图挂载已经这么做了）。
+本文件不再重复它的契约——玩家包的内容归玩家包目录。

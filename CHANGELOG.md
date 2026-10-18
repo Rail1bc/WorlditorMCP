@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.9.4（2026-10-18）
+
+**架构收口：玩家包的内容全部回到玩家包目录。**
+
+### 变更
+
+- **`worlditor_play_player` 从测试夹具迁入内置包**：
+  `worlditor_mcp/builtin_plays/worlditor_play_player/`（`play.yaml` / `main.py` / `data/` /
+  `web/`），随 wheel 分发；内置包只可停用、不可卸载。
+- **包自有内容随包**：`README.md`（契约，原 `PLAY_DEV` §14）、`DESIGN.md`
+  （原 `docs/PLAYER_PAGE_PLAN.md`）、`tests/test_player.py`（原
+  `tests/test_player_package.py`）。
+- **框架侧只留指针**：`PLAY_DEV` §12 / §14、`README` 文档地图、`DESIGN` D48 及相关注记、
+  `GAPS` G64。
+- **两条守卫改扫内置目录**：视图样式、版本串；包内测试随 `pytest testpaths` 一起收集。
+- **删除夹具安装路径**：`tests/play_fixtures.py` 的 `PLAYER_ID` / `_REFERENCE_PLAYER` /
+  `install_player_play()`——夹具副本不再存在，源码只有一份。
+- **口径**：内置包从 1 个（世界内容）变为 2 个（世界内容 + 玩家）。
+
+（无表结构变更。）
+
 ## v0.9.3（2026-10-18）
 
 **界面层三件收尾：钩子可见、资源可缓存、样例不再教坏。**

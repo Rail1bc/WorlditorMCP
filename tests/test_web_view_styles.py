@@ -18,17 +18,15 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 _WEBUI = _ROOT / "webui" / "src"
-# 玩法包视图组件的参考实现（提交在案，夹具包安装时复制进 tmp 玩法包目录）。
-# v0.7.0 起内置玩法包不再随仓库携带视图组件，本目录是唯一的视图组件来源。
-_VIEW_COMPONENTS = _ROOT / "tests" / "fixtures" / "plays"
+# 玩法包视图组件的参考实现（内置包 + 夹具包；两者都是包作者可直接抄的样例）。
+_VIEW_COMPONENT_ROOTS = (
+    _ROOT / "worlditor_mcp" / "builtin_plays",
+    _ROOT / "tests" / "fixtures" / "plays",
+)
 
 # 前端静态扫描范围：内核 WebUI + 内置玩法包 + 夹具参考包。
 # 后两者是包作者直接抄的"参考实现"——只守内核等于给样例开后门。
-_FRONTEND_SCAN_ROOTS = (
-    _WEBUI,
-    _ROOT / "worlditor_mcp" / "builtin_plays",
-    _VIEW_COMPONENTS,
-)
+_FRONTEND_SCAN_ROOTS = (_WEBUI, *_VIEW_COMPONENT_ROOTS)
 _FRONTEND_EXTS = ("*.vue", "*.js", "*.mjs")
 
 # 玩家端布局/组件样式类（styles.css 缺失即布局崩坏——v0.1.17 回归点）
@@ -73,10 +71,11 @@ _BUTTON_CLASSES = ("wt-btn", "btn")
 
 
 def _view_component_files() -> list[Path]:
-    """玩法包视图组件（排除管理页组件 admin-*.js）。"""
+    """玩法包视图组件（内置包 + 夹具包；排除管理页组件 admin-*.js）。"""
     return sorted(
         p
-        for p in _VIEW_COMPONENTS.glob("*/web/*.js")
+        for root in _VIEW_COMPONENT_ROOTS
+        for p in root.glob("*/web/*.js")
         if not p.name.startswith("admin-")
     )
 
@@ -434,7 +433,7 @@ def test_plays_page_shows_component_leftovers():
 def test_view_components_use_no_hardcoded_light_colors():
     """视图组件不得硬编码浅色（否则暗色主题下白底/白底白字）。"""
     files = _view_component_files()
-    assert files, "未找到玩法包视图组件参考实现（tests/fixtures/plays/*/web/）"
+    assert files, "未找到玩法包视图组件参考实现（内置包与夹具包的 web/*.js）"
     for path in files:
         text = path.read_text(encoding="utf-8").lower()
         hits = [color for color in _FORBIDDEN_COLORS if color in text]

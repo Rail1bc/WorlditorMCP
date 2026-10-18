@@ -9,8 +9,8 @@
 - **R4**：roster 由玩法包从内核账本派生（`avatars_of`），内核不持有列表
 - **D14**：认领后包删不掉；注销账户级联清全部化身 + 发 `on_principal_deleted`
 - **D44**：停用玩家包 → 视图 tab 消失、化身与数据都还在
-- **续玩（PLAY_DEV §14.4 第 5 点）**：`act_as` 只在**工具上下文**可用，所以重登后的
-  接管只能"惰性"发生在读侧自举工具里（记忆优先 → 唯一一具次之 → 多具不猜）
+- **续玩（D46）**：`act_as` 只在**工具上下文**可用，所以重登后的接管只能"惰性"
+  发生在读侧自举工具里（记忆优先 → 唯一一具次之 → 多具不猜）
 
 测法：**真实走工具入口**（`build_dynamic_tool` 的 wrapper + `_meta` 注入），
 而不是直接调 handler——否则"工具门（`requires_entity`）"这条最关键的改动
@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 
-from play_fixtures import PLAYER_ID, install_player_play  # noqa: E402
 from world_fixtures import give_avatar, seed_test_world  # noqa: E402
 
 from worlditor_mcp.world.engine import WorldEngine, WorldError  # noqa: E402
@@ -34,7 +34,11 @@ from worlditor_mcp.world.play import PlayLoader  # noqa: E402
 from worlditor_mcp.world.play.api import WorlditorPlayAPI  # noqa: E402
 from worlditor_mcp.world.store import WorldStore  # noqa: E402
 
+PLAYER_ID = "worlditor_play_player"
 DEMO_ID = "worlditor_play_demo"
+# 本包目录（`play.yaml` / `main.py` / `web/` …）：测试把它整份复制进 tmp 的
+# `plays/` 再加载——与被测对象零耦合，也不依赖框架测试目录里的夹具。
+_PACKAGE_DIR = Path(__file__).resolve().parent.parent
 
 
 def _run(coro):
@@ -89,8 +93,12 @@ def _ctx_of(engine, token: str) -> object:
 
 
 async def _setup(tmp_path: Path):
-    """引擎 + 最小世界 + **参考玩家包** + 一个注册好的玩家（**没有化身**）。"""
-    install_player_play(tmp_path / "plays")
+    """引擎 + 最小世界 + **本包** + 一个注册好的玩家（**没有化身**）。"""
+    shutil.copytree(
+        _PACKAGE_DIR,
+        tmp_path / "plays" / PLAYER_ID,
+        ignore=shutil.ignore_patterns("__pycache__", "tests"),
+    )
     engine = WorldEngine(WorldStore(tmp_path / "world.db"))
     await engine.initialize()
     await seed_test_world(engine)

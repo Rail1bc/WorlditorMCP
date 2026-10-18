@@ -21,15 +21,10 @@ from pathlib import Path
 
 PLAY_ID = "worlditor_play_demo"
 PROBE_ID = "worlditor_play_probe"
-PLAYER_ID = "worlditor_play_player"
 _REFERENCE_WEB = (
     Path(__file__).resolve().parent / "fixtures" / "plays" / PLAY_ID / "web"
 )
 _PROBE_WEB = Path(__file__).resolve().parent / "fixtures" / "plays" / PROBE_ID / "web"
-# 参考**玩家包**（D45–D47）：整目录提交在案（play.yaml / main.py / data/ / web/），
-# 装进 tmp 时整份复制——它与 demo/probe 不同，不是字符串常量，因为它同时是
-# "玩家包该怎么写"的活文档（PLAY_DEV §14 指向它）。
-_REFERENCE_PLAYER = Path(__file__).resolve().parent / "fixtures" / "plays" / PLAYER_ID
 
 _SHOP_JSON = """{
   "apple": { "price": 5, "label": "苹果" },
@@ -466,15 +461,6 @@ def install_probe_play(plays_root: Path) -> Path:
     for name in ("view.js", "admin-ping.js"):
         shutil.copyfile(_PROBE_WEB / name, web_dir / name)
     return play_dir
-
-
-def install_player_play(plays_root: Path) -> Path:
-    """装**参考玩家包**（整目录复制；D45–D47 的示范，见 PLAY_DEV §14）。"""
-    target = plays_root / PLAYER_ID
-    shutil.copytree(
-        _REFERENCE_PLAYER, target, ignore=shutil.ignore_patterns("__pycache__")
-    )
-    return target
 
 
 def install_demo_play(plays_root: Path) -> Path:

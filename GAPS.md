@@ -37,8 +37,8 @@
 
 | # | 事项 | 状态 | 详见 |
 |---|---|---|---|
-| **G64** | 内置玩家包（第一个玩法包）：UI 层 + 内置化 | **方向已定，未开工**——唯一的主体工作 | §1 + `docs/PLAYER_PAGE_PLAN.md` §4 / §9 |
-| K-10 | 视图 `landing` 默认落地 | 未做；Q-11 已定为「进场流程」 | `PLAYER_PAGE_PLAN` §5 / §11 |
+| **G64** | 内置玩家包：已内置（v0.9.4）；剩余界面层 + 新设计 | 迁移已结，新工作见包内 `DESIGN.md` | §1 + `worlditor_mcp/builtin_plays/worlditor_play_player/DESIGN.md` |
+| K-10 | 视图 `landing` 默认落地 | 未做；Q-11 已定为「进场流程」（归玩家包设计） | 包内 `DESIGN.md` §5 / §11 |
 | G62 | `call_service` 没有世界过滤 | **要处理**（语义变更，等第二个包） | §1 |
 | G63 | `/state` 把所有人的 `core:account.user_id` 发出去 | 待决策 | §1 |
 | **G65** | 跨包组件写被拦死（D43 第 3 条）：互操作只能退到无主的 `local:` | 待决策（方向倾向"写开放、声明收紧"） | §1 |
@@ -57,73 +57,29 @@
 
 ## 1. 待做
 
-> 本节 12 条：G64 是主体工作；G62 / G63 / G65 属语义与写权限边界；G36 / G37 / G26 属可用性
-> 与工程收尾；G52 / G61、G23、G27、G25 属模板 / 治理待决策。
+> 本节 12 条：G64 已完成内置（剩余界面层 / 新设计）；G62 / G63 / G65 属语义与写权限边界；
+> G36 / G37 / G26 属可用性与工程收尾；G52 / G61、G23、G27、G25 属模板 / 治理待决策。
 
-**主体工作：内置玩家包**
+**已内置：玩家包（D48）**
 
-### G64 第一个玩法包（内置玩家包）落地清单：守卫迁移 / 夹具合一 / 文档表述
+### G64 内置玩家包：迁移已结，剩余界面层与新设计
 
-- **状态**：方向已定（DESIGN **D48**：玩家包内置、"玩家在地图上行动"留给第二个包），
-  **内置化未开工**。⚠ 但**包本体已经存在**——`tests/fixtures/plays/worlditor_play_player/`
-  （413 行 `main.py` + 165 行 `web/view.js`：**现有**五个工具 / 三个服务锚点 / `local:avatar`
-  （内置化时改名）/ kv 续玩 / `on_principal_deleted` / 落点策略 / 一个 `register_view("player")`）。
-  ⚠ **内置化后的目标面不同**：多化身面（`player_switch` / `player_retire` / `avatars_of` /
-  `switch_to` / kv `active_avatar`）**删除**，最终面见 `docs/PLAYER_PAGE_PLAN.md` §11.3 接口面。
-  所以这一步是**改造 + 迁移 + 瘦身**，不是从零写；**要补的界面层清单**（抽屉入口 /
-  `layout="fullscreen"` / 底栏 / 属性页 / 返回按钮 / 改名）与**发布前必须冻结的四个名字**见
-  `docs/PLAYER_PAGE_PLAN.md` §4。本条只登记"迁移时必须一起做"的东西——不做的话会出现
-  "文档与守卫盯着另一个副本"，而且**不报错**。
-- **迁移清单**：
-  1. **源码只能有一份**：`tests/fixtures/plays/worlditor_play_player/` →
-     `worlditor_mcp/builtin_plays/worlditor_play_player/`。夹具侧不再留副本：
-     `tests/play_fixtures.py:471` 的 `install_player_play()` 现在是从夹具目录**复制**
-     （`shutil.copytree`，`_REFERENCE_PLAYER` = 夹具路径）——改成复制内置目录即可，
-     但**两份目录不能并存**（并存的结局是改了一份、跑的是另一份）。
-  2. **两条守卫的扫描目标**（最容易漏的静默失守点）：
-     `tests/test_web_view_styles.py:23` 与 `tests/test_version_consistency.py:50`
-     都硬编码扫 `tests/fixtures/plays/*/web/*.js`——内置包的 `web/view.js` 必须进扫描集，
-     否则"视图样式约定"与"版本串一致"两处**同时**不再覆盖玩家包。
-  3. **文档表述**：`DESIGN.md` §0 一句话定位 / §1 架构图旁注 / §6 标题与正文 / §9 的 D31 行，
-     加上 `README.md:8` 与 `README.md:144`——从"内置只剩世界内容包 ×1"改成
-     "1 世界内容包 + 1 玩家包（D48）"；`docs/PLAY_DEV.md` §12"参考实现"一节要写清
-     "内置玩家包"与"夹具参考包"的新关系（口径变化：仓库重新有了一个内置行为包，
-     但它**是按玩法切的**，不是 D31 废弃的那种"一个内核机制一个包"）。
-  4. **`uninstall` 语义**：内置包只可停用（`PlayLoader.uninstall` 已拒），
-     管理端文案与 `PLAY_DEV` 要说清"内置包升级 = 随内核发版，不提供 zip 热更"。
-  5. **版本串**：内置包的 `clientInfo.version` 与 `play.yaml` 的 `version` 随内核 bump
-     （`test_version_consistency` 的口径是"扫到的组件版本必须等于 `worlditor_mcp.__version__`"）。
-  6. **空安装体验**：内置玩家包上线后，全新安装的玩家端**终于有一个 tab**（G39 残留 #4 收敛）；
-     顺带确认 G39 残留 #2 那句"仓库不再有内置官方玩法示例"要改口径。
-  7. **`.gitignore` 的 `data/`（已修，v0.8.0）**：裸 `data/` 会**连带忽略包内的 `data/` 目录**，
-     而 `data/` 正是 `PLAY_DEV` §2 约定的包内数据文件位置——参考玩家包的
-     `data/spawn.json` 就这么被静默漏掉（`git add` 不报错，只是文件永远不在库里）。
-     已把规则收紧为 `/data/`（只锚定根目录的运行时数据目录）；内置化时要再确认一遍
-     `builtin_plays/<包>/data/*` 真的进了库。
-  8. **组件改名**：`local:avatar` → `worlditor_play_player:avatar`（已定，`PLAYER_PAGE_PLAN` §11.3 f）。
-     玩家包不再使用 `local:`，三个组件全部带包名（`:avatar` / `:spawn` / `:last_place`）。
-     零读者、零真实用户，不需要数据迁移——旧世界里的 `local:avatar` 会变成"虚构组件"。
-  9. **删除多化身面**（已定，`PLAYER_PAGE_PLAN` §11.3 ③）：`player_switch` / `player_retire` /
-     `avatars_of` / `switch_to` / kv `active_avatar` 从本包删掉——多化身由别的包在内核原语上自己做。
-     连带：`test_player_package.py` 里三条多化身测试重写或删除（**范围收窄，不是回归丢失**）；
-     `docs/PLAY_DEV.md` §14 的工具 / 服务表同步（`avatars_of` / `switch_to` 不再提供）。
-     `player_create` 改幂等；`_resume` 退化为"唯一一具直接接上"。
-- **前置（都属"开发之前"）**：
-  - **惰性接管** —— ✅ 已随 v0.8.0 落地（`PLAY_DEV` §14.4 第 5 点 + 参考实现 `_resume()` +
-    回归 `test_player_package.py::test_relogin_resumes_avatar_lazily`）。
-    ⚠ 1:1 之后该回归的**多化身场景**随第 9 条改写；"谁先被调用谁完成接管"的机制本身不变。
-  - **视图组件 `callTool` 样板** —— ❌ 未做：每个视图手抄 ~60 行会话管理、硬编码 `/world/mcp`
-    （与 `VITE_WORLD_API` 独立域部署矛盾）、`_sessionId` 永不过期（会话失效只能整页刷新）——
-    见 G36"玩法包视图硬编码 `/world/mcp`"那条。玩家包是第一个"真要用"的视图，建议同批处理。
-- **顺带（不在本条范围）**：G62（`call_service` 无世界过滤 + `requires.plays` 全局）与
-  G63（`/state` 泄露 `core:account.user_id`）——玩家包内置后更容易被别的包硬依赖，
-  这两条的影响面会跟着变大（D48 的"默认零依赖"口径正是为了拖住这件事）。
-- **界面层残留（登记在 `docs/PLAYER_PAGE_PLAN.md` §5，不在这里重复）**：
-  **K-10** 默认落地视图（Q-11 已明确 = 进场流程，见 `PLAYER_PAGE_PLAN` §11）。
-  K-5（钩子命中可观测）与 P7（视图资源 ETag）已在 **v0.9.3** 结项。
-- **已还的一笔（K-11）**：昵称字符校验（`core:info.name` 的长度 / 控制字符 / 双向文本）
-  ✅ 已实现——`CoreComponent.validate` + 六个写入出入口，回归 `tests/test_display_name.py`。
-  它之前是"文档说已定、代码里没有"，现已对齐。
+- **状态**：✅ **v0.9.4 已内置**——包本体在 `worlditor_mcp/builtin_plays/worlditor_play_player/`
+  （`play.yaml` / `main.py` / `data/` / `web/` + 包内 `README.md` 契约 + `DESIGN.md` 设计 +
+  `tests/test_player.py`）。**内容、测试、文档都归包目录**，框架侧只留指针。
+- **已完成的迁移**（原先登记的"迁移时必须一起做"，现已逐条落地）：
+  1. 源码只剩一份：夹具副本与 `install_player_play()` 已删除。
+  2. 两条守卫已改扫内置目录：`test_web_view_styles` / `test_version_consistency`。
+  3. 文档口径：`DESIGN` §0/§1/§6/§9 与 `README` 改为"内置 2 个包"；`PLAY_DEV` §12 更新描述、
+     §14 只留指针（契约搬进包内 `README.md`）。
+  4. `uninstall` 语义不变（内置包只可停用）；`clientInfo.version` 随内核版本对齐。
+  5. `.gitignore` 的 `/data/` 收紧后，包内 `data/spawn.json` 确认入库。
+- **剩余（不属迁移，另记在包内 `DESIGN.md`）**：
+  - **界面层**：抽屉入口 / `layout="fullscreen"`「我」/ 底栏 / 属性页 / 返回 / 改名。
+  - **新设计**：1 主体 1 化身、幂等 create、离线上线（`_dynamic` 打点 + `on_tick` 扫描 +
+    `move` 过滤器）、出生点 / 上次位置、删除多化身面。
+  - **K-10**（视图 `landing`）见 §0 与包内 `DESIGN.md` §5 / §11。
+- **顺带（不在本条范围）**：G62 / G63——玩家包内置后更容易被别的包硬依赖，影响面变大。
 
 **语义 / 安全待处理**
 
@@ -133,7 +89,7 @@
 - **为什么现在要紧**：D45 之后"玩家包"天然是**中心件**（roster / 化身管理），
   而 `requires.plays` 是**全局包级**的（依赖未启用 → 依赖者加载失败；disable/uninstall 被依赖者挡住）。
   两个机制叠起来 = 玩家包成了单点故障，且跨世界串味。
-- **当前缓解**（已写进 `docs/PLAY_DEV.md` §14）：**默认零依赖**（只读 `api.caller()`）；
+- **当前缓解**（已写进内置玩家包的 `README.md`）：**默认零依赖**（只读 `api.caller()`）；
   要"我的全部化身"才用 `list_services()` 探测 + `call_service` 软依赖；硬依赖只留给
   "没有玩家包就没有意义"的包。
 - **建议方案**：`call_service` 补一道世界判定（提供方在该世界未启用 → 报错/回落），
@@ -172,7 +128,7 @@
   契约上看不见"——文档要求跨包写留一行注释说明依赖；③整块 `set_component` 可覆盖对方的键
   （代码评审问题，不是机制问题）。
 - **成本**：`_guard_component` 一处 + `tests/test_v2_components.py` 那条反转 + `DESIGN` D57 +
-  `PLAY_DEV` 三处口径，约 30 行。**若落地，`PLAYER_PAGE_PLAN` §11.3 ② 的"内容包预置出生点"
+  `PLAY_DEV` 三处口径，约 30 行。**若落地，包内 `DESIGN.md` §11.3 ② 的"内容包预置出生点"
   随之解锁**（玩家包没装时该组件显示为 orphan，可观测的失败）。
 - **状态**：**待决策**（2026-10-18 讨论，方向倾向"放开"；未落地）
 
