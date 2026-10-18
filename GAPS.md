@@ -66,10 +66,12 @@
 
 - **状态**：方向已定（DESIGN **D48**：玩家包内置、"玩家在地图上行动"留给第二个包），
   **内置化未开工**。⚠ 但**包本体已经存在**——`tests/fixtures/plays/worlditor_play_player/`
-  （413 行 `main.py` + 165 行 `web/view.js`：五个工具 / 三个服务锚点 / `local:avatar`（内置化时改名，见下）/
-  kv 续玩 / `on_principal_deleted` / 落点策略 / 一个 `register_view("player")`）。
-  所以这一步是**改造 + 迁移**，不是从零写；**要补的界面层清单**（抽屉入口 / `layout="fullscreen"` /
-  底栏 / 属性页 / 返回按钮 / 改名）与**发布前必须冻结的四个名字**见
+  （413 行 `main.py` + 165 行 `web/view.js`：**现有**五个工具 / 三个服务锚点 / `local:avatar`
+  （内置化时改名）/ kv 续玩 / `on_principal_deleted` / 落点策略 / 一个 `register_view("player")`）。
+  ⚠ **内置化后的目标面不同**：多化身面（`player_switch` / `player_retire` / `avatars_of` /
+  `switch_to` / kv `active_avatar`）**删除**，最终面见 `docs/PLAYER_PAGE_PLAN.md` §11.3 接口面。
+  所以这一步是**改造 + 迁移 + 瘦身**，不是从零写；**要补的界面层清单**（抽屉入口 /
+  `layout="fullscreen"` / 底栏 / 属性页 / 返回按钮 / 改名）与**发布前必须冻结的四个名字**见
   `docs/PLAYER_PAGE_PLAN.md` §4。本条只登记"迁移时必须一起做"的东西——不做的话会出现
   "文档与守卫盯着另一个副本"，而且**不报错**。
 - **迁移清单**：
@@ -101,9 +103,15 @@
   8. **组件改名**：`local:avatar` → `worlditor_play_player:avatar`（已定，`PLAYER_PAGE_PLAN` §11.3 f）。
      玩家包不再使用 `local:`，三个组件全部带包名（`:avatar` / `:spawn` / `:last_place`）。
      零读者、零真实用户，不需要数据迁移——旧世界里的 `local:avatar` 会变成"虚构组件"。
+  9. **删除多化身面**（已定，`PLAYER_PAGE_PLAN` §11.3 ③）：`player_switch` / `player_retire` /
+     `avatars_of` / `switch_to` / kv `active_avatar` 从本包删掉——多化身由别的包在内核原语上自己做。
+     连带：`test_player_package.py` 里三条多化身测试重写或删除（**范围收窄，不是回归丢失**）；
+     `docs/PLAY_DEV.md` §14 的工具 / 服务表同步（`avatars_of` / `switch_to` 不再提供）。
+     `player_create` 改幂等；`_resume` 退化为"唯一一具直接接上"。
 - **前置（都属"开发之前"）**：
   - **惰性接管** —— ✅ 已随 v0.8.0 落地（`PLAY_DEV` §14.4 第 5 点 + 参考实现 `_resume()` +
     回归 `test_player_package.py::test_relogin_resumes_avatar_lazily`）。
+    ⚠ 1:1 之后该回归的**多化身场景**随第 9 条改写；"谁先被调用谁完成接管"的机制本身不变。
   - **视图组件 `callTool` 样板** —— ❌ 未做：每个视图手抄 ~60 行会话管理、硬编码 `/world/mcp`
     （与 `VITE_WORLD_API` 独立域部署矛盾）、`_sessionId` 永不过期（会话失效只能整页刷新）——
     见 G36"玩法包视图硬编码 `/world/mcp`"那条。玩家包是第一个"真要用"的视图，建议同批处理。

@@ -250,10 +250,10 @@ NFKC 归一（会改写用户输入）。**冷却仍在玩家包**（那是玩�
 
 | 已有 | 说明 |
 |---|---|
-| `player_whoami` / `player_avatars` / `player_create` / `player_switch` / `player_retire` | 五个工具；**自举类一律 `requires_entity=False`**（没有化身也调得到） |
-| `avatars_of` / `active_avatar` / `switch_to` | 三个服务锚点（G59 软依赖） |
+| `player_whoami` / `player_avatars` / `player_create` / `player_switch` / `player_retire` | 现有五个工具；**自举类一律 `requires_entity=False`**。⚠ **内置化后多化身面删除**（§11.3 ③），最终工具面见 §11.3 接口面 |
+| `avatars_of` / `active_avatar` / `switch_to` | 现有三个服务锚点（G59 软依赖）。⚠ **内置化后只留 `active_avatar`**（§11.3 ③） |
 | `local:avatar` 标记组件（`main.py:52`） | 本包眼里"什么算化身"；**内置化时改名为 `worlditor_play_player:avatar`**（§11.3 f 已定） |
-| kv `active_avatar`（`main.py:48`）+ `_resume()` | 重登续玩（v0.8.0 落地） |
+| kv `active_avatar`（`main.py:48`）+ `_resume()` | 现有重登续玩（v0.8.0 落地）。⚠ **内置化后 kv 删除**，`_resume` 退化为"唯一一具直接接上"（§11.3 ③） |
 | `on_principal_deleted` | 注销时清 KV |
 | `data/spawn.json` | 落点策略（`_pick_tile`） |
 | `register_view("player", title="角色", icon="🧍")`（`main.py:196`） | **「我」的前身**——不是 fullscreen、没有底栏 |
@@ -270,7 +270,7 @@ NFKC 归一（会改写用户输入）。**冷却仍在玩家包**（那是玩�
 | 3 | 返回按钮 | **视图内自己画**。壳层**没有** `goto` prop（`App.vue:36` 只传 `:view`）→ 用 `history.back()`，无历史时 `location.hash = "#/view/<默认 key>"` 兜底 |
 | 4 | 底栏 | 视图内按 `page.blocks` 渲染 tab；「属性」页是原树内的子块 → 别的包能 hook（`engine.py:2035`） |
 | 5 | 属性页 | **默认走自动渲染**（§10.2），`ui_hook` 只作定制覆盖 |
-| 6 | 改名 | `set_data(avatar_id, "name", nickname, component="core:info")`（K-7 后合法，K-11 起**受校验**）；**冷却归本包** |
+| 6 | 改名 | 视图只能调工具 → 本包出 `player_rename`（内部写 `set_data(avatar_id, "name", nickname, component="core:info")`，K-7 后合法、K-11 起受校验）；**冷却归本包** |
 
 ### 4.3 ★ 发布前必须冻结的四个名字
 
@@ -475,7 +475,7 @@ api.declare_component(                      # api.py:39 → engine.py:747
 | | 现状 |
 |---|---|
 | 标记组件 | `local:avatar`（`main.py:52`）——"本包眼里什么算化身"，不贡献能力；**已定改名 `worlditor_play_player:avatar`**（§11.3 f） |
-| 续玩 | kv `active_avatar`（`main.py:48`） |
+| 续玩 | kv `active_avatar`（`main.py:48`）——**内置化时删除**，改成"只有一具就直接接上"（§11.3 ③） |
 | 属性组件 | **还没设计**——因为创建角色已搁置，而"创建时要填什么"正是这套组件的投影 |
 
 > **命名原则（2026-10-18 已定）**：玩家包的组件**一律用自己的包名**，不用 `local:`——
@@ -563,11 +563,11 @@ api.declare_component(                      # api.py:39 → engine.py:747
 
 ### 11.3 2026-10-18 讨论稿：1 玩家 = 1 化身，离场与恢复
 
-> **还没想完。本节记形态 + 已核对的内核事实 + 今天定下的角标；不落地、不改代码。**
+> **设计已定，代码未落地。** 本节 = 玩家包的最终形态 + 已核对的内核事实。
 
 **形态（你说的）**：
 
-- 内置玩家包的玩法配置是 **1 个主体 = 1 具化身**（"就这一具"；是否强制执行待定，见 ③）；
+- 内置玩家包 = **1 个主体 = 1 具化身**；**多化身面不在本包**（框架能做，别的包去做，见 ③）；
 - **下线** = 从地图上移除，但化身上的组件**完完整整保留**；
 - **上线** = 回到玩家选的「上次下线位置」，或从几个**候选出生点**里挑一个；
 - 候选出生点 = 地图上一个**带「出生点」组件的实体**；该组件由玩家包声明。
@@ -646,17 +646,29 @@ api.declare_component(                      # api.py:39 → engine.py:747
 → **能不能让内容包直接预置？已在 `GAPS.md` 立为 G65**（提议：写开放、声明收紧，
 `core:` 仍拦；待决策）。这条一开，② 的 ③ 就不需要了。
 
-**③ ✅ 已定（2026-10-18）：1 具，用"幂等创建"表达。**
+**③ ✅ 已定（2026-10-18，第三版）：1 具就是本包的全部范围——多化身面不做。**
 
-`player_create` 在已有一具时**不报错、不造第二具**：直接返回现有那具并接上（"你已经有角色了"）。
-比"纯约定"安全（手滑、超时重试都不会造出第二具），比"强制拒绝"顺手（客户端双击不炸）——代码几行。
+`player_create` 幂等：已有一具时**不报错、不造第二具**，直接返回现有那具并接上。
 
-`player_switch` / `player_retire` / `_resume` 多分支 / 三条多化身测试**仍然保留**：能力不删
-（见上一条校正），内置体验用不到；将来某个世界要放开，改的是**策略**，不是代码。
-代价如实记：幂等 create 之后，通过**本包工具**已经造不出第二具——多化身能力的入口只剩
-"管理端 / 别的包 / 未来策略"，这条边界写在这里，免得以后有人以为删了。
+**多化身不归本包**：内核已经能表达它（实体 + `core:account` + `claim_avatar` / `act_as` + 查询），
+需要多化身的玩法包**自己在核心上做**。"保留能力"指的是**框架保留**，不是本包挂着一堆用不到的入口——
+那正是"多余的内容"。所以下面这些是**从本包删掉**，不是"停用"：
 
-#### 接口面（2026-10-18 汇总：哪些已有、哪些本轮新增）
+| 删掉 | 为什么 |
+|---|---|
+| `player_switch` | 只有一具，没有可切换的对象 |
+| `player_retire` | "退掉一具"是多化身概念；删掉唯一的角色等于注销账号，那归身份服务 |
+| `avatars_of`（复数服务） | 本包只有 0 或 1 具；"全部化身"由多化身包自己维护 |
+| `switch_to` 服务 | 同上；第三方要切，直接用内核原语 `api.act_as` |
+| kv `active_avatar` + `_remember` / `_remembered` / `_forget` | 1:1 下"唯一一具直接接上"已经覆盖，不再维护一份名单 |
+
+**`_resume` 随之退化**：凭据指向的那具仍属于我 → 保持；否则我只有一具 → 接上；其余 → 返回空。
+不需要"记住上次选的是哪具"——只有一具。
+
+> 这条修正了上一版"能力不删"的写法：**删的是本包的多余面，不是框架能力**。任何包要 roster /
+> 切换 / 退掉，用内核的 `claim_avatar` / `release_avatar` / `act_as` 自己做，玩家包不背这个包袱。
+
+#### 接口面（2026-10-18 第三版：删掉多化身面之后的最终面）
 
 **组件**
 
@@ -667,27 +679,29 @@ api.declare_component(                      # api.py:39 → engine.py:747
 | `worlditor_play_player:last_place` | 玩家包 | 这具化身的上次位置 `{map_id, row, col}`，随化身删除清理 |
 | `core:account` | 内核窄口（`claim_avatar` / `release_avatar`） | "是不是人"的唯一判据（D42） |
 
-**MCP 工具**
+**MCP 工具（5 个）**
 
 | 工具 | 状态 | 说明 |
 |---|---|---|
-| `player_whoami` | 已有（语义微调） | 自举；**不恢复位置**，只报告（主体 / 当前化身 / 在不在世界上 / 总数） |
-| `player_avatars` | 已有 | 自举；列出全部化身（含不在世界上的） |
-| `player_create` | 已有 → **改幂等** | 已有一具则返回它并接上（③） |
-| `player_enter` | **新增** | 上线：`last`（回上次位置）/ `spawn`（挑出生点）；界面与 agent 共用 |
+| `player_whoami` | 已有（改为快照） | 自举；**不恢复位置**；返回化身快照（id / 名字 / 位置 / 在不在世界上 / `capabilities`）——「我」页与属性页都吃这一份 |
+| `player_create` | 已有 → **改幂等** | 自举；带名字；已有一具则返回它并接上（③） |
+| `player_enter` | **新增** | 上线：`last` / `spawn`（+ `spawn_id`）；界面与 agent 共用 |
 | `player_offline_policy` | **新增** | 读 / 写空闲下线策略（15 / 30 / 60 / 180 / never，默认 30） |
-| `player_switch` / `player_retire` | 已有，保留 | 内置体验不用；能力不删（③） |
+| `player_rename` | **新增** | 改名（写 `core:info.name`，受 K-11 校验；冷却归本包）。视图组件只能调工具，所以必须有这个入口 |
 
-**服务**：`avatars_of` / `active_avatar` / `switch_to` —— 全部保留（G59 软依赖锚点）。
+**删除**（③：不在本包，留给要做的包）：`player_avatars`、`player_switch`、`player_retire`。
+
+**服务（1 个）**：`active_avatar`（单数）——凭据指向我的一具 → 就是它；否则只有一具 → 就是它；
+否则空。`avatars_of` / `switch_to` 删除。
 
 **视图**：`player`（内置化后 title「我」、`layout="fullscreen"`）；进场视图由 K-10 的
 `landing` 指向（首次创建 / 后续上线）。界面层细节仍按 §4.2（抽屉入口 / 底栏 / 属性页 / 返回）。
 
 **后台钩子**：`on_tick`（5 分钟：空闲扫描 → 记位置 → `clear_position`）；
-`on_principal_logout`（主动下线**立即**离场）；`on_principal_deleted`（清 kv）；
+`on_principal_logout`（主动下线**立即**离场）；`on_principal_deleted`（清 `offline` 策略）；
 `move` 原语过滤器（唤醒：先回 `last_place` 再放行）。
 
-**kv（按主体）**：`offline`（离线策略）、`active_avatar`（续玩指针；1:1 之后价值变小但保留）。
+**kv（按主体）**：只留 `offline`。**`active_avatar` 删除**（③：1:1 下"唯一一具直接接上"已覆盖）。
 
 **内核侧唯一改动**：`_dynamic` 打点（更新 `last_active_ts`，几行，§5）。
 
